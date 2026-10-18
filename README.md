@@ -74,6 +74,11 @@ and makes no network requests. Its data is inlined compressed, unpacked by the b
 own `DecompressionStream` and checked against the sha256 the build recorded, so it needs Chrome or Edge 103+, Firefox 113+ or Safari 16.4+; an
 older browser gets a plain message saying it cannot unpack the data, and no figures.
 
+`openbill.html` is an ordinary file, but the data it is built from, `data/drugs.json` (~35 MB),
+is stored with [Git LFS](https://git-lfs.com) so each weekly refresh doesn't add a full copy to
+the repository's history. Install Git LFS before you clone, or run `git lfs install && git lfs pull`
+afterwards; without it the file is a small pointer and `node build.js` and the tests say so.
+
 To rebuild from scratch you need Python 3.10+ (standard library only) and Node 20+. The
 commands below say `python3`; on Windows the command is usually `python` (the npm scripts
 `npm run fetch` and `npm run data` call `python`).

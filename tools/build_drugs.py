@@ -7,8 +7,12 @@ Inputs (each verified against its sha256 in tools/cache/manifest.json before any
   partd          Medicare Part D Spending by Drug: part_d_names (one entry per Part D "Overall"
                  row some NDC joined), and row.part_d = {key, basis} pointing into it, by brand /
                  generic NAME join (precision over recall: ambiguous or release-form-mismatched
-                 names stay null; a name CMS marks * keeps only NDCs with an FDA identity in the
-                 route the NDCs joined to it share).
+                 names stay null; a name CMS marks * keeps only NDCs with a known FDA route, in
+                 the route the NDCs joined to it share: the route of the row's FDA identity, or,
+                 for an NDC the Directory does not list as a package of its own, the route of
+                 the FDA product record of its product code that the join already accepted,
+                 which follows the identity rows' route and never votes; recorded on the row as
+                 part_d.route_from = "fda_product" with route, product_ndc and inner_of).
   asp_crosswalk  Part B NDC-HCPCS crosswalk: NDC-11 -> HCPCS, package size and billable units
                  (row.part_b), and the labelers billing under each code.
   asp_limits     Part B payment limit file: part_b_codes (HCPCS -> payment limit, coinsurance),
@@ -364,9 +368,26 @@ def load_identities(path: Path) -> tuple[dict[str, dict], dict[str, dict], dict]
         elif product_facts(known) != product_facts(pr):
             del by_code[code]
             code_conflict.add(code)
+    # NDC-11 -> FDA package codes, of the same product code, whose PACKAGEDESCRIPTION prints that
+    # NDC in parentheses as an inner unit ('50 BLISTER PACK in 1 BOX (50268-662-15) / 1 TABLET in
+    # 1 BLISTER PACK (50268-662-11)'). Shown in the provenance panel for a row whose * route came
+    # from the product record; never used to match or to give a route.
+    inner_of: dict[str, set] = defaultdict(set)
+    for pk in packages:
+        own, code = pk["NDCPACKAGECODE"].strip(), ndc9_from_fda(pk["PRODUCTNDC"])
+        if code is None:
+            continue
+        for m in INNER_NDC_RE.findall(pk["PACKAGEDESCRIPTION"]):
+            n = ndc11_from_fda(m)
+            if n is not None and m != own and n[:9] == code:
+                inner_of[n].add(own)
     return ident, raw, {"products": len(products), "packages": len(packages), "bad_ndc": bad,
                         "ambiguous": ambiguous, "rx_forms": rx_forms, "rx_name_forms": rx_name_forms,
-                        "by_product_code": by_code}
+                        "by_product_code": by_code, "inner_of": inner_of}
+
+
+# An NDC FDA prints in parentheses inside a package description (4-4-2, 5-3-2 or 5-4-1).
+INNER_NDC_RE = re.compile(r"\(\s*(\d{4,5}-\d{3,4}-\d{1,2})\s*\)")
 
 
 PRODUCT_FACT_FIELDS = ("PROPRIETARYNAME", "PROPRIETARYNAMESUFFIX", "NONPROPRIETARYNAME", "DOSAGEFORMNAME", "ROUTENAME",
@@ -968,7 +989,7 @@ PART_D_UNMATCHED = {
     "no_generic_name": "no Part D row with this generic name and release form",
     "no_value": "the matched Part D row has no average spending per dosage unit for the data year",
     "mixed_units": "NADAC prices the NDCs joined to this Part D name in more than one unit and this NDC's unit is not the clear majority, so CMS's average per dosage unit is not in this NDC's unit",
-    "multi_route_no_identity": "the Part D name carries CMS's * (an average over several routes of administration) and this NDC has no FDA identity with a route, so its route is unknown",
+    "multi_route_no_identity": "the Part D name carries CMS's * (an average over several routes of administration) and this NDC has no FDA identity with a route, and no accepted FDA product record for its product code with one, so its route is unknown",
     "multi_route_minority": "the Part D name carries CMS's * (an average over several routes of administration) and this NDC's FDA route is not the one most NDCs joined to the name share",
     "multi_route_tie": "the Part D name carries CMS's * (an average over several routes of administration) and the NDCs joined to it split evenly between routes, so no route is shared by most of them",
 }
@@ -979,47 +1000,129 @@ def route_parts(route: str | None) -> frozenset:
     return frozenset(x.strip().upper() for x in (route or "").split(";") if x.strip())
 
 
-def star_route_split(hits: list) -> tuple[list, list, str]:
-    """Split the NDCs joined to one Part D name marked * into (kept hits, [(row, reason)], note).
+ROUTE_FROM_PRODUCT = "fda_product"
 
-    The contract (docs/ARCHITECTURE.md): a row joins such a name only when it has an FDA identity
-    whose route is shared by every row joined to that name; a row whose route is unknown or in the
-    minority does not. Concretely: rows with no identity, or an identity with no route, are
-    'multi_route_no_identity'. Each route FDA names for the remaining rows is counted over the rows
-    whose ROUTENAME includes it ('INTRAMUSCULAR; INTRAVENOUS' includes INTRAMUSCULAR); the route
-    covering the most rows keeps them, and every kept row then shares it. Rows outside it are
-    'multi_route_minority'. If two routes cover equally many rows but not the same rows, no route
-    is shared by most of them and every row is 'multi_route_tie'. Routes are FDA's own words,
-    compared exactly: PARENTERAL is not merged with INTRAVENOUS, nor INTRAOCULAR with OPHTHALMIC.
+
+def row_route(row: dict) -> tuple[str | None, str | None]:
+    """(route, where it came from) for the multi-route split.
+
+    The route of the row's FDA identity (exact package match) when it has one; otherwise, for an
+    NDC the FDA NDC Directory does not list as a package of its own, the route of the FDA product record of its
+    product code that product_code_fda() accepted and the name join already used
+    (row["_code_route"], set in build()). Never a looser lookup. (None, None) if neither names one.
     """
-    known, dropped = [], []
-    for h in hits:
-        parts = route_parts((h[0]["identity"] or {}).get("route"))
-        if parts:
-            known.append((h, parts))
-        else:
-            dropped.append((h[0], "multi_route_no_identity"))
+    if row["identity"] is not None:
+        route = row["identity"].get("route")
+        return (route, "identity") if route_parts(route) else (None, None)
+    route = row.get("_code_route")
+    return (route, ROUTE_FROM_PRODUCT) if route_parts(route) else (None, None)
+
+
+def _route_majority(parts: list) -> tuple[frozenset | None, list, bool]:
+    """The majority route over a list of route component sets: (kept indexes, shared components,
+    tie). Each component is counted over the sets that include it; the component covering the
+    most sets keeps them. Components covering exactly the same sets are one choice. Two
+    components covering as many sets but not the same sets are a tie. (None, [], False) if no
+    set names a component."""
     cover: dict[str, frozenset] = {}
-    for i, (_, parts) in enumerate(known):
-        for c in parts:
+    for i, ps in enumerate(parts):
+        for c in ps:
             cover[c] = cover.get(c, frozenset()) | {i}
     if not cover:
-        return [], dropped, ""
+        return None, [], False
     most = max(len(v) for v in cover.values())
     tops = {v for v in cover.values() if len(v) == most}
     if len(tops) > 1:
-        return [], dropped + [(h[0], "multi_route_tie") for h, _ in known], ""
+        return None, [], True
     keep = next(iter(tops))
-    shared = sorted(c for c, v in cover.items() if v == keep)
-    kept = [h for i, (h, _) in enumerate(known) if i in keep]
-    dropped += [(h[0], "multi_route_minority") for i, (h, _) in enumerate(known) if i not in keep]
-    route = " and ".join(shared)
-    if len(kept) == len(hits):
-        note = f"All {len(hits)} NADAC NDCs the name join matched to it have an FDA route including {route}."
+    return keep, sorted(c for c, v in cover.items() if v == keep), False
+
+
+def star_route_split(hits: list) -> tuple[list, list, str]:
+    """Split the NDCs joined to one Part D name marked * into (kept hits, [(row, reason)], route).
+
+    The contract (docs/ARCHITECTURE.md): a row joins such a name only when its FDA route is known
+    and shared by every row joined to that name; a row whose route is unknown or in the minority
+    does not. A row's route is its FDA identity's, or, with no package in the Directory, that of
+    the FDA product record of its product code the join accepted (row_route()). Rows with neither
+    are 'multi_route_no_identity'.
+
+    The rows with an FDA identity decide the route, exactly as before product-record routes were
+    used: each route FDA names for them is counted over the rows whose ROUTENAME includes it
+    ('INTRAMUSCULAR; INTRAVENOUS' includes INTRAMUSCULAR); the route covering the most rows keeps
+    them, and every kept row then shares it. Identity rows outside it are 'multi_route_minority'.
+    If two routes cover equally many rows but not the same rows, no route is shared by most of
+    them and every row with a route is 'multi_route_tie'. Routes are FDA's own words, compared
+    exactly: PARENTERAL is not merged with INTRAVENOUS, nor INTRAOCULAR with OPHTHALMIC.
+
+    A row whose route came from the product record follows that decision and never votes in it:
+    it is kept only when its route includes every component of the kept route, else it is
+    'multi_route_minority' (or 'multi_route_tie' when the identity rows tie). Such rows are often
+    a second package (an inner pouch or blister) of a product whose listed package already
+    counts, so letting them vote would count one product twice. Only when no row has an identity
+    route do the product-record rows decide among themselves, by the same rule. Kept rows whose
+    route came from the product record are marked row["_route_from"] = "fda_product"; route is
+    the shared route, as text ("" if none is kept).
+    """
+    by_identity, by_product, dropped = [], [], []
+    for h in hits:
+        h[0].pop("_route_from", None)
+        route, where = row_route(h[0])
+        if route is None:
+            dropped.append((h[0], "multi_route_no_identity"))
+        elif where == ROUTE_FROM_PRODUCT:
+            by_product.append((h, route_parts(route)))
+        else:
+            by_identity.append((h, route_parts(route)))
+    deciders = by_identity or by_product
+    followers = by_product if by_identity else []
+    keep, shared, tie = _route_majority([ps for _, ps in deciders])
+    if keep is None:
+        if tie:
+            dropped += [(h[0], "multi_route_tie") for h, _ in deciders + followers]
+        return [], dropped, ""
+    need = frozenset(shared)
+    kept = []
+    for i, (h, ps) in enumerate(deciders):
+        if i in keep:
+            kept.append(h)
+        else:
+            dropped.append((h[0], "multi_route_minority"))
+    for h, ps in followers:
+        if need <= ps:
+            kept.append(h)
+        else:
+            dropped.append((h[0], "multi_route_minority"))
+    for h in kept:
+        if row_route(h[0])[1] == ROUTE_FROM_PRODUCT:
+            h[0]["_route_from"] = ROUTE_FROM_PRODUCT
+    kept_ids = {id(h) for h in kept}
+    return [h for h in hits if id(h) in kept_ids], dropped, " and ".join(shared)
+
+
+def star_route_note(route: str, kept: int, joined: list, matched: int) -> str:
+    """The reason note on a * name's figure: which route its rows share, how many of the NDCs
+    the name join matched point at it (joined: the kept rows the unit rule also lets through), and
+    how many of those took their route from FDA's product record because the FDA NDC Directory does
+    not list them as packages of their own."""
+    if kept == matched:
+        note = f"All {matched} NADAC NDCs the name join matched to it have an FDA route including {route}."
     else:
-        note = (f"Only NADAC NDCs whose FDA route includes {route} point at this name ({len(kept)} of the {len(hits)} "
-                f"the name join matched); NDCs of another route or with no FDA identity do not.")
-    return kept, dropped, note
+        note = (f"Only NADAC NDCs whose FDA route includes {route} point at this name ({len(joined)} of the {matched} "
+                f"the name join matched); NDCs of another route or with no known FDA route do not.")
+    k, n = sum(1 for row in joined if row.get("_route_from") == ROUTE_FROM_PRODUCT), len(joined)
+    if k:
+        same = "FDA's record for the same product (labeler and product code)"
+        if n == 1:
+            note += (f" The one NDC that points at this name is not listed in the FDA NDC Directory as a package of its own; "
+                     f"its route was taken from {same}.")
+        elif k == n:
+            note += (f" None of the {n} NDCs that point at this name is listed in the FDA NDC Directory as a package of its own; "
+                     f"each one's route was taken from {same}.")
+        else:
+            verb = "is not listed in the FDA NDC Directory as a package of its own; its" if k == 1 else                 "are not listed in the FDA NDC Directory as packages of their own; their"
+            note += f" {k} of the {n} NDCs that point at this name {verb} route was taken from {same}."
+    return note
 
 
 MAJORITY_UNIT_SHARE = 0.9
@@ -1499,6 +1602,10 @@ def build() -> int:
             fda = product_code_fda(row, fda_info["by_product_code"], (row["name"], ndc[:9]) in listed)
             from_code = fda is not None
             by_code_rows += from_code
+            if from_code:
+                # The route of that same accepted record: a * name's route split may use it.
+                row["_code_route"] = blank_to_none(fda["ROUTENAME"])
+                row["_code_product_ndc"] = fda["PRODUCTNDC"].strip()
         e, basis, path, code = pd.match(row, fda)
         if from_code and e is not None:
             row["_pd_by_code"] = True
@@ -1523,25 +1630,32 @@ def build() -> int:
     # get the figure, with the mix stated; the others get none.
     # part_d_names holds one entry per Part D row that at least one NDC references, priced per the
     # NADAC unit those NDCs share (at most one unit can cover MAJORITY_UNIT_SHARE of them).
-    # A Part D name CMS marks with * averages several routes of administration. Only NDCs with an
-    # FDA identity whose route every NDC joined to the name shares keep it (docs/ARCHITECTURE.md).
+    # A Part D name CMS marks with * averages several routes of administration. Only NDCs with a
+    # known FDA route that every NDC joined to the name shares keep it (docs/ARCHITECTURE.md): the
+    # route of the row's FDA identity, or, for an NDC whose package is not in the Directory, the
+    # route of the product-code record product_code_fda() accepted for it above.
     # The unit rule below still counts every NDC the name join matched: it is about what CMS's
     # average mixes, and dropping NDCs of other routes here does not change CMS's average.
     pd_names: dict[str, dict] = {}
     route_notes: dict[int, str] = {}
     all_units = {k: Counter(row["unit"] for row, _, _, _ in hits) for k, hits in pd_hits.items()}
+    route_from_used = Counter()  # rows whose * route split used the product-code route, by outcome
     for k in list(pd_hits):
         hits = pd_hits[k]
         if "*" not in hits[0][1]["row"]["Brnd_Name"]:
             continue
-        kept, dropped, note = star_route_split(hits)
+        kept, dropped, route = star_route_split(hits)
         for row, why in dropped:
             pd_reasons[row["ndc"]] = PART_D_UNMATCHED[why]
             pd_unmatched[why] += 1
             row.pop("_pd_by_code", None)
+            if why != "multi_route_no_identity" and row["identity"] is None:
+                route_from_used[why] += 1
         if kept:
             pd_hits[k] = kept
-            route_notes[k] = note
+            units, total = all_units[k], sum(all_units[k].values())
+            joined = [row for row, _, _, _ in kept if units[row["unit"]] / total >= MAJORITY_UNIT_SHARE]
+            route_notes[k] = star_route_note(route, len(kept), joined, len(hits))
         else:
             del pd_hits[k]
     for k, hits in pd_hits.items():
@@ -1561,9 +1675,20 @@ def build() -> int:
                 if known != entry:
                     sys.exit(f"Part D {key}: joined NDCs need different entries (e.g. NDC {row['ndc']}); refusing to pick one.")
                 row["part_d"] = {"key": key, "basis": basis}
+                if row.pop("_route_from", None) == ROUTE_FROM_PRODUCT:
+                    # This join depends on the route of the FDA product record: say so on the row.
+                    # product_ndc is FDA's own PRODUCTNDC ("50268-662"), so a reader can find the record;
+                    # inner_of lists the FDA packages of that product whose description prints this NDC
+                    # as an inner unit ([] when none does).
+                    row["part_d"].update(route_from=ROUTE_FROM_PRODUCT, route=row["_code_route"],
+                                         product_ndc=row["_code_product_ndc"],
+                                         inner_of=sorted(fda_info["inner_of"].get(row["ndc"], ())))
+                    route_from_used["joined"] += 1
                 row["_pd_path"] = path
             else:
                 row.pop("_pd_by_code", None)
+                if row.pop("_route_from", None) == ROUTE_FROM_PRODUCT:
+                    route_from_used["mixed_units" if share < MAJORITY_UNIT_SHARE else "no_value"] += 1
                 code = "mixed_units" if share < MAJORITY_UNIT_SHARE else "no_value"
                 pd_reasons[row["ndc"]] = PART_D_UNMATCHED[code]
                 pd_unmatched[code] += 1
@@ -1626,6 +1751,11 @@ def build() -> int:
         "part_d_multiple_routes": sum(1 for r in pd_rows if "*" in pd_names[r["part_d"]["key"]]["brand_name"]),
         # Rows with no exact FDA package match that were matched using their product code's FDA record.
         "part_d_fda_by_product_code": {"rows": by_code_rows, "matched": by_code_matched},
+        # Rows with no exact FDA package match that joined a * name by name and whose route split
+        # used the route of that product-code record: how many, how many kept the join because of
+        # it (part_d.route_from = "fda_product"), and what happened to the others.
+        "part_d_route_from_product_code": {"rows": sum(route_from_used.values()), "joined": route_from_used["joined"],
+                                           "not_joined": dict(sorted((k, v) for k, v in route_from_used.items() if k != "joined"))},
         "part_d_unmatched": dict(sorted(pd_unmatched.items(), key=lambda kv: (-kv[1], kv[0]))),
         "part_b_matched": len(pb_rows),
         "part_b_unit_reconciled": sum(1 for r in pb_rows if r["part_b"]["package_unit"]),
@@ -1678,6 +1808,7 @@ data/drugs.json  ({OUT.stat().st_size / 1e6:,.1f} MB, schema {SCHEMA})
           + f"""; OTC {c['part_d_otc']['matched']}/{c['part_d_otc']['rows']}
                   outliers {c['part_d_outliers']:,}, outlier flag blank {c['part_d_outlier_flag_blank']}, multiple-route (*) names {c['part_d_multiple_routes']:,}
                   no exact FDA package: {c['part_d_fda_by_product_code']['rows']:,} rows matched with their product code's FDA record, {c['part_d_fda_by_product_code']['matched']:,} of them joined
+                  * route from that record: {c['part_d_route_from_product_code']['rows']:,} rows, {c['part_d_route_from_product_code']['joined']:,} joined; not joined {c['part_d_route_from_product_code']['not_joined']}
   Part B          {c['part_b_matched']:,} rows joined through the crosswalk ({pct(c['part_b_matched'], n)}); package unit reconciled to the NADAC unit on {c['part_b_unit_reconciled']:,} {c['part_b_unit_reconciled_by']}
   tables          part_d_names {c['part_d_names']:,}; part_b_codes {c['part_b_codes']:,} ({c['part_b_single_labeler_codes']:,} with a single labeler on the crosswalk)
 """.rstrip())

@@ -92,10 +92,21 @@ Phase 1: drugs.
   `tests/browser/` (Playwright): Chromium at 360px and desktop, light and dark; Firefox at
   desktop, light; WebKit at 360px light and desktop dark.
 - Docs: README, CONTRIBUTING, SECURITY, GOVERNANCE, CODE_OF_CONDUCT, LICENSE (MIT),
-  `docs/ARCHITECTURE.md`, `docs/DATA_SOURCES.md` and `docs/DECISIONS.md` (34 decisions); issue forms for a
+  `docs/ARCHITECTURE.md`, `docs/DATA_SOURCES.md` and `docs/DECISIONS.md` (37 decisions); issue forms for a
   wrong price, a missing drug and a bug; a pull request template; the CI workflow; a
   devcontainer.
 - README screenshots of the card (`docs/img/`, 360px light and dark, 1280px light), made
   from `openbill.html` by `node tools/shots.mjs`.
+
+### Changed
+
+- `data/drugs.json` is stored in Git LFS, so each data refresh adds one LFS object instead of a
+  full copy to the history. CI fetches and caches the LFS objects; the devcontainer installs Git
+  LFS; `build.js` and `tests/lfs.test.js` say plainly when the file is only an LFS pointer
+  (decision 35).
+- An NDC whose package is not in the FDA NDC Directory may take its route from FDA's record for
+  the same product, so it can join a Part D name that averages several routes; the provenance
+  panel says so (decision 37). Majority-route rows keep the multi-route average, disclosed
+  (decision 36).
 
 [Unreleased]: https://github.com/destinjones/openbill/commits/main

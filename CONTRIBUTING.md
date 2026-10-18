@@ -18,8 +18,14 @@ To work on it you need Python 3.10+ (standard library only) and Node 20+ (CI use
 commands below say `python3`, which is the name on macOS and most Linux systems; on Windows
 it is usually `python`. The npm scripts `npm run fetch` and `npm run data` call `python`.
 `npm ci` installs the only dev dependency, `@playwright/test`. Or open the repo in the
-devcontainer (`.devcontainer/devcontainer.json`), which sets up Node 22, Python 3.12 and
-Playwright's Chromium, Firefox and WebKit for you.
+devcontainer (`.devcontainer/devcontainer.json`), which sets up Node 22, Python 3.12, Git LFS
+and Playwright's Chromium, Firefox and WebKit for you.
+
+`data/drugs.json` (~35 MB) is stored with [Git LFS](https://git-lfs.com), so each data refresh
+adds one LFS object instead of a full copy to the git history (decision 35). Install Git LFS
+before you clone, or run `git lfs install && git lfs pull` afterwards. Without it the file is a
+short pointer: `node build.js` stops with that message, and `tests/lfs.test.js` fails first.
+A refresh commits the rebuilt file as usual; the LFS filter in `.gitattributes` does the rest.
 
 | Command | What it does |
 |---|---|
@@ -182,6 +188,14 @@ gh label create wrong-price --description "A figure on a card looks wrong"
 gh label create missing-drug --description "A drug OpenBill does not show"
 gh label create data --description "About the data, not the code"
 ```
+
+Git LFS use counts against the repository owner's account. GitHub's free plan includes 10 GiB
+of LFS storage and 10 GiB of LFS bandwidth a month
+([GitHub Docs](https://docs.github.com/en/billing/concepts/product-billing/git-lfs)). Each
+refresh stores one ~35 MB object, about 1.8 GB a year. CI caches the LFS objects by id
+(`.github/workflows/ci.yml`), so a run downloads the file only when it has changed; clones and
+CI cache misses spend bandwidth. Check usage under the account's billing settings now and then,
+and decide on more storage or another home for old data well before storage reaches the limit.
 
 ## Good first issues
 

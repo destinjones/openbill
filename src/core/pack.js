@@ -257,6 +257,10 @@ export function unpackDrugs(packed) {
   return doc;
 }
 
+// Fields a row's own part_d may carry beside key and basis: route_from ("fda_product"), route,
+// product_ndc and inner_of, when the row's * join depends on a route taken from FDA's product
+// record (docs/ARCHITECTURE.md).
+const PART_D_ROW_FIELDS = Object.freeze(['route_from', 'route', 'product_ndc', 'inner_of']);
 const PART_B_CODE_FIELDS = Object.freeze(['hcpcs_dosage', 'short_description', 'payment_limit', 'coinsurance_pct', 'labelers']);
 const PART_B_ROW_FIELDS = Object.freeze(['bill_units_per_package', 'package_size', 'package_qty', 'package_unit']);
 
@@ -265,7 +269,9 @@ const PART_B_ROW_FIELDS = Object.freeze(['bill_units_per_package', 'package_size
  * objects the rules in rules.js read:
  *
  * - part_d: null, or { key, basis, brand_name, generic_name, avg_per_unit, claims, outlier }:
- *   the row's key and basis, then the fields of the part_d_names entry for that key
+ *   the row's key and basis, then the row's route_from, route, product_ndc and inner_of when it
+ *   has them (a * join whose route came from FDA's product record), then the fields of the
+ *   part_d_names entry for that key
  * - part_b: null, or { hcpcs, hcpcs_dosage, short_description, payment_limit,
  *   coinsurance_pct, labelers, bill_units_per_package, package_size, package_qty,
  *   package_unit }: the part_b_codes entry for row.part_b.hcpcs, then the row's own
@@ -274,7 +280,8 @@ const PART_B_ROW_FIELDS = Object.freeze(['bill_units_per_package', 'package_size
  * A field missing from the table entry or the row stays missing; nothing is filled in.
  * Linked rows and their part_d and part_b objects are frozen; the records and arrays inside
  * them are the doc's own objects, shared by every row that points at the same entry, so treat
- * all of it as read-only. Rows with the same Part D key and basis share one part_d object.
+ * all of it as read-only. Rows with the same Part D key, basis and own fields (route_from, route,
+ * product_ndc, inner_of) share one part_d object.
  * The doc is not modified. Throws if the doc is not schema openbill.drugs/3, or if a row
  * points at a key its table does not have (a broken build, which must not show as "not found").
  * @param {{ schema: string, rows: object[], part_d_names?: object, part_b_codes?: object }} doc
@@ -292,11 +299,13 @@ export function linkRows(doc) {
     if (typeof key !== 'string' || !hasOwn(names, key) || !isPlainObject(names[key])) {
       throw new Error(`linkRows: row ${row.ndc} points at Part D name ${JSON.stringify(key)}, which is not in part_d_names`);
     }
-    const ck = JSON.stringify([key, basis]);
+    const own = PART_D_ROW_FIELDS.filter((k) => hasOwn(row.part_d, k));
+    const ck = JSON.stringify([key, basis, ...own.map((k) => [k, row.part_d[k]])]);
     let out = partDCache.get(ck);
     if (!out) {
       out = { key, basis };
-      for (const [k, v] of Object.entries(names[key])) if (k !== 'key' && k !== 'basis') setOwn(out, k, v);
+      for (const k of own) out[k] = row.part_d[k];
+      for (const [k, v] of Object.entries(names[key])) if (k !== 'key' && k !== 'basis' && !own.includes(k)) setOwn(out, k, v);
       Object.freeze(out);
       partDCache.set(ck, out);
     }

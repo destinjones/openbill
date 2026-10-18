@@ -18,8 +18,8 @@ current build, retrieved 2026-10-17 (`nadac`, `fda_ndc`) and 2026-10-18 (`partd`
 | `asp_limits` | Medicare Part B payment limit file | CMS | `october-2026-medicare-part-b-payment-limit-files-final.zip` | quarter 2026-10-01/2026-12-31; posted 2026-09-17 | 918 HCPCS codes |
 | `asp_crosswalk` | ASP NDC-HCPCS crosswalk | CMS | `october-2026-ndc-hcpcs-crosswalk-final.zip` | quarter 2026-10-01/2026-12-31; posted 2026-09-17 | 7,403 NDC lines |
 
-Join results in the current build: identity 27,083 of 30,031 rows (90.2%); Part D 19,131 rows
-(63.7%) pointing at 1,458 Part D names; Part B 1,427 rows (4.8%) pointing at 138 HCPCS codes,
+Join results in the current build: identity 27,083 of 30,031 rows (90.2%); Part D 19,277 rows
+(64.2%) pointing at 1,458 Part D names; Part B 1,427 rows (4.8%) pointing at 138 HCPCS codes,
 1,338 of those rows with the package unit reconciled to the NADAC unit. `counts` in
 `data/drugs.json` breaks every null down by reason.
 
@@ -35,7 +35,11 @@ The contract is [ARCHITECTURE.md](ARCHITECTURE.md) (section "`data/drugs.json` â
   generic name, so it is written once, keyed `"<Brnd_Name>|<Gnrc_Name>"` with CMS's exact strings
   (e.g. `Eliquis|Apixaban`), holding `brand_name`, `generic_name`, `avg_per_unit`, `claims` and
   `outlier` (`true` for flag 1, `false` for 0, `null` where the flag is blank in the file). A row
-  carries `part_d = { key, basis }`. There is one entry per Part D "Overall" row that at least one
+  carries `part_d = { key, basis }`, plus `route_from: "fda_product"`, `route`, `product_ndc`
+  (FDA's `PRODUCTNDC` as FDA writes it) and `inner_of` (the FDA packages of that product whose
+  description prints the NDC inside them) when its join to a name marked `*` depends on a route
+  taken from FDA's product record (rule 6 below). There is one entry per Part D "Overall" row
+  that at least one
   NDC joined: 1,458 today. Every NDC that points at an entry is priced by NADAC in the same unit,
   and `avg_per_unit.per` is that unit (1,091 entries per EA, 257 per ML, 110 per GM).
 - **Per HCPCS code, in `part_b_codes`:** CMS publishes one payment limit per code, so it is
@@ -53,7 +57,7 @@ The contract is [ARCHITECTURE.md](ARCHITECTURE.md) (section "`data/drugs.json` â
   is reconciled to the NADAC unit (below); the 89 unreconciled sizes have no `per`, because the
   crosswalk does not state the unit. Every record in the file is `filed` (38,503 records: each
   shared table record counted once).
-- **Size.** 35.1 MB (35,129,162 bytes) for the 2026-10-14 build, down from 60.2 MB when every
+- **Size.** 35.2 MB (35,157,249 bytes) for the 2026-10-14 build, down from 60.2 MB when every
   row repeated its Part D and Part B figures.
 
 ---
@@ -197,9 +201,9 @@ The contract is [ARCHITECTURE.md](ARCHITECTURE.md) (section "`data/drugs.json` â
      package of one product faces the same FDA checks (route, release form, salt, OTC
      monograph): before this, 47 products had a Part D figure only on NDCs FDA does not list,
      while their listed NDCs were refused (the zolpidem 1.75 mg sublingual pouch NDC took
-     `Zolpidem Tartrate*` at 0.036x). The product record is used for matching only; `identity`
-     stays the exact package match or null. Today 2,035 rows are matched this way and 1,239 of
-     them join (`counts.part_d_fda_by_product_code`).
+     `Zolpidem Tartrate*` at 0.036x). The product record is used for matching, and its route for
+     the multi-route rule (rule 6); `identity` stays the exact package match or null. Today 2,035
+     rows are matched this way and 1,385 of them join (`counts.part_d_fda_by_product_code`).
   1. Names are normalised: case, punctuation, salt abbreviations (HCl = hydrochloride, Na/Sod =
      sodium, Bes = besylate ...), combination separators (`/`, `-`, `and`).
   2. Release and formulation markers (ER, XR, XL, SR, DR, CR, LA, EC, CD, 24HR, 12HR, ODT ...)
@@ -263,26 +267,45 @@ The contract is [ARCHITECTURE.md](ARCHITECTURE.md) (section "`data/drugs.json` â
      mixes tablets with milliliters. The unit mix is counted over every NDC the name join matched.
   6. **Names CMS marks with `*`** (the average reflects several routes of administration, which
      may have different unit prices). The contract (ARCHITECTURE.md): a row joins such a name only
-     when it has an FDA identity whose route is shared by every row joined to that name. So rows
-     with no FDA identity, or an identity with no route, get none (`multi_route_no_identity`).
-     Every route FDA names for the remaining rows is counted over the rows whose `ROUTENAME`
-     includes it (`INTRAMUSCULAR; INTRAVENOUS` includes INTRAMUSCULAR); the route covering the
-     most rows keeps them, so every kept row shares it, and the others get none
+     when its FDA route is known and shared by every row joined to that name. The route is the
+     one in the row's FDA identity; a row the FDA NDC Directory does not list as a package of its
+     own takes the route of the product-code record that rule 0 accepted for it, with rule 0's
+     guards against a code that now belongs to a different product, and never from a looser
+     lookup. Rows with neither route get none (`multi_route_no_identity`).
+     Every route FDA names for the rows with an identity is counted over the rows whose
+     `ROUTENAME` includes it (`INTRAMUSCULAR; INTRAVENOUS` includes INTRAMUSCULAR); the route
+     covering the most rows keeps them, so every kept row shares it, and the others get none
      (`multi_route_minority`). If two routes cover equally many rows but not the same rows, no
      route is shared by most of them and no row joins (`multi_route_tie`: the injections and
      tablets under `Medroxyprogesterone Acetate*`, and `Ivermectin*`, `Betaxolol HCl*`,
-     `Ondansetron HCl*`). Routes are FDA's own words compared exactly: PARENTERAL is not merged
-     with the injection routes, nor INTRAOCULAR with OPHTHALMIC, so a few NDCs of the majority
+     `Ondansetron HCl*`). A row whose route came from the product record follows that choice and
+     does not vote in it: it joins only if its route includes the whole kept route, and it is
+     left out when the identity rows tie. Most such rows are a second package (a blister or pouch
+     inside a carton) of a product whose listed package already counts, and letting them vote
+     would count one product twice: in this build it would have moved `Estradiol*` from topical
+     to transdermal, `Pilocarpine HCl*` from ophthalmic to oral and broken `Ivermectin*`'s tie.
+     Only in a name with no identity route at all would the product-record rows decide among
+     themselves, by the same rule (no such name today).
+     Routes are FDA's own words compared exactly: PARENTERAL is not merged with the injection
+     routes, nor INTRAOCULAR with OPHTHALMIC, so a few NDCs of the majority
      product are left out (3 naloxone syringes FDA lists as PARENTERAL; 8 budesonide inhalation
      suspension NDCs that Cipla and Exelan list with route ORAL), and the azelastine eye drops (3
-     listed as INTRAOCULAR, 2 as OPHTHALMIC) are a minority to the 5 nasal sprays. Only the exact
-     package match counts as an identity here, so the product-code record of rule 0 gives no
-     route: 222 NDCs with no identity, in names whose identified NDCs all share one route
-     (propranolol, chlorpromazine, levothyroxine tablets ...), get none. Today 446 rows are
-     `multi_route_minority`, 371 `multi_route_no_identity` and 40 `multi_route_tie`, among them
-     the olanzapine and pantoprazole vials, the diazepam rectal gel, the zolmitriptan and
-     ipratropium nasal sprays, the ofloxacin ear drops and oral cyclosporine. The kept rows'
-     `avg_per_unit` reason names the route and how many NDCs kept it. CMS's average for the name
+     listed as INTRAOCULAR, 2 as OPHTHALMIC) are a minority to the 5 nasal sprays. Of the 371
+     rows with no identity in such names, 263 have a product-code record from rule 0, and its
+     route is used (`counts.part_d_route_from_product_code`): 146 of them join, and each records
+     `part_d.route_from = "fda_product"`, the route, FDA's product NDC and the FDA packages that
+     print it inside them (139 of the 146, such as `50 BLISTER PACK in 1 BOX (50268-662-15) / 1
+     TABLET in 1 BLISTER PACK (50268-662-11)`; FDA prints the other 7 nowhere). 145 are in products whose FDA-listed NDCs
+     already had the same figure (propranolol, chlorpromazine and levothyroxine tablets, the
+     naloxone syringes ...); the other is the only NDC of ANALPRAM HC 2.5%-1% CREAM, whose name
+     `Analpram HC*` CMS flags as an outlier, so its card still shows no Part D reference. 55 are
+     on another route, 4 are in a tie, and 58 are priced in a unit that is not the name's
+     majority unit (rule 5). No row with an FDA identity changes outcome because of these rows.
+     Today 501 rows are `multi_route_minority`, 108 `multi_route_no_identity` and 44
+     `multi_route_tie`, among them the olanzapine and pantoprazole vials, the diazepam rectal
+     gel, the zolmitriptan and ipratropium nasal sprays, the ofloxacin ear drops and oral
+     cyclosporine. The kept rows' `avg_per_unit` reason names the route, how many NDCs kept it and
+     how many of those took their route from FDA's product record. CMS's average for the name
      is still the average over every route, and a small claim share at a high unit cost can move
      it a long way: diazepam tablets take `Diazepam*` ($0.9408481898 per tablet), which includes
      the rectal gel's claims.
@@ -290,12 +313,13 @@ The contract is [ARCHITECTURE.md](ARCHITECTURE.md) (section "`data/drugs.json` â
     (Atorvastatin Calcium), `brand` when it is a trade name (Eliquis). It is a property of the
     Part D row, so every NDC pointing at one name has the same basis (782 names `brand`, 676
     `generic`).
-  - Result: 19,131 rows pointing at 1,458 names in `part_d_names`; by rate class B 1,597/2,240,
-    B-ANDA 54/89, B-BIO 15/33, G 17,465/27,669; OTC 10/2,611. Outlier flag 1 on 61 names, which
-    741 matched rows point at (kept, `outlier: true`); the flag is blank for 1 name
+  - Result: 19,277 rows pointing at 1,458 names in `part_d_names`; by rate class B 1,599/2,240,
+    B-ANDA 54/89, B-BIO 15/33, G 17,609/27,669; OTC 10/2,611. Outlier flag 1 on 61 names, which
+    742 matched rows point at (kept, `outlier: true`); the flag is blank for 1 name
     (`Wescaps|B Complex W-C No.20/Folic Acid`, 1 row; `outlier: null`, and its reason says the
-    flag is blank); 2,008 matched rows point at one of the 76 names that carry a `*`, all with an
-    FDA identity sharing one route (rule 6; before rule 6, 2,350 rows pointed at 80 such names).
+    flag is blank); 2,154 matched rows point at one of the 76 names that carry a `*`, all sharing
+    one FDA route, 146 of them by the route of their product-code record (rule 6; before rule 6,
+    2,350 rows pointed at 80 such names).
     45 names are joined by NDCs in more than one NADAC unit; their `avg_per_unit` reason states
     the mix, and only the NDCs in the majority unit point at them (rule 5).
   - Dates: `avg_per_unit` and `claims` are effective 2024-01-01, the start of data year 2024,
@@ -313,7 +337,7 @@ The contract is [ARCHITECTURE.md](ARCHITECTURE.md) (section "`data/drugs.json` â
   ratio has median 2.8x, 1st percentile 0.24x, 99th percentile 43.7x and maximum 181x
   (teriflunomide, whose generic price fell after 2024; tadalafil, dapagliflozin and everolimus
   behave the same way). CMS flags teriflunomide's figure as an outlier, so the page never uses it
-  as a reference: over the 18,390 rows whose Part D figure is used, the 99th percentile is 19.8x
+  as a reference: over the 18,535 rows whose Part D figure is used, the 99th percentile is 19.8x
   and the largest spread a card shows is 119x (ALYQ 20 MG TABLET, tadalafil). The dosage unit is assumed to be NADAC's unit. The page marks every
   Part D spread `estimated`.
 

@@ -4,9 +4,10 @@
   "features": {
     "ghcr.io/devcontainers/features/node:2": {
       "version": "22"
-    }
+    },
+    "ghcr.io/devcontainers/features/git-lfs:1": {}
   },
-  "postCreateCommand": "npm ci && npx playwright install --with-deps chromium firefox webkit",
+  "postCreateCommand": "git lfs install && git lfs pull && npm ci && npx playwright install --with-deps chromium firefox webkit",
   "customizations": {
     "vscode": {
       "extensions": [

@@ -8,6 +8,9 @@ node_modules/
 .DS_Store
 Thumbs.db
 
+# CI's list of LFS objects, used as its cache key
+.lfs-assets-id
+
 # Playwright output (npx playwright test)
 test-results/
 playwright-report/

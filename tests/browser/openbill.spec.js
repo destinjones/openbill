@@ -544,6 +544,54 @@ test('a generic equivalent’s NADAC in the panel says it is a different product
   await expect(li).toContainText(`eff. ${row.generic_nadac.effective_date}`);
 });
 
+// docs/ARCHITECTURE.md, the multi-route rule: an NDC whose package is not in the FDA NDC
+// Directory may join a Part D name marked * on the route of FDA's record for the same product
+// (part_d.route_from "fda_product"). Its panel entry says so plainly, names the route and FDA's
+// product NDC as FDA writes it, and the FDA packages that list the NDC inside them.
+const routeFromText = (r) => {
+  const inner = r.part_d.inner_of;
+  const within = inner.length ? `; FDA lists it as a unit inside ${inner.length === 1 ? 'its package' : 'its packages'} ${inner.length < 2 ? inner[0] : `${inner.slice(0, -1).join(', ')} and ${inner[inner.length - 1]}`}` : '';
+  return `Route for the Part D match: ${r.part_d.route}. The FDA NDC Directory does not list this NDC as a package of its own${within}. Its route was taken from FDA’s record for the same product, product NDC ${r.part_d.product_ndc} (labeler and product code). ${r.part_d.brand_name} is a Part D name CMS marks with * (one average over several routes), which only NDCs on the route its NDCs share point at.`;
+};
+const routeFromRow =
+  ['50268066211'].map((n) => linked.find((r) => r.ndc === n)).find((r) => r && r.part_d && r.part_d.route_from === 'fda_product') ||
+  linked.find((r) => r.part_d && r.part_d.route_from === 'fda_product' && !summary(byName.get(r.name)).reference.missing);
+test('an NDC whose * route came from FDA’s product record says so in the panel and names the route', async ({ page }) => {
+  expect(routeFromRow, 'some row takes its * route from the FDA product record').toBeTruthy();
+  expect(routeFromRow.identity).toBeNull();
+  await open(page, PAGE + hashFor(routeFromRow.name));
+  await openPanel(page);
+  const li = page.locator(`#panel-body li#ndc-${routeFromRow.ndc}`);
+  if (routeFromRow.ndc === '50268066211') {
+    // FDA's product.txt writes this product NDC 50268-662 (5-3), not 50268-0662, and package.txt
+    // prints 50268-662-11 inside package 50268-662-15 ('50 BLISTER PACK in 1 BOX (50268-662-15) /
+    // 1 TABLET in 1 BLISTER PACK (50268-662-11)'), FDA NDC Directory file of this build.
+    expect(routeFromRow.part_d.product_ndc).toBe('50268-662');
+    expect(routeFromRow.part_d.inner_of).toEqual(['50268-662-15']);
+  }
+  await expect(li).toContainText('The FDA NDC Directory file used for this build does not list this NDC as a package of its own');
+  await expect(li.locator('p.route-from')).toHaveText(routeFromText(routeFromRow));
+  // The row's own Part D figure is shown, not "we don't know yet".
+  await expect(li).toContainText(formatUnitPrice(routeFromRow.part_d.avg_per_unit.value));
+  // NDCs of the same product with an FDA identity carry no such note.
+  for (const r of byName.get(routeFromRow.name).rows.filter((x) => x.identity)) {
+    await expect(page.locator(`#panel-body li#ndc-${r.ndc} p.route-from`)).toHaveCount(0);
+  }
+  // The Part D name's reason says how many of its NDCs took their route this way.
+  await expect(page.locator('#panel-body')).toContainText('NDCs that point at this name');
+});
+
+// A route_from row whose NDC no FDA package description prints names no containing package.
+const routeFromLoneRow = linked.find((r) => r.part_d && r.part_d.route_from === 'fda_product' && Array.isArray(r.part_d.inner_of) && r.part_d.inner_of.length === 0);
+test('an NDC whose * route came from FDA’s product record, and that no FDA package lists inside it, names no package', async ({ page }) => {
+  expect(routeFromLoneRow, 'some route_from row has no FDA package listing it inside').toBeTruthy();
+  await open(page, PAGE + hashFor(routeFromLoneRow.name));
+  await openPanel(page);
+  const p = page.locator(`#panel-body li#ndc-${routeFromLoneRow.ndc} p.route-from`);
+  await expect(p).toHaveText(routeFromText(routeFromLoneRow));
+  await expect(p).not.toContainText('lists it as a unit inside');
+});
+
 // Review NUM-8: the FDA NDC Directory supplies names and package amounts, so its date and age
 // are on the card, and it is labelled stale when it is.
 test('the FDA NDC Directory line and its age are on the card; stale when old', async ({ page }) => {

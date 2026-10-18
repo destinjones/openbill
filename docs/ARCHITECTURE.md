@@ -188,7 +188,13 @@ Real example values (ELIQUIS 5 MG TABLET in the 2026-10-14 NADAC file):
   "generic_nadac": <record usd>,               // optional: brand rows whose NADAC row lists a generic NADAC
   "part_d": null | {
     "key": "Eliquis|Apixaban",                 // into part_d_names
-    "basis": "brand" | "generic"               // how CMS names the matched row: a trade name, or the generic name itself
+    "basis": "brand" | "generic",              // how CMS names the matched row: a trade name, or the generic name itself
+    "route_from": "fda_product",               // optional: only when this row's join to a * name depends on a route taken
+                                               // from FDA's product record (identity is null; see the multi-route rule below)
+    "route": "ORAL",                           // only with route_from: that record's ROUTENAME, as FDA writes it
+    "product_ndc": "50268-662",                // only with route_from: that record's PRODUCTNDC, as FDA writes it (5-3 here, not 50268-0662)
+    "inner_of": ["50268-662-15"]               // only with route_from: FDA packages of that product whose PACKAGEDESCRIPTION prints
+                                               // this NDC in parentheses as a unit inside them, sorted; [] when none does
   },
   "part_b": null | {
     "hcpcs": "J0402",                          // into part_b_codes
@@ -205,18 +211,37 @@ methodology; the page says "We don't know yet" rather than showing a zero.
 
 `linkRows(doc)` in `src/core/pack.js` returns the rows with `part_d` and `part_b` expanded to
 the full objects the rules read:
-`part_d = { key, basis, brand_name, generic_name, avg_per_unit, claims, outlier }` and
+`part_d = { key, basis, brand_name, generic_name, avg_per_unit, claims, outlier }` (with the row's
+own `route_from`, `route`, `product_ndc` and `inner_of` after `basis` when it has them) and
 `part_b = { hcpcs, hcpcs_dosage, short_description, payment_limit, coinsurance_pct, labelers,
 bill_units_per_package, package_size, package_qty, package_unit }`. The tables are shared, so
 linked rows must be treated as read-only.
 
 A Part D name that CMS marks with `*` combines routes whose unit prices may differ. A row joins
-such a name only when it has an FDA identity whose route is shared by every row joined to that
-name; a row whose route is unknown (no FDA identity) or in the minority does not join it, and
-`counts.part_d_unmatched` records why. Routes are compared by component (FDA's
-`INTRAMUSCULAR; INTRAVENOUS` shares `INTRAMUSCULAR` with `INTRAMUSCULAR; SUBCUTANEOUS`); the
-component covering the most rows keeps them, and when two components cover as many rows but not
-the same rows, no row joins (`multi_route_tie`).
+such a name only when its FDA route is known and shared by every row joined to that name; a row
+whose route is unknown or in the minority does not join it, and `counts.part_d_unmatched`
+records why. A row's route is its FDA identity's. A row the FDA NDC Directory does not list as a
+package of its own (identity `null`) takes the route of the FDA product record of its 9-digit product code
+(labeler + product), and only of the record the Part D name join already accepted for it
+(`product_code_fda()` in `tools/build_drugs.py`: the code has one distinct product record, and a
+listed sibling NDC of the same NADAC description and code, FDA's trade name at the start of the
+description, or FDA's name and a strength printed in it guards against a code that now belongs
+to a different product). Such a row that joins records it: `part_d.route_from = "fda_product"`,
+`part_d.route`, `part_d.product_ndc` and `part_d.inner_of`; the identity stays `null`, and the
+name's reason says how many of its NDCs took their route this way. A row with neither route is
+`multi_route_no_identity`. The rows with an FDA identity choose the route; a row whose route came
+from the product record follows that choice and never votes in it (it is often a second package
+of a product whose listed package already votes): it is kept only when its route includes every
+component of the kept route, is `multi_route_minority` otherwise, and `multi_route_tie` when the
+identity rows tie. Only when no row joined to the name has an identity route do the
+product-record rows choose among themselves, by the same rule.
+`counts.part_d_route_from_product_code` gives `{ rows, joined, not_joined }`: the rows whose route
+came from the product record, how many of them kept the join because of it, and why the others
+did not. Routes are compared by component (FDA's `INTRAMUSCULAR; INTRAVENOUS` shares
+`INTRAMUSCULAR` with `INTRAMUSCULAR; SUBCUTANEOUS`), in FDA's own words; the component covering
+the most of the choosing rows keeps them, and when two components cover as many rows but not the
+same rows, no row joins (`multi_route_tie`). A row on the kept route still takes CMS's one average for the
+name, which includes the other routes' spending; the figure's reason and the card say so.
 
 ## `src/core/` — DOM-free, unit-tested
 

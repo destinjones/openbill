@@ -37,7 +37,7 @@ These figures match `counts` in `data/drugs.json`.
 | join | rows | share of all rows | notes |
 | --- | --- | --- | --- |
 | FDA NDC Directory identity (exact NDC) | 27,083 | 90.2% | 0 NDCs had conflicting FDA entries and were left without an identity |
-| Medicare Part D (by name) | 19,131 | 63.7% | pointing at 1,458 Part D names; 16,968 to a name CMS writes as the generic name, 2,163 to a name CMS writes as a trade name; 17,832 matched by exact product name, 1,299 matched by generic name; 2,035 rows with no FDA identity were matched using FDA’s record for their product code, and 1,239 of them joined |
+| Medicare Part D (by name) | 19,277 | 64.2% | pointing at 1,458 Part D names; 17,111 to a name CMS writes as the generic name, 2,166 to a name CMS writes as a trade name; 17,978 matched by exact product name, 1,299 matched by generic name; 2,035 rows with no FDA identity were matched using FDA’s record for their product code, and 1,385 of them joined; for a name CMS marks with `*`, 263 of those rows took their route from that record, and 146 of them kept the Part D figure because of it (`part_d.route_from`) |
 | Medicare Part B (exact NDC on the crosswalk) | 1,427 | 4.8% | pointing at 138 HCPCS codes |
 | Part B with the package unit reconciled to the NADAC unit | 1,338 | 4.5% | 93.8% of the Part B rows; only these can be converted to a price per NADAC unit. Reconciled by: 1,289 because FDA’s package description gives the same total as the crosswalk; 32 because the NDC is a kit NADAC prices per EA, so the count is of whole kits; 17 because the crosswalk’s billing-unit columns disagree and FDA’s strength × amount ÷ the HCPCS dosage settles them exactly. The other 89 keep the crosswalk’s package size as a quantity with no unit |
 
@@ -45,10 +45,10 @@ Part D matches by the NADAC file’s “Classification for Rate Setting”, and 
 
 | class | rows | matched | share matched |
 | --- | --- | --- | --- |
-| `B` | 2,240 | 1,597 | 71.3% |
+| `B` | 2,240 | 1,599 | 71.4% |
 | `B-ANDA` | 89 | 54 | 60.7% |
 | `B-BIO` | 33 | 15 | 45.5% |
-| `G` | 27,669 | 17,465 | 63.1% |
+| `G` | 27,669 | 17,609 | 63.6% |
 | OTC (any class) | 2,611 | 10 | 0.4% |
 
 ## Reference coverage
@@ -57,9 +57,9 @@ The Medicare reference price each row gets from `referencePrice()`: Part D first
 
 | reference | rows | share of rows | products | share of products |
 | --- | --- | --- | --- | --- |
-| Medicare Part D | 18,390 | 61.2% | 3,075 | 51.8% |
+| Medicare Part D | 18,535 | 61.7% | 3,075 | 51.8% |
 | Medicare Part B | 767 | 2.6% | 180 | 3.0% |
-| none (the card says why) | 10,874 | 36.2% | 2,681 | 45.2% |
+| none (the card says why) | 10,729 | 35.7% | 2,681 | 45.2% |
 
 A product counts under Part D when any of its NDCs has a Part D reference, else under Part B when any has a Part B one. 571 rows with a Part D reference also have a usable Part B figure, shown in the provenance panel. 73 rows use Part B although a Part D name matched, because CMS flags the Part D figure as an outlier.
 
@@ -67,7 +67,7 @@ Spreads (reference per unit ÷ NADAC per unit) by state, one per row with a refe
 
 | reference | filed | published | derived | estimated | estimated at or beyond 20× or 0.2× (carry the caveat) |
 | --- | --- | --- | --- | --- | --- |
-| Medicare Part D | 0 | 0 | 0 | 18,390 | 338 |
+| Medicare Part D | 0 | 0 | 0 | 18,535 | 341 |
 | Medicare Part B | 0 | 0 | 25 | 742 | 46 |
 
 Part B figures shown next to a Part D reference in the provenance panel: filed 0, published 0, derived 29, estimated 542.
@@ -76,31 +76,31 @@ Rows with no reference, by why each Medicare figure is not usable:
 
 | Part D | Part B | rows | share of rows |
 | --- | --- | --- | --- |
-| no Part D name matched | NDC not on the Part B crosswalk | 10,156 | 33.8% |
-| Part D figure flagged as an outlier by CMS | NDC not on the Part B crosswalk | 666 | 2.2% |
+| no Part D name matched | NDC not on the Part B crosswalk | 10,010 | 33.3% |
+| Part D figure flagged as an outlier by CMS | NDC not on the Part B crosswalk | 667 | 2.2% |
 | no Part D name matched | package unit not reconciled to the NADAC unit | 50 | 0.2% |
 | Part D figure flagged as an outlier by CMS | package unit not reconciled to the NADAC unit | 2 | <0.1% |
 
 ## Unmatched reasons
 
-Why a row has no Part D name (`counts.part_d_unmatched`, recorded by `tools/build_drugs.py`). These 10,900 rows and the 19,131 matched rows make 30,031, every row.
+Why a row has no Part D name (`counts.part_d_unmatched`, recorded by `tools/build_drugs.py`). These 10,754 rows and the 19,277 matched rows make 30,031, every row.
 
 | reason | rows | share of all rows | what it means |
 | --- | --- | --- | --- |
-| `mixed_units` | 2,681 | 8.9% | NADAC prices the NDCs joined to this Part D name in more than one unit and this NDC’s unit is not the one nearly all of them share, so CMS’s average per dosage unit is not in this NDC’s unit |
+| `mixed_units` | 2,739 | 9.1% | NADAC prices the NDCs joined to this Part D name in more than one unit and this NDC’s unit is not the one nearly all of them share, so CMS’s average per dosage unit is not in this NDC’s unit |
 | `no_generic_name` | 2,040 | 6.8% | no Part D row with this generic name and release form |
 | `ambiguous_name` | 1,625 | 5.4% | more than one Part D row carries this product name and release form |
 | `otc_monograph` | 1,320 | 4.4% | OTC product sold under an FDA OTC monograph; Part D excludes OTC drugs, so a Part D row of this name is a different product |
 | `otc_no_exact_name` | 1,019 | 3.4% | OTC product with no Part D row of exactly this name (Part D excludes OTC drugs) |
-| `multi_route_minority` | 446 | 1.5% | the Part D name carries CMS’s \* (an average over several routes of administration) and this NDC’s FDA route is not the one most NDCs joined to the name share |
-| `multi_route_no_identity` | 371 | 1.2% | the Part D name carries CMS’s \* (an average over several routes of administration) and this NDC has no FDA identity with a route, so its route is unknown |
+| `multi_route_minority` | 501 | 1.7% | the Part D name carries CMS’s \* (an average over several routes of administration) and this NDC’s FDA route is not the one most NDCs joined to the name share |
 | `generic_name_disagrees` | 323 | 1.1% | a Part D row has this name but its generic name disagrees with FDA’s nonproprietary name |
 | `no_brand_name` | 303 | 1.0% | brand product with no Part D row of this brand name and release form |
 | `release_form_conflict` | 296 | 1.0% | FDA’s dosage form or name states a release form (extended or delayed release) the NADAC description does not, or the reverse |
 | `ambiguous_salt` | 175 | 0.6% | Part D has rows for this substance under different salts (for example Buprenorphine and Buprenorphine HCl) and neither the NADAC description nor FDA’s nonproprietary name settles which |
 | `otc_generic_name` | 152 | 0.5% | OTC product whose name matches only a Part D row named by the generic name, which is the prescription product (Part D excludes OTC drugs) |
 | `ambiguous_generic` | 108 | 0.4% | more than one Part D generic row could match |
-| `multi_route_tie` | 40 | 0.1% | the Part D name carries CMS’s \* (an average over several routes of administration) and the NDCs joined to it split evenly between routes, so no route is shared by most of them |
+| `multi_route_no_identity` | 108 | 0.4% | the Part D name carries CMS’s \* (an average over several routes of administration) and this NDC has no FDA identity with a route, and no accepted FDA product record for its product code with one, so its route is unknown |
+| `multi_route_tie` | 44 | 0.1% | the Part D name carries CMS’s \* (an average over several routes of administration) and the NDCs joined to it split evenly between routes, so no route is shared by most of them |
 | `ambiguous_presentation` | 1 | <0.1% | Part D lists presentations of this name separately (for example vial and pen) and the NADAC description does not settle which one this NDC is |
 
 Why a row has no Part B data (`counts.part_b_unmatched`). These 28,604 rows and the 1,427 joined rows make 30,031, every row.
@@ -153,9 +153,9 @@ All explanation codes in this file:
 
 ## Outliers
 
-CMS flags 61 of the 1,458 Part D names as outliers (the average is substantially affected by outlier records); 741 rows point at them and do not use them as a reference. The flag is blank for 1 name (1 row); a blank flag counts as not flagged, so the figure is used, and its reason says the flag is blank. 76 names carry CMS’s `*`: the average spans several routes of administration. 2,008 rows point at them. Under the multi-route rule only rows with an FDA identity on the route the name’s rows share keep the figure; the others are counted under the `multi_route_` reasons above.
+CMS flags 61 of the 1,458 Part D names as outliers (the average is substantially affected by outlier records); 742 rows point at them and do not use them as a reference. The flag is blank for 1 name (1 row); a blank flag counts as not flagged, so the figure is used, and its reason says the flag is blank. 76 names carry CMS’s `*`: the average spans several routes of administration. 2,154 rows point at them. Under the multi-route rule only rows whose FDA route is the one the name’s rows share keep the figure: the route of the row’s FDA identity or, for an NDC the FDA NDC Directory does not list as a package of its own, the route of FDA’s accepted record for the same product (labeler and product code), which follows the route the identity rows choose and does not count toward choosing it; 146 rows keep the figure on a route taken that way. The others are counted under the `multi_route_` reasons above.
 
-Estimated spreads at or above 20× or at or below 0.2× carry the caveat that the two figures may not describe the same unit or product ([the rule](../methodology.html#extreme-gap)): 384 rows in 115 products. They are shown, not hidden, and the card leads with “These two figures may not measure the same thing” instead of the spread’s sentence. The thresholds are tested on the unrounded ratio. The products with the highest and lowest spreads are listed for review, each with the NDC that gives its extreme.
+Estimated spreads at or above 20× or at or below 0.2× carry the caveat that the two figures may not describe the same unit or product ([the rule](../methodology.html#extreme-gap)): 387 rows in 115 products. They are shown, not hidden, and the card leads with “These two figures may not measure the same thing” instead of the spread’s sentence. The thresholds are tested on the unrounded ratio. The products with the highest and lowest spreads are listed for review, each with the NDC that gives its extreme.
 
 Highest 10:
 
@@ -169,8 +169,8 @@ Highest 10:
 | OMEPRAZOLE-BICARB 40-1,100 CAP | `27241-0032-03`, 1 of 2 NDCs | Medicare Part D | $0.56222 per EA | $28.61243 per EA | 50.9× | estimated, with the caveat |
 | OMEPRAZOLE-BICARB 20-1,100 CAP | `27241-0031-03` | Medicare Part D | $0.62862 per EA | $28.61243 per EA | 45.5× | estimated, with the caveat |
 | CYCLOPHOSPHAMIDE 50 MG CAPSULE | `00054-0383-25`, 1 of 3 NDCs | Medicare Part D | $1.67057 per EA | $74.34041 per EA | 44.5× | estimated, with the caveat |
-| DIAZEPAM 2 MG TABLET | `00172-3925-60`, 1 of 8 NDCs | Medicare Part D | $0.02123 per EA | $0.94085 per EA | 44.3× | estimated, with the caveat |
-| DIAZEPAM 5 MG TABLET | `00172-3926-60`, 1 of 10 NDCs | Medicare Part D | $0.02761 per EA | $0.94085 per EA | 34.1× | estimated, with the caveat |
+| DIAZEPAM 2 MG TABLET | `00172-3925-60`, 1 of 9 NDCs | Medicare Part D | $0.02123 per EA | $0.94085 per EA | 44.3× | estimated, with the caveat |
+| DIAZEPAM 5 MG TABLET | `00172-3926-60`, 1 of 11 NDCs | Medicare Part D | $0.02761 per EA | $0.94085 per EA | 34.1× | estimated, with the caveat |
 
 Lowest 10:
 

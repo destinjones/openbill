@@ -45,6 +45,15 @@ export const BROWSER_FLOOR = Object.freeze([
   Object.freeze(['Safari', '16.4']),
 ]);
 
+/** What happened to a row whose * route came from FDA's product record but kept no Part D figure. */
+const ROUTE_FROM_OUTCOME = Object.freeze({
+  multi_route_minority: 'on another route than the one the name’s rows share',
+  multi_route_tie: 'in a name whose rows tie between routes',
+  mixed_units: 'priced in a unit that is not the one nearly all of the name’s rows share',
+  no_value: 'in a name with no average for the data year',
+});
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
 const CADENCE_TEXT = Object.freeze({ daily: 'every day', weekly: 'every week', quarterly: 'every quarter', annual: 'once a year' });
 const AGE_FROM_TEXT = Object.freeze({
   as_of_date: 'counted from the file date',
@@ -347,7 +356,7 @@ function joins(a, doc) {
   )} in this build).</p>
 ${
   c.part_d_fda_by_product_code && typeof c.part_d_fda_by_product_code === 'object'
-    ? html`<p>For the Part D name join only, a row with no identity can be matched using FDA’s record for its 9-digit product code, when that code has one product record and a sibling NDC of the same description is in the directory, or the NADAC description begins with FDA’s trade name or prints its name and strength. That record is not an identity: the row’s identity stays empty and the record never supplies a route. In this build it was tried for ${plural(
+    ? html`<p>For the Part D name join only, a row with no identity can be matched using FDA’s record for its 9-digit product code, when that code has one product record and a sibling NDC of the same description is in the directory, or the NADAC description begins with FDA’s trade name or prints its name and strength. That record is not an identity: the row’s identity stays empty. Its route is used for one thing only: the multi-route rule below, for a Part D name marked *. In this build it was tried for ${plural(
         c.part_d_fda_by_product_code.rows,
         'row',
       )}, and ${formatCount(c.part_d_fda_by_product_code.matched)} of them joined a Part D name.</p>
@@ -364,8 +373,23 @@ ${
 <li>a combination product’s NADAC name lists a different number of ingredients from the Part D generic name;</li>
 <li>the product is sold over the counter under an FDA OTC monograph, or matches only a Part D row named by the generic name: Part D excludes over-the-counter drugs, so those Part D rows are a different, prescription product;</li>
 <li>NADAC prices the NDCs joined to one Part D name in different units and this NDC’s unit is not the one nearly all of them share, because CMS’s average would then mix tablets with milliliters;</li>
-<li id="multi-route">the Part D name carries CMS’s *, which marks one average over several routes of administration (tablets and injections, say), and this NDC is not on the route the name’s rows share. A row joins such a name only when it has an FDA identity and its FDA route includes the route that covers the most of the name’s rows, so every row that keeps the figure shares one route. A row with no FDA identity, or on another route, is left out; if two routes cover as many rows but not the same rows, every row is left out. Routes are FDA’s own words, so PARENTERAL is not merged with INTRAVENOUS.</li>
+<li id="multi-route">the Part D name carries CMS’s *, which marks one average over several routes of administration (tablets and injections, say), and this NDC is not on the route the name’s rows share. A row joins such a name only when its FDA route is known and includes the route that covers the most of the name’s rows, so every row that keeps the figure shares one route. The route is the one in the row’s FDA identity. A row the FDA NDC Directory does not list as a package of its own takes the route of FDA’s record for the same product (labeler and product code), and only of the record the name join already accepted for it with the checks above: one product record for the code, and either a listed sibling NDC of the same description, FDA’s trade name at the start of the description, or FDA’s name and strength printed in it. Such a row follows the route the rows with an FDA identity choose and does not count toward choosing it, because it is often a second package (a blister or pouch inside a carton) of a product whose listed package already counts; it keeps the figure only when its route includes the whole chosen route. Only when none of the name’s rows has an FDA identity with a route do those rows choose among themselves. A row with no known route, or on another route, is left out; if two routes cover as many rows but not the same rows, every row is left out. Routes are FDA’s own words, so PARENTERAL is not merged with INTRAVENOUS.</li>
 </ul>
+${
+  isObj(c.part_d_route_from_product_code)
+    ? html`<p>In this build ${plural(c.part_d_route_from_product_code.rows, 'row')} with no FDA identity took their route from the product record for a name marked *, and ${formatCount(
+        c.part_d_route_from_product_code.joined,
+      )} of them kept the Part D figure because of it. Each of those rows says so in its provenance panel, naming the route, FDA’s product NDC as FDA writes it and, where FDA prints this NDC inside one of the product’s listed packages, that package; the name’s reason says how many of its NDCs took their route this way. The others were left out${
+        Object.keys(c.part_d_route_from_product_code.not_joined || {}).length
+          ? html`: ${Object.entries(c.part_d_route_from_product_code.not_joined)
+              .sort((x, y) => y[1] - x[1] || (x[0] < y[0] ? -1 : 1))
+              .map(([k, v]) => `${formatCount(v)} ${ROUTE_FROM_OUTCOME[k] || k}`)
+              .join(', ')}`
+          : ''
+      }. ${plural(c.part_d_unmatched && c.part_d_unmatched.multi_route_no_identity ? c.part_d_unmatched.multi_route_no_identity : 0, 'row')} still have no known route and stay out.</p>
+`
+    : ''
+}
 <p>${formatCount(a.partD)} of ${plural(n, 'row')} (${pct(a.partD, n)}) match, pointing at ${plural(a.partDNames, 'Part D name')}. For ${plural(
     basis.generic,
     'row',
@@ -478,7 +502,7 @@ function limitations(a, doc) {
   )} (${pct(a.refRows.none, n)}) have no Medicare price at all. A wrong Medicare price is worse than none, so an uncertain match is left empty and the card says “We don’t know yet”. Brand and generic versions of a drug are separate products, because ${APP_NAME} has no RxNorm identity yet. The ${plural(
     n - a.identity,
     'row',
-  )} without an FDA identity have only the NADAC description and, for some, FDA’s record for their product code to match on, and they never join a Part D name marked *.</li>
+  )} without an FDA identity have only the NADAC description and, for some, FDA’s record for their product code to match on, and they join a Part D name marked * only when that product record’s route is the one the name’s rows share.</li>
 <li id="limit-nadac"><strong>NADAC is a survey average.</strong> It is what retail community pharmacies paid on average in CMS’s survey. A given pharmacy may pay more or less, and NADAC says nothing about what a patient pays.</li>
 <li id="limit-dates"><strong>Dates are UTC calendar dates.</strong> The page counts every age against today’s UTC date, read from the viewer’s device clock, so the time zone never changes an age; near midnight UTC an age can differ by a day from the viewer’s local calendar. A device clock set behind can make a file look dated tomorrow; its age is then shown as 0 days. ${link(
     repoDoc('docs/DATA-QUALITY.md', 'dates'),
