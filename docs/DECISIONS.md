@@ -4,7 +4,7 @@ A numbered log of the choices behind OpenBill: context, decision, consequences. 
 not rewritten; a later entry supersedes or amends an earlier one by number, and the earlier
 entry carries a one-line note pointing at it. Entries 1 to 23 were recorded on 2026-10-17,
 during phase 1; entries 24 to 32 were recorded later the same day, after a review and a
-rebuild of `data/drugs.json`, and entries 33 to 37 on 2026-10-18. The contract they produce is
+rebuild of `data/drugs.json`, and entries 33 to 38 on 2026-10-18. The contract they produce is
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## 1. NADAC from the yearly cumulative CSV, newest As of Date only
@@ -835,3 +835,21 @@ product gains a Medicare figure on its card: 145 of the 146 rows belong to produ
 NDCs already had it, so the gain is per NDC (fewer "NDCs without this Medicare figure"). An
 independent check of all 146 against FDA's `product.txt` and `package.txt` and the Part D file
 found no false match.
+
+## 38. The website is GitHub Pages, deployed by a workflow
+
+**Context.** OpenBill was a file to download and open. The owner's other projects are websites
+on GitHub Pages, deployed by a GitHub Actions workflow, and people expect to open a link.
+
+**Decision.** On 2026-10-18 the owner decided to publish OpenBill the same way, at
+`destinjones.github.io/openbill`. `.github/workflows/pages.yml` runs on every push to
+`main` and deploys only the three files the pages load: `openbill.html` (also served as
+`index.html`), `methodology.html`, and `data/drugs.json`. The workflow fetches the real data file
+from Git LFS ([decision 35](#35-datadrugsjson-is-stored-in-git-lfs)), sharing CI's cache, and
+refuses to publish an LFS pointer. It also runs `node build.js --check` and `node --test` before
+deploying, so the site is always the committed, tested build.
+
+**Consequences.** Opening the site needs nothing; the page behaves the same over https as from
+`file://`, with the same CSP and no third-party requests. Reading `data/drugs.json` from the site
+uses Pages bandwidth, not LFS bandwidth; a deploy uses LFS bandwidth only when the data changed.
+Pages' source must stay set to "GitHub Actions".

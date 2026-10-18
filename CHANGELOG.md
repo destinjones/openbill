@@ -12,6 +12,8 @@ Data refreshes are listed too, with the source dates they bring in.
 
 - The Zenodo DOI in the README and `CITATION.cff`: 10.5281/zenodo.23457871 for all versions, 10.5281/zenodo.23457872
   for v0.1.0.
+- The website, `destinjones.github.io/openbill`, deployed from `main` by
+  `.github/workflows/pages.yml` with the real data file (decision 38).
 
 ## [0.1.0] - 2026-10-18
 
@@ -99,7 +101,7 @@ Phase 1: drugs.
   `tests/browser/` (Playwright): Chromium at 360px and desktop, light and dark; Firefox at
   desktop, light; WebKit at 360px light and desktop dark.
 - Docs: README, CONTRIBUTING, SECURITY, GOVERNANCE, CODE_OF_CONDUCT, LICENSE (MIT),
-  `docs/ARCHITECTURE.md`, `docs/DATA_SOURCES.md` and `docs/DECISIONS.md` (37 decisions); issue forms for a
+  `docs/ARCHITECTURE.md`, `docs/DATA_SOURCES.md` and `docs/DECISIONS.md` (38 decisions); issue forms for a
   wrong price, a missing drug and a bug; a pull request template; the CI workflow; a
   devcontainer.
 - README screenshots of the card (`docs/img/`, 360px light and dark, 1280px light), made
