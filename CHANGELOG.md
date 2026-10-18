@@ -8,6 +8,8 @@ Data refreshes are listed too, with the source dates they bring in.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-18
+
 Phase 1: drugs.
 
 ### Added
@@ -97,6 +99,9 @@ Phase 1: drugs.
   devcontainer.
 - README screenshots of the card (`docs/img/`, 360px light and dark, 1280px light), made
   from `openbill.html` by `node tools/shots.mjs`.
+- `CITATION.cff` and `.zenodo.json`, so GitHub's "Cite this repository" and Zenodo's record
+  for each release carry the same title, author, licence and version; `tests/citation.test.js`
+  keeps them in step with `package.json`.
 
 ### Changed
 
@@ -109,4 +114,5 @@ Phase 1: drugs.
   panel says so (decision 37). Majority-route rows keep the multi-route average, disclosed
   (decision 36).
 
-[Unreleased]: https://github.com/destinjones/openbill/commits/main
+[Unreleased]: https://github.com/destinjones/openbill/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/destinjones/openbill/releases/tag/v0.1.0

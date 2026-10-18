@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use OpenBill or its data, please cite it as below."
+type: software
+title: "OpenBill"
+abstract: >-
+  One page that tells a person what their medical care and drugs actually cost, with a
+  source and a date on every single number. Phase 1 covers drugs: what US pharmacies pay
+  (CMS NADAC) beside what Medicare pays (Medicare Part D Spending by Drug, Medicare Part B
+  payment limits), with the state, source file, effective date and retrieved date of every
+  figure. The code is MIT-licensed; the data is derived from US government sources listed
+  in docs/DATA_SOURCES.md.
+authors:
+  - given-names: "Destin"
+    family-names: "Jones"
+version: "0.1.0"
+date-released: "2026-10-18"
+license: MIT
+repository-code: "https://github.com/destinjones/openbill"
+keywords:
+  - drug prices
+  - price transparency
+  - NADAC
+  - Medicare Part D
+  - Medicare Part B
+  - average sales price
+  - health care costs
+  - open data
+  - provenance
