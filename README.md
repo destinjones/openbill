@@ -6,6 +6,7 @@ OpenBill is one offline page that puts what US pharmacies pay for a drug next to
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Data as of 2026-10-14](https://img.shields.io/badge/data%20as%20of-2026--10--14-informational)](docs/DATA-QUALITY.md)
 ![Runtime dependencies: none](https://img.shields.io/badge/runtime%20dependencies-none-brightgreen)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23457871.svg)](https://doi.org/10.5281/zenodo.23457871)
 
 Not medical advice. Not a lead-gen funnel. No account, no ads, no tracking, no paywall.
 
@@ -107,6 +108,13 @@ tested result ([decision 33](docs/DECISIONS.md#33-the-page-checks-the-inline-dat
 
 `node tools/shots.mjs` remakes the README screenshots in `docs/img/` from `openbill.html`
 (run `node build.js` first).
+
+## Cite it
+
+Each release is archived on Zenodo with the data inside it. To cite OpenBill, use the DOI for
+all versions, [10.5281/zenodo.23457871](https://doi.org/10.5281/zenodo.23457871), which always resolves to the newest
+release; v0.1.0 alone is [10.5281/zenodo.23457872](https://doi.org/10.5281/zenodo.23457872). GitHub's "Cite this repository"
+button gives the same citation from [CITATION.cff](CITATION.cff).
 
 ## Contributing
 

@@ -8,6 +8,11 @@ Data refreshes are listed too, with the source dates they bring in.
 
 ## [Unreleased]
 
+### Added
+
+- The Zenodo DOI in the README and `CITATION.cff`: 10.5281/zenodo.23457871 for all versions, 10.5281/zenodo.23457872
+  for v0.1.0.
+
 ## [0.1.0] - 2026-10-18
 
 Phase 1: drugs.
