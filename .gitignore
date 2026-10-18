@@ -1,0 +1,13 @@
+# Raw downloads are never committed; data/ holds the derived JSON.
+tools/cache/
+*.part
+
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store
+Thumbs.db
+
+# Playwright output (npx playwright test)
+test-results/
+playwright-report/

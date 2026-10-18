@@ -1,0 +1,40 @@
+name: Missing drug
+description: A drug you searched for isn't on OpenBill.
+title: "Missing drug: "
+labels: ["missing-drug", "data"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        OpenBill only shows drugs that appear in the current NADAC file, so some drugs are missing
+        on purpose: NADAC doesn't survey every product. Tell us what you looked for and we'll find
+        out why it's missing. Please don't include your own or anyone else's health information.
+  - type: input
+    id: drug_name
+    attributes:
+      label: Drug name
+      description: What you searched for, with the strength and form if you know them.
+      placeholder: atorvastatin 20 mg tablet
+    validations:
+      required: true
+  - type: input
+    id: ndc
+    attributes:
+      label: NDC
+      description: The NDC from the package or the pharmacy label, if you have it (10 or 11 digits).
+    validations:
+      required: false
+  - type: textarea
+    id: where_seen
+    attributes:
+      label: Where you saw it
+      description: Where this drug is sold, prescribed or listed, e.g. a pharmacy, a source file or an official dataset page.
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything else that would help us find it.
+    validations:
+      required: false

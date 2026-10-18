@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{{CSP}}">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>OpenBill: what pharmacies pay for a drug</title>
+<meta name="description" content="What US pharmacies pay for a drug (CMS NADAC) next to what Medicare paid, with the source file and the dates on every number.">
+<link rel="icon" href="data:,">
+<style>{{STYLE}}</style>
+</head>
+<body>
+<a class="skip" href="#card">Skip to the price card</a>
+{{MASTHEAD}}
+<main id="main">
+<section class="search" aria-label="Find a drug">
+<label class="search-label" for="q">Drug name or the NDC on your label</label>
+<input id="q" class="search-input" type="search" name="q" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" aria-describedby="search-status" aria-controls="results" disabled>
+<p id="search-status" class="search-status" aria-live="polite"></p>
+<div id="search-help" class="search-help"></div>
+<ul id="results" class="results" aria-label="Matching drugs"></ul>
+</section>
+<article id="card" class="card" aria-labelledby="card-title" aria-busy="true">
+<p class="card-loading">Loading this week’s NADAC file…</p>
+<noscript><p class="card-loading">OpenBill reads its data with JavaScript, which is turned off. The same figures are in data/drugs.json.</p></noscript>
+</article>
+<p id="card-status" class="visually-hidden" role="status" aria-live="polite"></p>
+<nav class="try" aria-label="Try a drug">
+<h2 class="try-head">Try:</h2>
+<ul class="try-list">
+{{TRY_LINKS}}
+</ul>
+</nav>
+{{HOWTO}}
+</main>
+{{FOOTER}}
+<script type="application/json" id="openbill-build">{{BUILD_JSON}}</script>
+<script type="application/json" id="openbill-data">{{DATA_JSON}}</script>
+<script>{{SCRIPT}}</script>
+</body>
+</html>

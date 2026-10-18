@@ -1,0 +1,1048 @@
+/* OpenBill: a receipt, done properly. One family (IBM Plex), hairline rules, tabular numbers,
+   one accent colour reserved for the spread. No style="" anywhere: the CSP allows only this
+   stylesheet, by hash. The @font-face rules are prepended by build.js. */
+
+:root {
+  --paper: #fbfaf6;
+  --surface: #ffffff;
+  --ink: #1b1b19;
+  --ink-2: #4c4a44;
+  --rule: #cdc8bd;
+  --rule-strong: #1b1b19;
+  --accent: #b3261e;
+  --chip-ink: #1b1b19;
+  --inverse-ink: #fbfaf6;
+  --measure: 40rem;
+  --sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #121211;
+    --surface: #1a1a18;
+    --ink: #ecebe6;
+    --ink-2: #b6b3aa;
+    --rule: #3d3b36;
+    --rule-strong: #ecebe6;
+    --accent: #ff8b7b;
+    --chip-ink: #ecebe6;
+    --inverse-ink: #121211;
+    color-scheme: dark;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 0 16px 48px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+body > * {
+  max-width: var(--measure);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+p,
+li,
+dd {
+  overflow-wrap: anywhere;
+}
+
+a {
+  color: var(--ink);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.mono,
+code,
+pre {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.skip {
+  position: absolute;
+  left: 16px;
+  top: -100px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--ink);
+  z-index: 10;
+}
+
+.skip:focus {
+  top: 8px;
+}
+
+/* ---- Masthead: a stamp, not a logo ---- */
+
+.masthead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 8px 0 6px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.stamp {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 4px 12px 5px;
+  border: 2px solid var(--ink);
+  outline: 1px solid var(--ink);
+  outline-offset: 2px;
+  color: var(--ink);
+  text-decoration: none;
+  text-transform: uppercase;
+  line-height: 1.1;
+  transform: rotate(-1.5deg);
+}
+
+.stamp:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 4px;
+}
+
+.stamp-name {
+  font-weight: 600;
+  font-size: 1.125rem;
+  letter-spacing: 0.24em;
+  margin-right: -0.24em;
+}
+
+.stamp-sub {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.18em;
+  margin-right: -0.18em;
+}
+
+.masthead-line {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--ink-2);
+}
+
+/* ---- Search ---- */
+
+.search {
+  padding: 6px 0 0;
+}
+
+.search-label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.search-input {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 1.125rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: 0;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.search-input:disabled {
+  border-style: dashed;
+}
+
+.search-status {
+  margin: 6px 0 0;
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+
+.search-status:empty {
+  margin: 0;
+}
+
+.search-help p {
+  margin: 6px 0;
+}
+
+.hint {
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+
+.results {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  border-top: 1px solid var(--rule);
+}
+
+.results:empty {
+  display: none;
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 4px;
+  font: inherit;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  cursor: pointer;
+}
+
+.result:hover .result-name {
+  text-decoration: underline;
+}
+
+.result-name {
+  font-weight: 600;
+}
+
+.result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.875rem;
+}
+
+.result-price,
+.result-ndc,
+.result-via {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+
+button.suggest {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 12px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  cursor: pointer;
+}
+
+/* ---- The card ---- */
+
+.card {
+  margin-top: 10px;
+  padding: 12px 16px 16px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-top: 3px double var(--rule-strong);
+  border-bottom: 3px double var(--rule-strong);
+}
+
+.card:focus {
+  outline: none;
+}
+
+.card-loading {
+  margin: 24px 0;
+  color: var(--ink-2);
+}
+
+.card-kicker {
+  margin: 0 0 4px;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.card-title {
+  margin: 0;
+  font-size: 1.25rem;
+  letter-spacing: 0.01em;
+  overflow-wrap: anywhere;
+}
+
+.card-title:focus {
+  outline: none;
+}
+
+.card-title:focus-visible {
+  outline: 3px solid var(--ink);
+}
+
+.card-names {
+  margin: 8px 0 0;
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+
+.k {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.card-message {
+  margin-top: 12px;
+}
+
+/* Quantity */
+
+.qty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 8px 0 0;
+  padding: 6px 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.qty-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.qty-chips {
+  display: flex;
+  gap: 6px;
+}
+
+.qty-chip {
+  min-width: 48px;
+  min-height: 44px;
+  padding: 0 10px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--rule-strong);
+  cursor: pointer;
+}
+
+.qty-chip[aria-pressed='true'] {
+  background: var(--ink);
+  color: var(--inverse-ink);
+}
+
+.qty-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.qty-input {
+  width: 4.5em;
+  min-height: 44px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: 0;
+}
+
+.qty-unit {
+  font-size: 0.875rem;
+}
+
+/* The box is the custom amount: quiet while a chip holds the value, so it does not read as a
+   fourth chip repeating the pressed one. */
+.qty-field-quiet .qty-input {
+  border-color: var(--rule);
+  color: var(--ink-2);
+}
+
+.qty-note {
+  font-size: 0.8125rem;
+}
+
+/* Figures */
+
+.fig,
+.spread {
+  padding: 10px 0 8px;
+}
+
+.fig + .fig {
+  border-top: 1px solid var(--rule);
+}
+
+.fig-label {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fig-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 2px 0 0;
+}
+
+/* At large text sizes the chip wraps below the figure instead of overflowing the screen. */
+.fig-value > span {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.fig-value .amount,
+.fig-value .multiple {
+  overflow-wrap: anywhere;
+}
+
+.amount {
+  font-size: 2.25rem;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+
+.amount-unit {
+  font-size: 1.5rem;
+}
+
+.unknown {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.multiple {
+  font-size: 2.75rem;
+  font-weight: 600;
+  line-height: 1.05;
+  color: var(--accent);
+}
+
+.arith {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.arith-note {
+  font-family: var(--sans);
+  color: var(--ink-2);
+}
+
+.prov {
+  margin: 2px 0 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.fresh {
+  margin: 4px 0 0;
+  font-size: 0.75rem;
+  color: var(--ink-2);
+}
+
+.fresh-stale {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.why,
+.cover {
+  margin: 6px 0 0;
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+
+.not-yours {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.panel-body .not-yours {
+  margin: 8px 0 0;
+}
+
+.notes {
+  margin-top: 4px;
+}
+
+.notes .prov {
+  margin-top: 2px;
+}
+
+.rule {
+  height: 0;
+  margin: 4px 0;
+  border: 0;
+  border-top: 1px solid var(--rule-strong);
+}
+
+.spread-sentence {
+  margin: 2px 0;
+  font-weight: 600;
+}
+
+.caveat {
+  margin: 6px 0 0;
+  font-size: 0.875rem;
+}
+
+.caveat-extreme {
+  padding-left: 10px;
+  border-left: 2px solid var(--rule-strong);
+}
+
+.input-date {
+  font-size: 0.75rem;
+  color: var(--ink-2);
+}
+
+.note {
+  color: var(--ink-2);
+}
+
+.rec-invalid p {
+  font-weight: 600;
+}
+
+.honesty {
+  margin: 12px 0 0;
+  padding: 12px 0 0;
+  list-style: none;
+  border-top: 1px dashed var(--rule);
+  font-size: 0.875rem;
+}
+
+.honesty li + li {
+  margin-top: 2px;
+}
+
+/* State chips: neutral, told apart by their text and border style, never by colour. */
+
+.chip {
+  display: inline-block;
+  padding: 1px 7px;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  white-space: nowrap;
+  color: var(--chip-ink);
+  border: 1px solid var(--chip-ink);
+  vertical-align: 0.15em;
+}
+
+.chip-filed {
+  border-style: solid;
+}
+
+.chip-published {
+  border: 3px double var(--chip-ink);
+  padding: 0 5px;
+}
+
+.chip-derived {
+  border-style: dashed;
+}
+
+.chip-estimated {
+  border: 2px dotted var(--chip-ink);
+  padding: 0 6px;
+}
+
+.chip-stale {
+  background: var(--ink);
+  color: var(--inverse-ink);
+  border-color: var(--ink);
+  font-weight: 600;
+}
+
+/* Card foot: the two controls */
+
+.card-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.panel > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 0 14px;
+  font-weight: 600;
+  border: 1px solid var(--rule-strong);
+  cursor: pointer;
+  list-style: none;
+}
+
+.panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel > summary::after {
+  content: '+';
+  font-family: var(--mono);
+  font-size: 1.25rem;
+}
+
+.panel[open] > summary::after {
+  content: '\2212';
+}
+
+.report {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 14px;
+  font-weight: 600;
+  border: 1px solid var(--rule-strong);
+  text-decoration: none;
+}
+
+.report:hover {
+  text-decoration: underline;
+}
+
+.card a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.panel-body {
+  padding: 4px 0 8px;
+}
+
+.panel-body h3 {
+  margin: 20px 0 8px;
+  padding-top: 12px;
+  font-size: 1rem;
+  border-top: 1px solid var(--rule);
+}
+
+.panel-body p {
+  margin: 4px 0;
+  font-size: 0.875rem;
+}
+
+.rec {
+  margin: 10px 0;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--rule);
+}
+
+.rec-title {
+  margin: 0 0 6px;
+  font-size: 0.9375rem;
+}
+
+.rec dl {
+  display: grid;
+  grid-template-columns: minmax(5.5rem, max-content) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 0.8125rem;
+}
+
+.rec dt {
+  font-weight: 600;
+}
+
+.rec dd {
+  margin: 0;
+  min-width: 0;
+}
+
+/* At large text sizes on a phone the label column leaves too little room for a state chip, so
+   each label sits above its value instead. A container query, because a media query's rem
+   ignores the reader's text size; at default text size the two columns stay. */
+.rec {
+  container-type: inline-size;
+}
+
+@container (max-width: 15rem) {
+  .rec dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .rec dd + dt {
+    margin-top: 6px;
+  }
+}
+
+.rec-missing ul,
+.fresh-list,
+.codes,
+.rules {
+  margin: 4px 0;
+  padding-left: 1.2em;
+  font-size: 0.875rem;
+}
+
+.rules li {
+  margin-bottom: 6px;
+}
+
+.rules p {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--ink-2);
+}
+
+.ndc-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ndc {
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--rule);
+}
+
+.ndc-id {
+  margin: 0 0 4px;
+  font-size: 0.875rem;
+}
+
+/* ---- Try, how to read, footer ---- */
+
+.try {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 12px;
+  padding: 16px 0 8px;
+}
+
+.try-head {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.try-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.try a,
+.site-footer a,
+.toc a,
+.doc td a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.howto {
+  padding: 8px 0 16px;
+  border-top: 1px solid var(--rule);
+}
+
+.howto h2,
+.footer-head {
+  font-size: 1rem;
+  margin: 16px 0 8px;
+}
+
+.howto p {
+  font-size: 0.9375rem;
+}
+
+.howto-states {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.howto-states li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 0;
+  font-size: 0.9375rem;
+}
+
+.howto-states .chip {
+  flex: 0 0 auto;
+  min-width: 6.5em;
+  text-align: center;
+}
+
+.site-footer {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 3px double var(--rule-strong);
+  font-size: 0.875rem;
+}
+
+.disclaimer {
+  font-weight: 600;
+}
+
+.footer-sources,
+.footer-links {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.footer-sources li {
+  padding: 2px 0 6px;
+  border-bottom: 1px dashed var(--rule);
+}
+
+.footer-sources .mono {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--ink-2);
+}
+
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 18px;
+  margin-top: 8px;
+}
+
+.build-line {
+  color: var(--ink-2);
+  font-size: 0.75rem;
+}
+
+/* ---- methodology.html and other documents ---- */
+
+.doc {
+  padding: 8px 0 24px;
+}
+
+.doc h1 {
+  font-size: 1.75rem;
+  margin: 24px 0 8px;
+}
+
+.doc h2 {
+  font-size: 1.25rem;
+  margin: 32px 0 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+
+.doc h3 {
+  font-size: 1.0625rem;
+  margin: 24px 0 6px;
+}
+
+.doc a {
+  overflow-wrap: anywhere;
+}
+
+.doc code {
+  font-size: 0.875em;
+  overflow-wrap: anywhere;
+}
+
+.doc pre {
+  overflow-x: auto;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  font-size: 0.8125rem;
+}
+
+.doc table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.doc th,
+.doc td {
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--rule);
+}
+
+.doc dl {
+  margin: 8px 0;
+}
+
+.doc dt {
+  font-weight: 600;
+  margin-top: 8px;
+}
+
+.doc dd {
+  margin: 2px 0 0;
+}
+
+.doc :target {
+  scroll-margin-top: 12px;
+  outline: 1px dashed var(--rule-strong);
+  outline-offset: 4px;
+}
+
+@media (min-width: 640px) {
+  .card {
+    padding: 20px 28px 20px;
+  }
+
+  .card-title {
+    font-size: 1.625rem;
+  }
+
+  .amount {
+    font-size: 2.75rem;
+  }
+
+  .multiple {
+    font-size: 3.25rem;
+  }
+
+  .card-foot {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .card-foot .panel {
+    flex: 1 1 100%;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  .search,
+  .try,
+  .report,
+  .skip {
+    display: none;
+  }
+
+  .panel-body {
+    display: block;
+  }
+}
+
+/* Phones: the masthead stays one line, so the card starts higher. */
+@media (max-width: 399px) {
+  .stamp {
+    padding: 3px 8px 4px;
+  }
+
+  .stamp-name {
+    font-size: 1rem;
+    letter-spacing: 0.18em;
+    margin-right: -0.18em;
+  }
+
+  .stamp-sub {
+    letter-spacing: 0.1em;
+    margin-right: -0.1em;
+  }
+
+  .masthead-line {
+    font-size: 0.6875rem;
+  }
+}

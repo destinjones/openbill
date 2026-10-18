@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Generated files are up to date
+        run: node build.js --check
+
+      - name: Unit, data, spot-check, sync, quality and docs-link tests
+        run: node --test
+
+      - name: Install Chromium, Firefox and WebKit for Playwright
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Browser checks
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
+
+  links:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: External links resolve
+        run: node --test tests/docs-links.test.js
+        env:
+          OPENBILL_CHECK_EXTERNAL: "1"

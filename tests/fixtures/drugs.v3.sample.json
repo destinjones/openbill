@@ -1,0 +1,460 @@
+{
+  "schema": "openbill.drugs/3",
+  "fixture": "Hand-written test data for the core unit tests, not real data. The NDC labeler codes 90001-90012, the drugs Fixtumab and Fixtulin, HCPCS J9990, the labeler names and every number and date are made up; a value that looks real is fixture data, not a real price or CMS figure.",
+  "sources": {
+    "nadac": {
+      "name": "CMS NADAC",
+      "title": "NADAC (fixture)",
+      "publisher": "data.medicaid.gov",
+      "license": "https://www.usa.gov/publicdomain/label/1.0/",
+      "source_url": "https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704",
+      "download_url": "https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704",
+      "source_file": "fixture-nadac-20261014.csv",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "bytes": 0,
+      "period": null,
+      "as_of_date": "2026-10-14",
+      "retrieved_date": "2026-10-17"
+    },
+    "fda_ndc": {
+      "name": "FDA NDC Directory",
+      "title": "NDC Directory (fixture)",
+      "publisher": "U.S. Food and Drug Administration",
+      "license": "https://www.usa.gov/publicdomain/label/1.0/",
+      "source_url": "https://www.fda.gov/drugs/drug-approvals-and-databases/national-drug-code-directory",
+      "download_url": "https://www.fda.gov/drugs/drug-approvals-and-databases/national-drug-code-directory",
+      "source_file": "fixture-ndctext.zip",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "bytes": 0,
+      "period": null,
+      "as_of_date": "2026-10-16",
+      "retrieved_date": "2026-10-17"
+    },
+    "partd": {
+      "name": "Medicare Part D",
+      "title": "Medicare Part D Spending by Drug (fixture)",
+      "publisher": "data.cms.gov",
+      "license": "https://www.usa.gov/publicdomain/label/1.0/",
+      "source_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+      "download_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+      "source_file": "fixture-partd-spending-by-drug-dy2024.csv",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "bytes": 0,
+      "period": "2024-01-01/2024-12-31",
+      "as_of_date": "2026-05-01",
+      "retrieved_date": "2026-10-17"
+    },
+    "asp_limits": {
+      "name": "Medicare Part B",
+      "title": "ASP payment limits (fixture)",
+      "publisher": "cms.gov",
+      "license": "https://www.usa.gov/publicdomain/label/1.0/",
+      "source_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+      "download_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+      "source_file": "fixture-asp-payment-limits-2026q4.csv",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "bytes": 0,
+      "period": "2026-10-01/2026-12-31",
+      "as_of_date": "2026-10-01",
+      "retrieved_date": "2026-10-17"
+    },
+    "asp_crosswalk": {
+      "name": "Medicare Part B crosswalk",
+      "title": "ASP NDC-HCPCS crosswalk (fixture)",
+      "publisher": "cms.gov",
+      "license": "https://www.usa.gov/publicdomain/label/1.0/",
+      "source_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+      "download_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+      "source_file": "fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "bytes": 0,
+      "period": "2026-10-01/2026-12-31",
+      "as_of_date": "2026-10-01",
+      "retrieved_date": "2026-10-17"
+    }
+  },
+  "counts": {
+    "rows": 12,
+    "with_identity": 8,
+    "with_part_d": 6,
+    "with_part_b": 5,
+    "part_d_names": 6,
+    "part_b_codes": 5
+  },
+  "part_d_names": {
+    "Amoxicillin|Amoxicillin": {
+      "brand_name": "Amoxicillin",
+      "generic_name": "Amoxicillin",
+      "avg_per_unit": {
+        "value": 0.05,
+        "kind": "usd",
+        "state": "filed",
+        "reason": "Read from the Part D Spending by Drug file, column Avg_Spnd_Per_Dsg_Unt_Wghtd, data year 2024: average spending per dosage unit across all strengths and forms under this brand and generic name, gross of manufacturer rebates. Fixture data, not a real figure.",
+        "source_name": "Medicare Part D",
+        "source_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+        "source_file": "fixture-partd-spending-by-drug-dy2024.csv",
+        "effective_date": "2024-01-01",
+        "retrieved_date": "2026-10-17",
+        "per": "ML",
+        "period": "2024-01-01/2024-12-31"
+      },
+      "claims": {
+        "value": 1234567,
+        "kind": "count",
+        "state": "filed",
+        "reason": "Read from the Part D Spending by Drug file, column Tot_Clms, data year 2024. Fixture data, not a real figure.",
+        "source_name": "Medicare Part D",
+        "source_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+        "source_file": "fixture-partd-spending-by-drug-dy2024.csv",
+        "effective_date": "2024-01-01",
+        "retrieved_date": "2026-10-17",
+        "per": "claim",
+        "period": "2024-01-01/2024-12-31"
+      },
+      "outlier": false
+    },
+    "Eliquis|Apixaban": {
+      "brand_name": "Eliquis",
+      "generic_name": "Apixaban",
+      "avg_per_unit": {
+        "value": 11.2,
+        "kind": "usd",
+        "state": "filed",
+        "reason": "Read from the Part D Spending by Drug file, column Avg_Spnd_Per_Dsg_Unt_Wghtd, data year 2024: average spending per dosage unit across all strengths and forms under this brand and generic name, gross of manufacturer rebates. Fixture data, not a real figure.",
+        "source_name": "Medicare Part D",
+        "source_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+        "source_file": "fixture-partd-spending-by-drug-dy2024.csv",
+        "effective_date": "2024-01-01",
+        "retrieved_date": "2026-10-17",
+        "per": "EA",
+        "period": "2024-01-01/2024-12-31"
+      },
+      "claims": {
+        "value": 14847081,
+        "kind": "count",
+        "state": "filed",
+        "reason": "Read from the Part D Spending by Drug file, column Tot_Clms, data year 2024. Fixture data, not a real figure.",
+        "source_name": "Medicare Part D",
+        "source_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+        "source_file": "fixture-partd-spending-by-drug-dy2024.csv",
+        "effective_date": "2024-01-01",
+        "retrieved_date": "2026-10-17",
+        "per": "claim",
+        "period": "2024-01-01/2024-12-31"
+      },
+      "outlier": false
+    },
+    "Fixtulin|Insulin Fixtulin": {
+      "brand_name": "Fixtulin",
+      "generic_name": "Insulin Fixtulin",
+      "avg_per_unit": {
+        "value": 5,
+        "kind": "usd",
+        "state": "filed",
+        "reason": "Part D 2024 average spend per dosage unit for Fixtulin / Insulin Fixtulin: all makers, strengths, forms and routes combined, claim-weighted; gross cost incl. dispensing fees and patient pay, before rebates. Unit taken as NADAC's ML. Joined on brand name. Fixture data, not a real figure.",
+        "source_name": "Medicare Part D",
+        "source_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+        "source_file": "fixture-partd-spending-by-drug-dy2024.csv",
+        "effective_date": "2024-01-01",
+        "retrieved_date": "2026-10-17",
+        "per": "ML",
+        "period": "2024-01-01/2024-12-31"
+      },
+      "claims": {
+        "value": 54321,
+        "kind": "count",
+        "state": "filed",
+        "reason": "Part D 2024 claims (fills incl. refills) for Fixtulin / Insulin Fixtulin, all makers, strengths and forms. Fixture data, not a real figure.",
+        "source_name": "Medicare Part D",
+        "source_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+        "source_file": "fixture-partd-spending-by-drug-dy2024.csv",
+        "effective_date": "2024-01-01",
+        "retrieved_date": "2026-10-17",
+        "per": "claim",
+        "period": "2024-01-01/2024-12-31"
+      },
+      "outlier": false
+    },
+    "Levothyroxine Sodium|Levothyroxine Sodium": {
+      "brand_name": "Levothyroxine Sodium",
+      "generic_name": "Levothyroxine Sodium",
+      "avg_per_unit": {
+        "value": 3.5,
+        "kind": "usd",
+        "state": "filed",
+        "reason": "Read from the Part D Spending by Drug file, column Avg_Spnd_Per_Dsg_Unt_Wghtd, data year 2024: average spending per dosage unit across all strengths and forms under this brand and generic name, gross of manufacturer rebates. CMS outlier flag 1: the average is substantially affected by outlier records. Fixture data, not a real figure.",
+        "source_name": "Medicare Part D",
+        "source_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+        "source_file": "fixture-partd-spending-by-drug-dy2024.csv",
+        "effective_date": "2024-01-01",
+        "retrieved_date": "2026-10-17",
+        "per": "EA",
+        "period": "2024-01-01/2024-12-31"
+      },
+      "claims": {
+        "value": 4321,
+        "kind": "count",
+        "state": "filed",
+        "reason": "Read from the Part D Spending by Drug file, column Tot_Clms, data year 2024. Fixture data, not a real figure.",
+        "source_name": "Medicare Part D",
+        "source_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+        "source_file": "fixture-partd-spending-by-drug-dy2024.csv",
+        "effective_date": "2024-01-01",
+        "retrieved_date": "2026-10-17",
+        "per": "claim",
+        "period": "2024-01-01/2024-12-31"
+      },
+      "outlier": true
+    },
+    "Metformin Hcl|Metformin Hcl": {
+      "brand_name": "Metformin Hcl",
+      "generic_name": "Metformin Hcl",
+      "avg_per_unit": {
+        "value": 0.0711,
+        "kind": "usd",
+        "state": "filed",
+        "reason": "Read from the Part D Spending by Drug file, column Avg_Spnd_Per_Dsg_Unt_Wghtd, data year 2024: average spending per dosage unit across all strengths and forms under this brand and generic name, gross of manufacturer rebates. Fixture data, not a real figure.",
+        "source_name": "Medicare Part D",
+        "source_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+        "source_file": "fixture-partd-spending-by-drug-dy2024.csv",
+        "effective_date": "2024-01-01",
+        "retrieved_date": "2026-10-17",
+        "per": "EA",
+        "period": "2024-01-01/2024-12-31"
+      },
+      "claims": {
+        "value": 2345678,
+        "kind": "count",
+        "state": "filed",
+        "reason": "Read from the Part D Spending by Drug file, column Tot_Clms, data year 2024. Fixture data, not a real figure.",
+        "source_name": "Medicare Part D",
+        "source_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+        "source_file": "fixture-partd-spending-by-drug-dy2024.csv",
+        "effective_date": "2024-01-01",
+        "retrieved_date": "2026-10-17",
+        "per": "claim",
+        "period": "2024-01-01/2024-12-31"
+      },
+      "outlier": false
+    },
+    "Sertraline Hcl|Sertraline Hcl": {
+      "brand_name": "Sertraline Hcl",
+      "generic_name": "Sertraline Hcl",
+      "avg_per_unit": {
+        "value": 0.0788,
+        "kind": "usd",
+        "state": "filed",
+        "reason": "Read from the Part D Spending by Drug file, column Avg_Spnd_Per_Dsg_Unt_Wghtd, data year 2024: average spending per dosage unit across all strengths and forms under this brand and generic name, gross of manufacturer rebates. Outlier_Flag_2024 is blank in the file. Fixture data, not a real figure.",
+        "source_name": "Medicare Part D",
+        "source_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+        "source_file": "fixture-partd-spending-by-drug-dy2024.csv",
+        "effective_date": "2024-01-01",
+        "retrieved_date": "2026-10-17",
+        "per": "EA",
+        "period": "2024-01-01/2024-12-31"
+      },
+      "claims": {
+        "value": 5000000,
+        "kind": "count",
+        "state": "filed",
+        "reason": "Read from the Part D Spending by Drug file, column Tot_Clms, data year 2024. Fixture data, not a real figure.",
+        "source_name": "Medicare Part D",
+        "source_url": "https://data.cms.gov/summary-statistics-on-use-and-payments/medicare-medicaid-spending-by-drug/medicare-part-d-spending-by-drug",
+        "source_file": "fixture-partd-spending-by-drug-dy2024.csv",
+        "effective_date": "2024-01-01",
+        "retrieved_date": "2026-10-17",
+        "per": "claim",
+        "period": "2024-01-01/2024-12-31"
+      },
+      "outlier": null
+    }
+  },
+  "part_b_codes": {
+    "J1071": {
+      "hcpcs": "J1071",
+      "hcpcs_dosage": "1 MG",
+      "short_description": "Inj testosterone cypionate",
+      "payment_limit": {
+        "value": 0.1,
+        "kind": "usd",
+        "state": "filed",
+        "reason": "Read from the ASP payment limit file: Payment Limit for J1071, dollars per 1 MG. Fixture data, not a real figure.",
+        "source_name": "Medicare Part B",
+        "source_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+        "source_file": "fixture-asp-payment-limits-2026q4.csv",
+        "effective_date": "2026-10-01",
+        "retrieved_date": "2026-10-17",
+        "per": "1 MG",
+        "period": "2026-10-01/2026-12-31"
+      },
+      "coinsurance_pct": {
+        "value": 20,
+        "kind": "percent",
+        "state": "filed",
+        "reason": "Read from the ASP payment limit file: Co-insurance Percentage for J1071. Fixture data, not a real figure.",
+        "source_name": "Medicare Part B",
+        "source_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+        "source_file": "fixture-asp-payment-limits-2026q4.csv",
+        "effective_date": "2026-10-01",
+        "retrieved_date": "2026-10-17",
+        "period": "2026-10-01/2026-12-31"
+      },
+      "labelers": [
+        "Fixture Labeler, Inc."
+      ]
+    },
+    "J1644": {
+      "hcpcs": "J1644",
+      "hcpcs_dosage": "PER 1000 UNITS",
+      "short_description": "Inj heparin sodium per 1000u",
+      "payment_limit": {
+        "value": 0.31,
+        "kind": "usd",
+        "state": "filed",
+        "reason": "Read from the ASP payment limit file: Payment Limit for J1644, dollars per PER 1000 UNITS. Fixture data, not a real figure.",
+        "source_name": "Medicare Part B",
+        "source_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+        "source_file": "fixture-asp-payment-limits-2026q4.csv",
+        "effective_date": "2026-10-01",
+        "retrieved_date": "2026-10-17",
+        "per": "PER 1000 UNITS",
+        "period": "2026-10-01/2026-12-31"
+      },
+      "coinsurance_pct": {
+        "value": 20,
+        "kind": "percent",
+        "state": "filed",
+        "reason": "Read from the ASP payment limit file: Co-insurance Percentage for J1644. Fixture data, not a real figure.",
+        "source_name": "Medicare Part B",
+        "source_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+        "source_file": "fixture-asp-payment-limits-2026q4.csv",
+        "effective_date": "2026-10-01",
+        "retrieved_date": "2026-10-17",
+        "period": "2026-10-01/2026-12-31"
+      },
+      "labelers": [
+        "Fixture Labeler A, Inc.",
+        "Fixture Labeler B, LLC",
+        "Fixture Labeler C Corp."
+      ]
+    },
+    "J1817": {
+      "hcpcs": "J1817",
+      "hcpcs_dosage": "50 UNITS",
+      "short_description": "Insulin for insulin pump use (fixture)",
+      "payment_limit": {
+        "value": 3,
+        "kind": "usd",
+        "state": "filed",
+        "reason": "Medicare Part B payment allowance limit for HCPCS J1817, dollars per 50 UNITS, quarter 2026-10-01/2026-12-31 (column 'Payment Limit'). Fixture data, not a real figure.",
+        "source_name": "Medicare Part B",
+        "source_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+        "source_file": "fixture-asp-payment-limits-2026q4.csv",
+        "effective_date": "2026-10-01",
+        "retrieved_date": "2026-10-17",
+        "as_of_date": "2026-10-01",
+        "per": "50 UNITS",
+        "period": "2026-10-01/2026-12-31"
+      },
+      "coinsurance_pct": {
+        "value": 20,
+        "kind": "percent",
+        "state": "filed",
+        "reason": "Beneficiary coinsurance percentage printed for HCPCS J1817 in the Part B payment limit file (column 'Co-insurance Percentage'). Fixture data, not a real figure.",
+        "source_name": "Medicare Part B",
+        "source_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+        "source_file": "fixture-asp-payment-limits-2026q4.csv",
+        "effective_date": "2026-10-01",
+        "retrieved_date": "2026-10-17",
+        "as_of_date": "2026-10-01",
+        "period": "2026-10-01/2026-12-31"
+      },
+      "labelers": [
+        "Fixture Insulins, LLC"
+      ]
+    },
+    "J2405": {
+      "hcpcs": "J2405",
+      "hcpcs_dosage": "1 MG",
+      "short_description": "Ondansetron hcl injection",
+      "payment_limit": {
+        "value": 0.06,
+        "kind": "usd",
+        "state": "filed",
+        "reason": "Read from the ASP payment limit file: Payment Limit for J2405, dollars per 1 MG. Fixture data, not a real figure.",
+        "source_name": "Medicare Part B",
+        "source_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+        "source_file": "fixture-asp-payment-limits-2026q4.csv",
+        "effective_date": "2026-10-01",
+        "retrieved_date": "2026-10-17",
+        "per": "1 MG",
+        "period": "2026-10-01/2026-12-31"
+      },
+      "coinsurance_pct": {
+        "value": 20,
+        "kind": "percent",
+        "state": "filed",
+        "reason": "Read from the ASP payment limit file: Co-insurance Percentage for J2405. Fixture data, not a real figure.",
+        "source_name": "Medicare Part B",
+        "source_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+        "source_file": "fixture-asp-payment-limits-2026q4.csv",
+        "effective_date": "2026-10-01",
+        "retrieved_date": "2026-10-17",
+        "period": "2026-10-01/2026-12-31"
+      },
+      "labelers": [
+        "Fixture Labeler A, Inc.",
+        "Fixture Labeler B, LLC"
+      ]
+    },
+    "J9990": {
+      "hcpcs": "J9990",
+      "hcpcs_dosage": "10 MG",
+      "short_description": "Inj fixtumab, 10 mg (fixture)",
+      "payment_limit": {
+        "value": 60.5,
+        "kind": "usd",
+        "state": "filed",
+        "reason": "Medicare Part B payment allowance limit for HCPCS J9990, dollars per 10 MG, quarter 2026-10-01/2026-12-31 (column 'Payment Limit'). Fixture data, not a real figure.",
+        "source_name": "Medicare Part B",
+        "source_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+        "source_file": "fixture-asp-payment-limits-2026q4.csv",
+        "effective_date": "2026-10-01",
+        "retrieved_date": "2026-10-17",
+        "as_of_date": "2026-10-01",
+        "per": "10 MG",
+        "period": "2026-10-01/2026-12-31"
+      },
+      "coinsurance_pct": {
+        "value": 20,
+        "kind": "percent",
+        "state": "filed",
+        "reason": "Beneficiary coinsurance percentage printed for HCPCS J9990 in the Part B payment limit file (column 'Co-insurance Percentage'). Fixture data, not a real figure.",
+        "source_name": "Medicare Part B",
+        "source_url": "https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files",
+        "source_file": "fixture-asp-payment-limits-2026q4.csv",
+        "effective_date": "2026-10-01",
+        "retrieved_date": "2026-10-17",
+        "as_of_date": "2026-10-01",
+        "period": "2026-10-01/2026-12-31"
+      },
+      "labelers": [
+        "Fixture Biologics, Inc."
+      ]
+    }
+  },
+  "rows": [
+{"ndc":"90005000101","name":"ACETAMINOPHEN 500 MG TABLET","unit":"EA","otc":true,"rate_class":"G","explanation_codes":["1"],"carried_forward":false,"identity":null,"nadac":{"value":0.0221,"kind":"usd","state":"filed","reason":"Read from the NADAC file, dollars per EA. Explanation code 1: calculated from the most recent pharmacy survey. Fixture data, not a real figure.","source_name":"CMS NADAC","source_url":"https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704","source_file":"fixture-nadac-20261014.csv","effective_date":"2026-09-23","retrieved_date":"2026-10-17","as_of_date":"2026-10-14","per":"EA"},"part_d":null,"part_b":null},
+{"ndc":"90009000150","name":"AMOXICILLIN 400 MG/5 ML SUSP","unit":"ML","otc":false,"rate_class":"G","explanation_codes":["1"],"carried_forward":false,"identity":{"source":"fda_ndc","package_ndc":"90009-001-50","proprietary_name":"Amoxicillin","nonproprietary_name":"amoxicillin","dosage_form":"POWDER, FOR SUSPENSION","route":"ORAL","strength":"400 mg/5mL","labeler":"Fixture Labeler, Inc.","package_description":"50 mL in 1 BOTTLE (90009-001-50)"},"nadac":{"value":0.02,"kind":"usd","state":"filed","reason":"Read from the NADAC file, dollars per ML. Explanation code 1: calculated from the most recent pharmacy survey. Fixture data, not a real figure.","source_name":"CMS NADAC","source_url":"https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704","source_file":"fixture-nadac-20261014.csv","effective_date":"2026-09-23","retrieved_date":"2026-10-17","as_of_date":"2026-10-14","per":"ML"},"part_d":{"key":"Amoxicillin|Amoxicillin","basis":"generic"},"part_b":null},
+{"ndc":"90003000321","name":"ELIQUIS 5 MG TABLET","unit":"EA","otc":false,"rate_class":"B","explanation_codes":["1"],"carried_forward":false,"identity":{"source":"fda_ndc","package_ndc":"90003-0003-21","proprietary_name":"Eliquis","nonproprietary_name":"apixaban","dosage_form":"TABLET, FILM COATED","route":"ORAL","strength":"5 mg/1","labeler":"Fixture Labeler, Inc.","package_description":"60 TABLET, FILM COATED in 1 BOTTLE (90003-0003-21)"},"nadac":{"value":9.87654,"kind":"usd","state":"filed","reason":"Read from the NADAC file, dollars per EA. Explanation code 1: calculated from the most recent pharmacy survey. Fixture data, not a real figure.","source_name":"CMS NADAC","source_url":"https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704","source_file":"fixture-nadac-20261014.csv","effective_date":"2026-09-23","retrieved_date":"2026-10-17","as_of_date":"2026-10-14","per":"EA"},"generic_nadac":{"value":0.81234,"kind":"usd","state":"filed","reason":"Read from the NADAC file: the NADAC of the corresponding generic drug, listed on this brand NDC's row. Dollars per EA. Fixture data, not a real figure.","source_name":"CMS NADAC","source_url":"https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704","source_file":"fixture-nadac-20261014.csv","effective_date":"2026-09-16","retrieved_date":"2026-10-17","as_of_date":"2026-10-14","per":"EA"},"part_d":{"key":"Eliquis|Apixaban","basis":"brand"},"part_b":null},
+{"ndc":"90012000110","name":"FIXTULIN 100 UNIT/ML VIAL","unit":"ML","otc":false,"rate_class":"B","explanation_codes":["1"],"carried_forward":false,"identity":{"source":"fda_ndc","package_ndc":"90012-001-10","proprietary_name":"Fixtulin","nonproprietary_name":"insulin fixtulin","dosage_form":"INJECTION, SOLUTION","route":"SUBCUTANEOUS","strength":"100 [iU]/mL","labeler":"Fixture Insulins, LLC","package_description":"1 VIAL in 1 CARTON (90012-001-10) / 10 mL in 1 VIAL"},"nadac":{"value":4,"kind":"usd","state":"filed","reason":"Read from the NADAC file, dollars per ML. Explanation code 1: calculated from the most recently completed pharmacy survey. Fixture data, not a real figure.","source_name":"CMS NADAC","source_url":"https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704","source_file":"fixture-nadac-20261014.csv","effective_date":"2026-09-23","retrieved_date":"2026-10-17","as_of_date":"2026-10-14","per":"ML"},"part_d":{"key":"Fixtulin|Insulin Fixtulin","basis":"brand"},"part_b":{"hcpcs":"J1817","bill_units_per_package":{"value":20,"kind":"count","state":"filed","reason":"Billable units of HCPCS J1817 (50 UNITS) in the whole 11-digit NDC: crosswalk column BILLUNITSPKG ('Billable Units Per 11-Digit NDC'). Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","as_of_date":"2026-10-01","period":"2026-10-01/2026-12-31"},"package_size":{"value":10,"kind":"quantity","state":"filed","reason":"Amount in one item of this NDC, crosswalk column PKG SIZE. FDA's package description gives 10 ML per NDC, equal to package size x quantity here, so the package is in NADAC's unit ML. Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","as_of_date":"2026-10-01","per":"ML","period":"2026-10-01/2026-12-31"},"package_qty":{"value":1,"kind":"count","state":"filed","reason":"Number of items in this NDC, crosswalk column PKG QTY. Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","as_of_date":"2026-10-01","period":"2026-10-01/2026-12-31"},"package_unit":"ML"}},
+{"ndc":"90011000104","name":"FIXTUMAB 100 MG/4 ML VIAL","unit":"ML","otc":false,"rate_class":"B-BIO","explanation_codes":["1"],"carried_forward":false,"identity":{"source":"fda_ndc","package_ndc":"90011-001-04","proprietary_name":"Fixtumab","nonproprietary_name":"fixtumab","dosage_form":"INJECTION, SOLUTION","route":"INTRAVENOUS","strength":"25 mg/mL","labeler":"Fixture Biologics, Inc.","package_description":"1 VIAL, SINGLE-DOSE in 1 CARTON (90011-001-04) / 4 mL in 1 VIAL, SINGLE-DOSE"},"nadac":{"value":50,"kind":"usd","state":"filed","reason":"Read from the NADAC file, dollars per ML. Explanation code 1: calculated from the most recently completed pharmacy survey. Fixture data, not a real figure.","source_name":"CMS NADAC","source_url":"https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704","source_file":"fixture-nadac-20261014.csv","effective_date":"2026-09-23","retrieved_date":"2026-10-17","as_of_date":"2026-10-14","per":"ML"},"part_d":null,"part_b":{"hcpcs":"J9990","bill_units_per_package":{"value":10,"kind":"count","state":"filed","reason":"Billable units of HCPCS J9990 (10 MG) in the whole 11-digit NDC: crosswalk column BILLUNITSPKG ('Billable Units Per 11-Digit NDC'). Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","as_of_date":"2026-10-01","period":"2026-10-01/2026-12-31"},"package_size":{"value":4,"kind":"quantity","state":"filed","reason":"Amount in one item of this NDC, crosswalk column PKG SIZE. FDA's package description gives 4 ML per NDC, equal to package size x quantity here, so the package is in NADAC's unit ML. Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","as_of_date":"2026-10-01","per":"ML","period":"2026-10-01/2026-12-31"},"package_qty":{"value":1,"kind":"count","state":"filed","reason":"Number of items in this NDC, crosswalk column PKG QTY. Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","as_of_date":"2026-10-01","period":"2026-10-01/2026-12-31"},"package_unit":"ML"}},
+{"ndc":"90010000125","name":"HEPARIN 5,000 UNIT/ML VIAL","unit":"ML","otc":false,"rate_class":"G","explanation_codes":["1"],"carried_forward":false,"identity":null,"nadac":{"value":1.25,"kind":"usd","state":"filed","reason":"Read from the NADAC file, dollars per ML. Explanation code 1: calculated from the most recent pharmacy survey. Fixture data, not a real figure.","source_name":"CMS NADAC","source_url":"https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704","source_file":"fixture-nadac-20261014.csv","effective_date":"2026-09-23","retrieved_date":"2026-10-17","as_of_date":"2026-10-14","per":"ML"},"part_d":null,"part_b":{"hcpcs":"J1644","bill_units_per_package":{"value":5,"kind":"count","state":"filed","reason":"Read from the NDC-HCPCS crosswalk: billing units per package. Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","period":"2026-10-01/2026-12-31"},"package_size":{"value":1,"kind":"quantity","state":"filed","reason":"Read from the NDC-HCPCS crosswalk: package size. Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","per":"unit not stated","period":"2026-10-01/2026-12-31"},"package_qty":{"value":25,"kind":"count","state":"filed","reason":"Read from the NDC-HCPCS crosswalk: package quantity. Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","period":"2026-10-01/2026-12-31"},"package_unit":null}},
+{"ndc":"90004000190","name":"LEVOTHYROXINE 25 MCG TABLET","unit":"EA","otc":false,"rate_class":"G","explanation_codes":["1"],"carried_forward":false,"identity":{"source":"fda_ndc","package_ndc":"90004-001-90","proprietary_name":"Levothyroxine Sodium","nonproprietary_name":"levothyroxine sodium","dosage_form":"TABLET","route":"ORAL","strength":"25 ug/1","labeler":"Fixture Labeler, Inc.","package_description":"90 TABLET in 1 BOTTLE (90004-001-90)"},"nadac":{"value":0.1203,"kind":"usd","state":"filed","reason":"Read from the NADAC file, dollars per EA. Explanation code 1: calculated from the most recent pharmacy survey. Fixture data, not a real figure.","source_name":"CMS NADAC","source_url":"https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704","source_file":"fixture-nadac-20261014.csv","effective_date":"2026-09-23","retrieved_date":"2026-10-17","as_of_date":"2026-10-14","per":"EA"},"part_d":{"key":"Levothyroxine Sodium|Levothyroxine Sodium","basis":"generic"},"part_b":null},
+{"ndc":"90001000101","name":"METFORMIN HCL 500 MG TABLET","unit":"EA","otc":false,"rate_class":"G","explanation_codes":["1"],"carried_forward":false,"identity":{"source":"fda_ndc","package_ndc":"90001-0001-01","proprietary_name":"Metformin Hydrochloride","nonproprietary_name":"metformin hydrochloride","dosage_form":"TABLET","route":"ORAL","strength":"500 mg/1","labeler":"Fixture Labeler, Inc.","package_description":"100 TABLET in 1 BOTTLE (90001-0001-01)"},"nadac":{"value":0.01451,"kind":"usd","state":"filed","reason":"Read from the NADAC file, dollars per EA. Explanation code 1: calculated from the most recent pharmacy survey. Fixture data, not a real figure.","source_name":"CMS NADAC","source_url":"https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704","source_file":"fixture-nadac-20261014.csv","effective_date":"2026-09-23","retrieved_date":"2026-10-17","as_of_date":"2026-10-14","per":"EA"},"part_d":{"key":"Metformin Hcl|Metformin Hcl","basis":"generic"},"part_b":null},
+{"ndc":"90002000201","name":"METFORMIN HCL 500 MG TABLET","unit":"EA","otc":false,"rate_class":"G","explanation_codes":["1","5"],"carried_forward":false,"identity":null,"nadac":{"value":0.016,"kind":"usd","state":"filed","reason":"Read from the NADAC file, dollars per EA. Explanation code 1: calculated from the most recent pharmacy survey; 5: calculated based on package size. Fixture data, not a real figure.","source_name":"CMS NADAC","source_url":"https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704","source_file":"fixture-nadac-20261014.csv","effective_date":"2026-09-23","retrieved_date":"2026-10-17","as_of_date":"2026-10-14","per":"EA"},"part_d":null,"part_b":null},
+{"ndc":"90006000410","name":"ONDANSETRON 4 MG/2 ML VIAL","unit":"ML","otc":false,"rate_class":"G","explanation_codes":["1"],"carried_forward":false,"identity":{"source":"fda_ndc","package_ndc":"90006-004-10","proprietary_name":"Ondansetron","nonproprietary_name":"ondansetron hydrochloride","dosage_form":"INJECTION, SOLUTION","route":"INTRAVENOUS","strength":"2 mg/mL","labeler":"Fixture Labeler, Inc.","package_description":"2 mL in 1 VIAL (90006-004-10)"},"nadac":{"value":0.5,"kind":"usd","state":"filed","reason":"Read from the NADAC file, dollars per ML. Explanation code 1: calculated from the most recent pharmacy survey. Fixture data, not a real figure.","source_name":"CMS NADAC","source_url":"https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704","source_file":"fixture-nadac-20261014.csv","effective_date":"2026-09-23","retrieved_date":"2026-10-17","as_of_date":"2026-10-14","per":"ML"},"part_d":null,"part_b":{"hcpcs":"J2405","bill_units_per_package":{"value":4,"kind":"count","state":"filed","reason":"Read from the NDC-HCPCS crosswalk: billing units per package. Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","period":"2026-10-01/2026-12-31"},"package_size":{"value":2,"kind":"quantity","state":"filed","reason":"Read from the NDC-HCPCS crosswalk: package size. Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","per":"ML","period":"2026-10-01/2026-12-31"},"package_qty":{"value":1,"kind":"count","state":"filed","reason":"Read from the NDC-HCPCS crosswalk: package quantity. Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","period":"2026-10-01/2026-12-31"},"package_unit":"ML"}},
+{"ndc":"90007000501","name":"SERTRALINE HCL 50 MG TABLET","unit":"EA","otc":false,"rate_class":"G","explanation_codes":["4"],"carried_forward":true,"identity":{"source":"fda_ndc","package_ndc":"90007-0005-1","proprietary_name":"Sertraline Hydrochloride","nonproprietary_name":"sertraline hydrochloride","dosage_form":"TABLET, FILM COATED","route":"ORAL","strength":"50 mg/1","labeler":"Fixture Labeler, Inc.","package_description":"30 TABLET, FILM COATED in 1 BOTTLE (90007-0005-1)"},"nadac":{"value":0.0257,"kind":"usd","state":"filed","reason":"Read from the NADAC file, dollars per EA. Explanation code 4: carried forward from the previous file without a new survey. Fixture data, not a real figure.","source_name":"CMS NADAC","source_url":"https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704","source_file":"fixture-nadac-20261014.csv","effective_date":"2026-09-23","retrieved_date":"2026-10-17","as_of_date":"2026-10-14","per":"EA"},"part_d":{"key":"Sertraline Hcl|Sertraline Hcl","basis":"generic"},"part_b":null},
+{"ndc":"90008000110","name":"TESTOSTERONE CYP 200 MG/ML VIAL","unit":"ML","otc":false,"rate_class":"G","explanation_codes":["1"],"carried_forward":false,"identity":null,"nadac":{"value":3.5,"kind":"usd","state":"filed","reason":"Read from the NADAC file, dollars per ML. Explanation code 1: calculated from the most recent pharmacy survey. Fixture data, not a real figure.","source_name":"CMS NADAC","source_url":"https://data.medicaid.gov/dataset/fbb83258-11c7-47f5-8b18-5f8e79f7e704","source_file":"fixture-nadac-20261014.csv","effective_date":"2026-09-23","retrieved_date":"2026-10-17","as_of_date":"2026-10-14","per":"ML"},"part_d":null,"part_b":{"hcpcs":"J1071","bill_units_per_package":{"value":2000,"kind":"count","state":"filed","reason":"Read from the NDC-HCPCS crosswalk: billing units per package. Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","period":"2026-10-01/2026-12-31"},"package_size":{"value":10,"kind":"quantity","state":"filed","reason":"Read from the NDC-HCPCS crosswalk: package size. Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","per":"unit not stated","period":"2026-10-01/2026-12-31"},"package_qty":{"value":1,"kind":"count","state":"filed","reason":"Read from the NDC-HCPCS crosswalk: package quantity. Fixture data, not a real figure.","source_name":"Medicare Part B crosswalk","source_url":"https://www.cms.gov/medicare/payment/part-b-drugs/asp-pricing-files","source_file":"fixture-asp-ndc-hcpcs-crosswalk-2026q4.csv","effective_date":"2026-10-01","retrieved_date":"2026-10-17","period":"2026-10-01/2026-12-31"},"package_unit":null}}
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "openbill",
+  "version": "0.1.0",
+  "description": "What medical care and drugs actually cost, with a source and a date on every number.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/destinjones/openbill"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "fetch": "python tools/fetch_all.py",
+    "data": "python tools/build_drugs.py",
+    "build": "node build.js",
+    "check": "node build.js --check",
+    "test": "node --test",
+    "test:browser": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}

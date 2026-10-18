@@ -1,0 +1,42 @@
+name: Bug
+description: Something on the page or in the build doesn't work. For a wrong number, use "Wrong price" instead.
+title: "Bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a number that doesn't match its source, use the "Wrong price" form instead.
+        For a security problem, don't open an issue: follow the security policy.
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected to see.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The search, the link or the command, step by step. A card's URL includes its state.
+      placeholder: |
+        1. Open openbill.html
+        2. Search for ...
+        3. ...
+    validations:
+      required: false
+  - type: input
+    id: device
+    attributes:
+      label: Device and browser
+      description: For the page, the phone or computer, the browser and its version, light or dark mode. For a build problem, the OS and the Node and Python versions.
+    validations:
+      required: false
+  - type: input
+    id: build_id
+    attributes:
+      label: Build
+      description: Filled in by the page if you came from it. Otherwise, the commit you built from.
+    validations:
+      required: false

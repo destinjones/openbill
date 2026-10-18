@@ -1,0 +1,72 @@
+name: Wrong price
+description: A number on a card doesn't match its source file, or the card says something misleading.
+title: "Wrong price: "
+labels: ["wrong-price", "data"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for checking our work. "Wrong? Tell us" on the card fills in the first fields for you.
+        A maintainer will check the number against the source file it names.
+        Please don't include your own or anyone else's health information.
+  - type: input
+    id: product
+    attributes:
+      label: Product
+      description: The drug as the card names it.
+      placeholder: METFORMIN HCL 500 MG TABLET
+    validations:
+      required: true
+  - type: input
+    id: ndc
+    attributes:
+      label: NDC
+      description: The 11-digit NDC, if the card or the provenance panel shows one.
+      placeholder: 00378-7185-05
+    validations:
+      required: false
+  - type: input
+    id: figure
+    attributes:
+      label: Which figure
+      description: Which number on the card is wrong, e.g. what pharmacies pay, the Medicare reference price, the spread, a pack total.
+    validations:
+      required: true
+  - type: input
+    id: shown_value
+    attributes:
+      label: Value shown
+      description: The number exactly as the card shows it.
+    validations:
+      required: true
+  - type: input
+    id: source_file
+    attributes:
+      label: Source file
+      description: The file name on the card's provenance line.
+    validations:
+      required: false
+  - type: textarea
+    id: what_is_wrong
+    attributes:
+      label: What is wrong
+      description: What you think is wrong, and what you think the number should be.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: >-
+        The source file and the row that shows the right value, or a link to the official
+        dataset page. A receipt or a price from a website is useful context, but it doesn't show
+        that a government file was read wrong.
+    validations:
+      required: true
+  - type: input
+    id: build_id
+    attributes:
+      label: Build
+      description: Filled in by the page. Leave it as it is.
+    validations:
+      required: false
