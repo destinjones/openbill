@@ -229,6 +229,40 @@ test('linkRows: read-only results, shared part_d objects, missing fields stay mi
   assert.equal('labelers' in linkRows(doc).find((r) => r.ndc === ONDANSETRON.ndc).part_b, false);
 });
 
+test("linkRows passes a row's route_from, route, product_ndc and inner_of through, and packing keeps them", () => {
+  // docs/ARCHITECTURE.md: a row whose * join depends on a route taken from FDA's product record
+  // carries part_d = { key, basis, route_from: "fda_product", route, product_ndc, inner_of }.
+  const doc = viaJson(FIXTURE);
+  const twin = viaJson(SAMPLE);
+  twin.ndc = '90001000103';
+  twin.identity = null;
+  twin.part_d = { key: SAMPLE.part_d.key, basis: SAMPLE.part_d.basis, route_from: 'fda_product', route: 'ORAL', product_ndc: '9000-100', inner_of: ['9000-100-02'] };
+  doc.rows.push(twin);
+  // Same key, basis and route but no inner package: its own fields must not be mixed up with the twin's.
+  const lone = viaJson(twin);
+  lone.ndc = '90001000104';
+  lone.part_d.inner_of = [];
+  doc.rows.push(lone);
+  const back = roundTrip(doc);
+  assert.deepStrictEqual(back, doc);
+  assert.equal(JSON.stringify(back), JSON.stringify(doc), 'same key order, byte for byte');
+  const linked = linkRows(doc);
+  const a = linked.find((r) => r.ndc === SAMPLE.ndc);
+  const b = linked.find((r) => r.ndc === '90001000103');
+  assert.deepEqual(Object.keys(b.part_d), ['key', 'basis', 'route_from', 'route', 'product_ndc', 'inner_of', 'brand_name', 'generic_name', 'avg_per_unit', 'claims', 'outlier']);
+  assert.equal(b.part_d.route_from, 'fda_product');
+  assert.equal(b.part_d.route, 'ORAL');
+  assert.equal(b.part_d.product_ndc, '9000-100');
+  assert.deepEqual(b.part_d.inner_of, ['9000-100-02']);
+  const c = linked.find((r) => r.ndc === '90001000104');
+  assert.deepEqual(c.part_d.inner_of, [], 'an empty inner_of stays empty');
+  assert.notEqual(b.part_d, c.part_d, 'rows with different inner_of do not share a part_d object');
+  assert.equal(b.part_d.avg_per_unit, a.part_d.avg_per_unit, 'the same table record');
+  assert.equal('route_from' in a.part_d, false, 'a row without route_from gets none');
+  assert.notEqual(a.part_d, b.part_d, 'rows with and without route_from do not share a part_d object');
+  assert.ok(Object.isFrozen(b.part_d));
+});
+
 test('linkRows refuses a wrong schema and dangling keys', () => {
   assert.throws(() => linkRows({ ...FIXTURE, schema: 'openbill.drugs/2' }), /reads schema openbill\.drugs\/3/);
   assert.throws(() => linkRows(null), /rows array/);

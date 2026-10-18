@@ -7,6 +7,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { validateRecord, RECORD_FIELDS, OPTIONAL_RECORD_FIELDS, KINDS } from '../src/core/provenance.js';
 import { isNdc11, normalizeNdc } from '../src/core/ndc.js';
 import { isIsoDate, parsePeriod } from '../src/core/dates.js';
@@ -32,6 +34,17 @@ const ROW_OPTIONAL = ['generic_nadac'];
 const IDENTITY_FIELDS = ['source', 'package_ndc', 'proprietary_name', 'nonproprietary_name', 'dosage_form', 'route', 'strength', 'labeler', 'package_description'];
 const IDENTITY_OPTIONAL = ['rxcui'];
 const PART_D_REF_FIELDS = ['key', 'basis'];
+// Only when the row's * join depends on a route taken from FDA's product record (the FDA NDC
+// Directory does not list the NDC as a package of its own): route_from = "fda_product", route =
+// that record's ROUTENAME, product_ndc = its PRODUCTNDC as FDA writes it, and inner_of = the FDA
+// packages of that product whose description prints this NDC inside them (possibly none).
+const PART_D_REF_OPTIONAL = ['route_from', 'route', 'product_ndc', 'inner_of'];
+const ROUTE_FROM_FIELDS = ['route_from', 'route', 'product_ndc', 'inner_of'];
+/** The 9-digit labeler + product code of an FDA product NDC (4-4, 5-3, 5-4) or package NDC (+ -2 or -1), or null. */
+const fdaCode9 = (code) => {
+  const m = /^(\d{4,5})-(\d{3,4})(?:-\d{1,2})?$/.exec(String(code));
+  return m && ['4,4', '5,3', '5,4'].includes(`${m[1].length},${m[2].length}`) ? m[1].padStart(5, '0') + m[2].padStart(4, '0') : null;
+};
 const PART_B_ROW_FIELDS = ['hcpcs', 'bill_units_per_package', 'package_size', 'package_qty', 'package_unit'];
 const PART_D_NAME_FIELDS = ['brand_name', 'generic_name', 'avg_per_unit', 'claims', 'outlier'];
 const PART_B_CODE_FIELDS = ['hcpcs', 'hcpcs_dosage', 'short_description', 'payment_limit', 'coinsurance_pct', 'labelers'];
@@ -321,9 +334,26 @@ test('rows: every field and type per the contract', () => {
       const d = r.part_d;
       if (!isObj(d)) problems.push(`${at}: part_d must be null or { key, basis }`);
       else {
-        problems.push(...keyProblems(d, PART_D_REF_FIELDS, [], `${at} part_d`));
+        problems.push(...keyProblems(d, PART_D_REF_FIELDS, PART_D_REF_OPTIONAL, `${at} part_d`));
         if (!nonEmpty(d.key)) problems.push(`${at}: part_d.key must be a non-empty string`);
         if (d.basis !== 'brand' && d.basis !== 'generic') problems.push(`${at}: part_d.basis ${JSON.stringify(d.basis)} not brand|generic`);
+        if (ROUTE_FROM_FIELDS.some((k) => hasOwn(d, k))) {
+          const missing = ROUTE_FROM_FIELDS.filter((k) => !hasOwn(d, k));
+          if (missing.length) problems.push(`${at}: part_d has ${ROUTE_FROM_FIELDS.filter((k) => hasOwn(d, k)).join(', ')} but not ${missing.join(', ')}`);
+          if (d.route_from !== 'fda_product') problems.push(`${at}: part_d.route_from ${JSON.stringify(d.route_from)}, expected "fda_product"`);
+          if (!nonEmpty(d.route)) problems.push(`${at}: part_d.route must be a non-empty string when route_from is set`);
+          if (fdaCode9(d.product_ndc) !== r.ndc.slice(0, 9)) problems.push(`${at}: part_d.product_ndc ${JSON.stringify(d.product_ndc)} is not FDA's product NDC for code ${r.ndc.slice(0, 9)}`);
+          if (!Array.isArray(d.inner_of)) problems.push(`${at}: part_d.inner_of must be an array`);
+          else {
+            if (d.inner_of.some((x) => typeof x !== 'string' || !/^\d{4,5}-\d{3,4}-\d{1,2}$/.test(x) || x.replace(/-/g, '').length !== 10 || fdaCode9(x) !== r.ndc.slice(0, 9))) {
+              problems.push(`${at}: part_d.inner_of ${JSON.stringify(d.inner_of)} must hold FDA package NDCs of product code ${r.ndc.slice(0, 9)}`);
+            }
+            if (JSON.stringify(d.inner_of) !== JSON.stringify([...new Set(d.inner_of)].sort())) problems.push(`${at}: part_d.inner_of must be sorted and distinct`);
+          }
+          if (r.identity !== null) problems.push(`${at}: part_d.route_from is set on a row that has an FDA identity`);
+          const e = partDNames[d.key];
+          if (isObj(e) && !String(e.brand_name).includes('*')) problems.push(`${at}: part_d.route_from is set but ${d.key} is not a * name`);
+        }
       }
     }
 
@@ -461,9 +491,12 @@ test('every part_d.key and part_b.hcpcs resolves, and no table entry is an orpha
 
 const routeParts = (route) => new Set(String(route || '').split(';').map((x) => x.trim().toUpperCase()).filter(Boolean));
 
-test('a Part D name CMS marks with * is pointed at only by rows with an FDA identity whose route they all share', () => {
-  // docs/ARCHITECTURE.md: a row joins such a name only when it has an FDA identity whose route is
-  // shared by every row joined to that name; unknown or minority routes do not join it.
+test('a Part D name CMS marks with * is pointed at only by rows with a known FDA route they all share', () => {
+  // docs/ARCHITECTURE.md: a row joins such a name only when its FDA route is known and shared by
+  // every row joined to that name: the route of its FDA identity, or, for an NDC whose package is
+  // not in the FDA NDC Directory, the route of the FDA product record of its product code
+  // (recorded as part_d.route_from = "fda_product", part_d.route). Unknown or minority routes do
+  // not join it.
   const byKey = new Map();
   for (const r of rows) {
     if (!isObj(r.part_d) || !hasOwn(partDNames, r.part_d.key)) continue;
@@ -472,23 +505,185 @@ test('a Part D name CMS marks with * is pointed at only by rows with an FDA iden
     byKey.get(r.part_d.key).push(r);
   }
   assert.ok(byKey.size > 0, 'some rows point at a * name');
+  const routeOf = (r) => {
+    if (isObj(r.identity)) return r.identity.route;
+    return r.part_d.route_from === 'fda_product' ? r.part_d.route : null;
+  };
   const problems = [];
+  let fromProduct = 0;
   for (const [key, rs] of byKey) {
-    const noRoute = rs.filter((r) => !isObj(r.identity) || routeParts(r.identity.route).size === 0);
-    for (const r of noRoute) problems.push(`row ${r.ndc} (${r.name}) points at ${key} with no FDA identity route`);
-    const sets = rs.filter((r) => !noRoute.includes(r)).map((r) => routeParts(r.identity.route));
+    const noRoute = rs.filter((r) => routeParts(routeOf(r)).size === 0);
+    for (const r of noRoute) problems.push(`row ${r.ndc} (${r.name}) points at ${key} with neither an FDA identity route nor route_from "fda_product"`);
+    const sets = rs.filter((r) => !noRoute.includes(r)).map((r) => routeParts(routeOf(r)));
+    const n = rs.filter((r) => r.part_d.route_from === 'fda_product').length;
+    fromProduct += n;
+    // The name's reason note says how many joined NDCs took their route from the product record.
+    const reason = String(partDNames[key].avg_per_unit && partDNames[key].avg_per_unit.reason);
+    let says;
+    if (n === 0) says = !reason.includes("FDA's record for the same product");
+    else if (rs.length === 1) says = reason.includes('The one NDC that points at this name is not listed in the FDA NDC Directory as a package of its own');
+    else if (n === rs.length) says = reason.includes(`None of the ${rs.length} NDCs that point at this name is listed in the FDA NDC Directory as a package of its own`);
+    else {
+      says = reason.includes(
+        `${n} of the ${rs.length} NDCs that point at this name ${n === 1 ? 'is not listed in the FDA NDC Directory as a package of its own' : 'are not listed in the FDA NDC Directory as packages of their own'}`,
+      );
+    }
+    if (!says) problems.push(`${key}: ${n} of ${rs.length} rows took their route from the product record, but the reason says: ${reason}`);
     if (!sets.length) continue;
-    const shared = [...sets[0]].filter((c) => sets.every((s) => s.has(c)));
+    const shared = [...sets[0]].filter((c) => sets.every((x) => x.has(c)));
     if (!shared.length) {
-      const routes = [...new Set(rs.map((r) => r.identity && r.identity.route))].join(' / ');
+      const routes = [...new Set(rs.map(routeOf))].join(' / ');
       problems.push(`rows pointing at ${key} share no FDA route (${routes})`);
+    } else if (!shared.some((c) => reason.includes(`FDA route includes ${c}`) || reason.includes(`FDA route including ${c}`))) {
+      problems.push(`${key}: the reason does not name the route its rows share (${shared.join(', ')})`);
     }
   }
   noProblems(problems, '* names and routes');
+  assert.ok(fromProduct > 0, 'some rows take their * route from the FDA product record');
+  const c = doc.counts.part_d_route_from_product_code;
+  assert.ok(isObj(c) && isObj(c.not_joined), 'counts.part_d_route_from_product_code is present');
+  assert.equal(c.joined, fromProduct, 'counts.part_d_route_from_product_code.joined is the number of rows with route_from');
+  const notJoined = Object.values(c.not_joined).reduce((a, b) => a + b, 0);
+  assert.equal(c.rows, c.joined + notJoined, 'rows = joined + not_joined');
+  for (const k of Object.keys(c.not_joined)) {
+    assert.ok(['multi_route_minority', 'multi_route_tie', 'mixed_units', 'no_value'].includes(k), `unknown outcome ${k}`);
+    assert.ok(c.not_joined[k] <= (doc.counts.part_d_unmatched[k] || 0), `not_joined.${k} is within part_d_unmatched.${k}`);
+  }
   const reasons = isObj(doc.counts.part_d_unmatched) ? doc.counts.part_d_unmatched : {};
   for (const k of Object.keys(reasons)) {
     if (k.startsWith('multi_route_')) assert.ok(['multi_route_no_identity', 'multi_route_minority', 'multi_route_tie'].includes(k), `unknown * reason ${k}`);
   }
+});
+
+const TOOLS_DIR = new URL('../tools/', import.meta.url);
+// tools/build_drugs.py's star_route_split() on made-up rows (python -I -B, standard library, no
+// cache needed). Each case is [identity route or null, product-record route or null] per row.
+const STAR_SPLIT = String.raw`
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import build_drugs as B
+out = {}
+for name, rows in json.loads(sys.stdin.read()).items():
+    hits = []
+    for i, (ident, code) in enumerate(rows):
+        row = {"ndc": f"{i:011d}", "identity": None if ident is None else {"route": ident}}
+        if code is not None:
+            row["_code_route"] = code
+        hits.append((row, None, "generic", "name"))
+    kept, dropped, route = B.star_route_split(hits)
+    why = {r["ndc"]: w for r, w in dropped}
+    out[name] = {"route": route, "rows": [("kept" + ("/fda_product" if h[0].get("_route_from") else "")) if h in kept else why[h[0]["ndc"]] for h in hits]}
+print(json.dumps(out))
+`;
+
+test('star_route_split: a route taken from the FDA product record follows the identity rows, never outvotes them', (t) => {
+  // Review finding (2026-10-18): rows whose route came from the product record are mostly a second
+  // package (an inner pouch or blister) of a product whose listed package already counts. Letting
+  // them vote flipped Estradiol* from TOPICAL (32 identity rows) to TRANSDERMAL (22 identity rows +
+  // 22 product-record rows of the same products), Pilocarpine HCl* from OPHTHALMIC to ORAL, and
+  // broke Ivermectin*'s tie. The identity rows decide; a product-record row joins only if its route
+  // includes the whole kept route. Only when no row has an identity route do they decide alone.
+  const exe = ['python3', 'python'].find((x) => spawnSync(x, ['-c', 'import sys; assert sys.version_info >= (3, 10)']).status === 0);
+  if (!exe) {
+    t.skip('Python 3.10+ is not on PATH');
+    return;
+  }
+  const T = 'TOPICAL';
+  const TD = 'TRANSDERMAL';
+  const cases = {
+    estradiol: [[T, null], [T, null], [T, null], [TD, null], [TD, null], [null, TD], [null, TD]],
+    follows: [['ORAL', null], ['ORAL', null], [null, 'ORAL'], [null, 'NASAL']],
+    tie: [['ORAL', null], ['OPHTHALMIC', null], [null, 'ORAL']],
+    alone: [[null, 'ORAL'], [null, 'ORAL'], [null, 'NASAL'], [null, null]],
+    whole: [['INTRAMUSCULAR; INTRAVENOUS', null], ['INTRAMUSCULAR; INTRAVENOUS', null], [null, 'INTRAVENOUS'], [null, 'INTRAMUSCULAR; INTRAVENOUS; SUBCUTANEOUS']],
+    unknown: [['ORAL', null], [null, null], [null, '']],
+  };
+  const out = spawnSync(exe, ['-I', '-B', '-c', STAR_SPLIT, fileURLToPath(TOOLS_DIR)], { input: JSON.stringify(cases), encoding: 'utf8' });
+  assert.equal(out.status, 0, out.stderr);
+  const got = JSON.parse(out.stdout.trim().split('\n').pop());
+  const K = 'kept';
+  const KP = 'kept/fda_product';
+  const MIN = 'multi_route_minority';
+  assert.deepEqual(got.estradiol, { route: T, rows: [K, K, K, MIN, MIN, MIN, MIN] }, 'product-record rows do not flip the route');
+  assert.deepEqual(got.follows, { route: 'ORAL', rows: [K, K, KP, MIN] });
+  assert.deepEqual(got.tie, { route: '', rows: ['multi_route_tie', 'multi_route_tie', 'multi_route_tie'] }, 'product-record rows do not break a tie');
+  assert.deepEqual(got.alone, { route: 'ORAL', rows: [KP, KP, MIN, 'multi_route_no_identity'] }, 'with no identity route, the product-record rows decide');
+  assert.deepEqual(got.whole, { route: 'INTRAMUSCULAR and INTRAVENOUS', rows: [K, K, MIN, KP] }, 'a follower must include the whole kept route');
+  assert.deepEqual(got.unknown, { route: 'ORAL', rows: [K, 'multi_route_no_identity', 'multi_route_no_identity'] });
+});
+
+const FDA_ZIP = new URL('../tools/cache/ndctext.zip', import.meta.url);
+// Independent of tools/build_drugs.py: reads FDA's product.txt and package.txt (standard library,
+// python -I) and prints, for each NDC-11 given on stdin, whether its package is in package.txt,
+// the distinct ROUTENAMEs and PRODUCTNDCs of the product records of its 9-digit labeler + product
+// code, and the packages of that code whose PACKAGEDESCRIPTION prints the NDC in parentheses.
+const FDA_ROUTES = String.raw`
+import csv, io, json, re, sys, zipfile
+want = json.loads(sys.stdin.read())
+def table(z, name):
+    return list(csv.DictReader(io.StringIO(z.read(name).decode("utf-8", "replace")), delimiter="\t", quoting=csv.QUOTE_NONE))
+def digits(code, widths):
+    parts = code.strip().split("-")
+    if len(parts) != len(widths) or not all(p.isdigit() for p in parts):
+        return None
+    return "".join(p.rjust(w, "0") for p, w in zip(parts, widths))
+with zipfile.ZipFile(sys.argv[1]) as z:
+    products, packages = table(z, "product.txt"), table(z, "package.txt")
+listed = {digits(p["NDCPACKAGECODE"], (5, 4, 2)) for p in packages}
+routes, pndc = {}, {}
+for p in products:
+    routes.setdefault(digits(p["PRODUCTNDC"], (5, 4)), set()).add(" ".join(p["ROUTENAME"].split()))
+    pndc.setdefault(digits(p["PRODUCTNDC"], (5, 4)), set()).add(p["PRODUCTNDC"].strip())
+inner = {}
+wanted = set(want)
+for p in packages:
+    own = p["NDCPACKAGECODE"].strip()
+    for x in re.findall(r"\(\s*([0-9-]+)\s*\)", p["PACKAGEDESCRIPTION"]):
+        n = digits(x, (5, 4, 2))
+        if n in wanted and x != own and digits(p["PRODUCTNDC"], (5, 4)) == n[:9]:
+            inner.setdefault(n, set()).add(own)
+print(json.dumps({n: {"listed": n in listed, "routes": sorted(routes.get(n[:9], [])), "product_ndcs": sorted(pndc.get(n[:9], [])),
+                      "inner_of": sorted(inner.get(n, []))} for n in want}))
+`;
+
+test("a route taken from the FDA product record is that record's route, product NDC and containing packages, for a package FDA does not list (when the cache is present)", (t) => {
+  if (!existsSync(FDA_ZIP)) {
+    t.skip('tools/cache/ndctext.zip not present (the raw cache is never committed)');
+    return;
+  }
+  const exe = ['python3', 'python'].find((x) => spawnSync(x, ['-c', 'import sys; assert sys.version_info >= (3, 10)']).status === 0);
+  if (!exe) {
+    t.skip('Python 3.10+ is not on PATH');
+    return;
+  }
+  const want = rows.filter((r) => isObj(r.part_d) && r.part_d.route_from === 'fda_product');
+  assert.ok(want.length > 0, 'some rows carry route_from');
+  const out = spawnSync(exe, ['-I', '-c', FDA_ROUTES, fileURLToPath(FDA_ZIP)], {
+    input: JSON.stringify(want.map((r) => r.ndc)),
+    encoding: 'utf8',
+    maxBuffer: 1 << 26,
+  });
+  assert.equal(out.status, 0, out.stderr);
+  const fda = JSON.parse(out.stdout.trim().split('\n').pop());
+  const problems = [];
+  for (const r of want) {
+    const f = fda[r.ndc];
+    if (f.listed) problems.push(`${r.ndc} (${r.name}): route_from "fda_product", but its package is in package.txt`);
+    if (f.routes.length !== 1) problems.push(`${r.ndc} (${r.name}): product code ${r.ndc.slice(0, 9)} has ${f.routes.length} distinct FDA routes (${f.routes.join(' / ')})`);
+    else if (f.routes[0] !== r.part_d.route) problems.push(`${r.ndc} (${r.name}): part_d.route ${r.part_d.route}, FDA's product record says ${f.routes[0]}`);
+    // The panel shows FDA's own PRODUCTNDC ("50268-662", not "50268-0662") so a reader can find it.
+    if (f.product_ndcs.length !== 1 || f.product_ndcs[0] !== r.part_d.product_ndc) {
+      problems.push(`${r.ndc} (${r.name}): part_d.product_ndc ${r.part_d.product_ndc}, FDA's product.txt writes ${f.product_ndcs.join(' / ')}`);
+    }
+    if (JSON.stringify(f.inner_of) !== JSON.stringify(r.part_d.inner_of)) {
+      problems.push(`${r.ndc} (${r.name}): part_d.inner_of ${JSON.stringify(r.part_d.inner_of)}, FDA's package.txt prints it inside ${JSON.stringify(f.inner_of)}`);
+    }
+  }
+  // Spot check, FDA NDC Directory file of this build: 50268-662-11 (PROPRANOLOL 10 MG TABLET) is
+  // printed inside '50 BLISTER PACK in 1 BOX (50268-662-15) / 1 TABLET in 1 BLISTER PACK (50268-662-11)'.
+  const pro = want.find((r) => r.ndc === '50268066211');
+  if (pro) assert.deepEqual([pro.part_d.product_ndc, pro.part_d.inner_of], ['50268-662', ['50268-662-15']]);
+  noProblems(problems, 'routes from the FDA product record');
 });
 
 test('packages of one FDA product get one Part D answer: an NDC FDA does not list never joins where its listed siblings were refused', () => {

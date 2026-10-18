@@ -533,6 +533,28 @@ function rulesApplied(s) {
   return RULES.filter((r) => used.has(r.id));
 }
 
+/** "A", "A and B", "A, B and C". */
+function andList(xs) {
+  return xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`;
+}
+
+/**
+ * For a row whose Part D join depends on a route taken from FDA's product record
+ * (part_d.route_from "fda_product", docs/ARCHITECTURE.md): say so plainly, name the route and
+ * FDA's product NDC as FDA writes it, and the FDA packages that list this NDC inside them.
+ */
+function routeFromProduct(row) {
+  const d = row.part_d;
+  if (!d || d.route_from !== 'fda_product') return '';
+  const inner = Array.isArray(d.inner_of) ? d.inner_of.filter((x) => typeof x === 'string') : [];
+  const mono = (x) => `<span class="mono">${esc(x)}</span>`;
+  const within = inner.length
+    ? `; FDA lists it as a unit inside ${inner.length === 1 ? 'its package' : 'its packages'} ${andList(inner.map(mono))}`
+    : '';
+  const record = typeof d.product_ndc === 'string' && d.product_ndc ? `, product NDC ${mono(d.product_ndc)} (labeler and product code)` : ' (labeler and product code)';
+  return `<p class="route-from"><span class="k">Route for the Part D match:</span> ${esc(d.route)}. The FDA NDC Directory does not list this NDC as a package of its own${within}. Its route was taken from FDA’s record for the same product${record}. ${esc(d.brand_name)} is a Part D name CMS marks with * (one average over several routes), which only NDCs on the route its NDCs share point at.</p>`;
+}
+
 function ndcItem(x) {
   const row = x.row;
   const id = row.identity;
@@ -556,7 +578,8 @@ function ndcItem(x) {
   const g = row.generic_nadac;
   return `<li class="ndc" id="ndc-${esc(row.ndc)}">
 <h4 class="ndc-id mono">NDC ${esc(showNdc(row.ndc))}</h4>
-${id ? `<p>${esc([id.proprietary_name, id.nonproprietary_name, id.dosage_form, id.route, id.strength].filter(Boolean).join(' · '))}</p><p><span class="k">Labeler:</span> ${esc(id.labeler)}</p><p><span class="k">Package:</span> ${esc(id.package_description)}</p>` : '<p>This NDC is not in the FDA NDC Directory file used for this build, so OpenBill has no FDA name or package description for it.</p>'}
+${id ? `<p>${esc([id.proprietary_name, id.nonproprietary_name, id.dosage_form, id.route, id.strength].filter(Boolean).join(' · '))}</p><p><span class="k">Labeler:</span> ${esc(id.labeler)}</p><p><span class="k">Package:</span> ${esc(id.package_description)}</p>` : '<p>The FDA NDC Directory file used for this build does not list this NDC as a package of its own with a product record, so OpenBill has no FDA name or package description for it.</p>'}
+${routeFromProduct(row)}
 <p><span class="k">NADAC:</span> ${esc(unitPrice(row.nadac))} ${chip(row.nadac.state)} <span class="mono">eff. ${esc(row.nadac.effective_date)}</span>${row.carried_forward ? ' · carried forward from the previous file' : ''}</p>
 ${g ? `<p><span class="k">Generic equivalent’s NADAC (a different product):</span> ${esc(unitPrice(g))} ${chip(g.state)} <span class="mono">${esc(`${g.source_name} · eff. ${g.effective_date}`)}</span></p>` : ''}
 <p><span class="k">Rate class:</span> ${esc(row.rate_class)} · <span class="k">OTC:</span> ${row.otc ? 'yes' : 'no'}</p>

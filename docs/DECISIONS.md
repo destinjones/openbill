@@ -4,7 +4,7 @@ A numbered log of the choices behind OpenBill: context, decision, consequences. 
 not rewritten; a later entry supersedes or amends an earlier one by number, and the earlier
 entry carries a one-line note pointing at it. Entries 1 to 23 were recorded on 2026-10-17,
 during phase 1; entries 24 to 32 were recorded later the same day, after a review and a
-rebuild of `data/drugs.json`, and entries 33 and 34 on 2026-10-18. The contract they produce is
+rebuild of `data/drugs.json`, and entries 33 to 37 on 2026-10-18. The contract they produce is
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## 1. NADAC from the yearly cumulative CSV, newest As of Date only
@@ -450,6 +450,8 @@ quantity is not a prescription, and its pack total keeps the NADAC price's state
 
 ## 24. Multi-route Part D names: a row joins only on the route its rows share
 
+*Amended by [decision 36](#36-the-owner-keeps-multi-route-part-d-averages-on-majority-route-rows): majority-route rows keep the `*` average, disclosed. Amended by [decision 37](#37-a-row-missing-from-the-fda-directory-may-take-its-route-from-its-product-record): a row with no exact package match may take its route from its FDA product record.*
+
 **Context.** CMS marks a Part D name with `*` when its figure combines routes of
 administration: `Olanzapine*` covers tablets and injection vials under one average per dosage
 unit. The first build joined rows to those names by name alone. 2,350 rows pointed at 80 `*`
@@ -600,6 +602,8 @@ which can come only from a device clock set wrong, is still shown as 0 days and 
 calendar suggests. ARCHITECTURE.md and methodology.html say "the UTC date".
 
 ## 30. Part D join refinements: product-code matching, trade-name release forms, generic presentations
+
+*Amended by [decision 37](#37-a-row-missing-from-the-fda-directory-may-take-its-route-from-its-product-record): for a `*` name, the product-code record may now supply a route, following the identity rows' choice.*
 
 **Context.** A review of the rebuilt join found two kinds of inconsistency. Packages of one
 product disagreed: an NDC with no exact FDA package match got a Part D figure that its FDA-listed
@@ -760,3 +764,74 @@ Firefox project has not run (decision 33).
 **Consequences.** methodology.html and ARCHITECTURE.md describe the four changes. Decision 25's
 example now reads 0.205× on the card, and decision 33's two open items are closed. The oldest
 browser versions of the floor are still not a tested result.
+
+## 35. data/drugs.json is stored in Git LFS
+
+**Context.** `data/drugs.json` is about 35 MB and every weekly NADAC refresh rewrites it, so
+each refresh would add another full copy to the git history and every clone would carry all
+of them. The first commit (2026-10-17) stored it as an ordinary file.
+
+**Decision.** From 2026-10-18, `.gitattributes` routes `data/drugs.json` through Git LFS. The
+history is not rewritten, so the one ordinary copy in the first commit stays there; every later
+version is one LFS object. `openbill.html`, which carries the data compressed inside it, stays
+an ordinary file, so opening the page needs nothing. Building or testing needs the real file:
+`build.js` stops with a plain message when it finds an LFS pointer, and `tests/lfs.test.js` fails
+first with the same instructions. CI fetches the LFS objects and caches them by object id, so a
+run downloads the file only when it has changed. The devcontainer installs Git LFS.
+
+**Consequences.** Contributors need Git LFS (README, CONTRIBUTING). LFS use counts against the
+repository owner's account: GitHub's free plan includes 10 GiB of storage and 10 GiB of bandwidth
+a month ([GitHub Docs](https://docs.github.com/en/billing/concepts/product-billing/git-lfs)). At
+one ~35 MB object a week that is about 1.8 GB a year of storage, so storage needs watching after
+a few years; bandwidth is spent by clones and CI cache misses. A clone without Git LFS still gets
+a working `openbill.html`, but not the data behind it.
+
+## 36. The owner keeps multi-route Part D averages on majority-route rows
+
+**Context.** [Decision 24](#24-multi-route-part-d-names-a-row-joins-only-on-the-route-its-rows-share)
+left one question open: a row on the majority route of a `*` name still takes CMS's average,
+which includes the other routes' spending (diazepam tablets show 44.3× against `Diazepam*`, which
+is mostly rectal gel by spend). Refusing every such name would refuse nearly all of them.
+
+**Decision.** On 2026-10-18 the owner decided to keep these figures. A majority-route row keeps
+its `*` figure; the spread stays `estimated`; the Part D record's reason says the average spans
+several routes; and the large-gap caveat and headline apply as usual.
+
+**Consequences.** No code change. The disclosure on the card and in the provenance panel is the
+safeguard, so it must not be shortened.
+
+## 37. A row missing from the FDA directory may take its route from its product record
+
+**Context.** Under [decision 24](#24-multi-route-part-d-names-a-row-joins-only-on-the-route-its-rows-share)
+a row joins a `*` Part D name only when its FDA identity names a route. 371 rows were left out as
+`multi_route_no_identity`. 263 of them have a product-code record that `product_code_fda()`
+already accepts for the join's other checks
+([decision 30](#30-part-d-join-refinements-product-code-matching-trade-name-release-forms-generic-presentations)):
+FDA lists the product (labeler + product code) but not that NDC as a package of its own.
+
+**Decision.** On 2026-10-18 the owner decided that such a row may take its route from that same
+product-code record, with the same guards, and never from a looser lookup.
+
+- *Follow, never vote.* Rows with an FDA identity choose the name's route exactly as before. A
+  row whose route comes from the product record is kept only if its route includes every part
+  of the chosen route, and is left out on a tie. Only when no row of a name has an identity
+  route would product-record rows choose among themselves (no such name exists today). Letting
+  them vote flipped three names (Estradiol\*, Pilocarpine HCl\*, Ivermectin\*), because one
+  product's inner unit-dose NDCs counted again beside its listed NDC.
+- *On the row.* A row whose Part D join depends on it carries `part_d.route_from: "fda_product"`,
+  `part_d.route` (FDA's route), `part_d.product_ndc` (FDA's product NDC as FDA writes it, e.g.
+  `50268-662`) and `part_d.inner_of` (the FDA-listed packages of the same product whose
+  description prints this NDC as an inner unit; display only, never used to match).
+- *On the page.* The provenance panel says FDA's directory does not list the NDC as a package of
+  its own, names the package it is listed inside when there is one, and gives the route and the
+  product NDC it was taken from.
+
+**Consequences.** In the 2026-10-18 rebuild 146 rows gain a Part D join and none lose one; no
+existing join changes key or basis, and every row with an FDA identity keeps its committed
+outcome. Of the 263 rows with a product-record route, 117 still don't join (`mixed_units` 58,
+`multi_route_minority` 55, `multi_route_tie` 4); 108 rows still have no route at all. 139 of the
+146 are unit-dose inner packages FDA prints inside a listed package of the same product. No
+product gains a Medicare figure on its card: 145 of the 146 rows belong to products whose listed
+NDCs already had it, so the gain is per NDC (fewer "NDCs without this Medicare figure"). An
+independent check of all 146 against FDA's `product.txt` and `package.txt` and the Part D file
+found no false match.

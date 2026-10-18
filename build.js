@@ -743,7 +743,12 @@ ${tail}${script ? `<script>${script}</script>\n` : ''}</body>
  * @returns {{ files: Record<string, string>, buildId: string, modules: string[], sizes: Record<string, number> }}
  */
 export function buildAll() {
-  const doc = JSON.parse(readText('data/drugs.json'));
+  const dataText = readText('data/drugs.json');
+  // data/drugs.json is stored in Git LFS. A clone without git-lfs has only the small pointer file.
+  if (dataText.startsWith('version https://git-lfs.github.com/spec/')) {
+    throw new Error('data/drugs.json is a Git LFS pointer, not the data. Install Git LFS (https://git-lfs.com), then run: git lfs install && git lfs pull');
+  }
+  const doc = JSON.parse(dataText);
   if (!doc || !Array.isArray(doc.rows) || !doc.sources || !doc.sources.nadac) throw new Error('data/drugs.json has no rows or no nadac source');
   const names = new Set(doc.rows.map((r) => r.name));
   for (const n of [DEFAULT_PRODUCT.drug, ...TRY_PRODUCTS]) {

@@ -42,7 +42,7 @@ export const PART_D_UNMATCHED_REASONS = Object.freeze({
   no_generic_name: 'no Part D row with this generic name and release form',
   no_value: 'the matched Part D row has no average spending per dosage unit for the data year',
   mixed_units: 'NADAC prices the NDCs joined to this Part D name in more than one unit and this NDC’s unit is not the one nearly all of them share, so CMS’s average per dosage unit is not in this NDC’s unit',
-  multi_route_no_identity: 'the Part D name carries CMS’s * (an average over several routes of administration) and this NDC has no FDA identity with a route, so its route is unknown',
+  multi_route_no_identity: 'the Part D name carries CMS’s * (an average over several routes of administration) and this NDC has no FDA identity with a route, and no accepted FDA product record for its product code with one, so its route is unknown',
   multi_route_minority: 'the Part D name carries CMS’s * (an average over several routes of administration) and this NDC’s FDA route is not the one most NDCs joined to the name share',
   multi_route_tie: 'the Part D name carries CMS’s * (an average over several routes of administration) and the NDCs joined to it split evenly between routes, so no route is shared by most of them',
 });
@@ -713,6 +713,11 @@ export function renderDataQuality(doc) {
               ? `; ${countText(c.part_d_fda_by_product_code.rows)} rows with no FDA identity were matched using FDA’s record for their product code, and ${countText(
                   c.part_d_fda_by_product_code.matched,
                 )} of them joined`
+              : '') +
+            (isPlainObject(c.part_d_route_from_product_code)
+              ? `; for a name CMS marks with \`*\`, ${countText(c.part_d_route_from_product_code.rows)} of those rows took their route from that record, and ${countText(
+                  c.part_d_route_from_product_code.joined,
+                )} of them kept the Part D figure because of it (\`part_d.route_from\`)`
               : ''),
         ],
         ['Medicare Part B (exact NDC on the crosswalk)', formatCount(a.partB), pct(a.partB, n), `pointing at ${formatCount(a.partBCodes)} HCPCS codes`],
@@ -913,7 +918,13 @@ export function renderDataQuality(doc) {
       `reference. The flag is blank for ${plural(a.blankFlagNames, 'name')} (${plural(a.blankFlagRows, 'row')}); a blank flag ` +
       `counts as not flagged, so the figure is used, and its reason says the flag is blank. ${plural(a.multiRouteNames, 'name')} ` +
       `carry CMS’s \`*\`: the average spans several routes of administration. ${plural(a.multiRouteRows, 'row')} point at them. Under the multi-route rule ` +
-      'only rows with an FDA identity on the route the name’s rows share keep the figure; the others are counted under the `multi_route_` reasons above.',
+      'only rows whose FDA route is the one the name’s rows share keep the figure: the route of the row’s FDA identity or, for an NDC ' +
+      'the FDA NDC Directory does not list as a package of its own, the route of FDA’s accepted record for the same product (labeler and product code), ' +
+      'which follows the route the identity rows choose and does not count toward choosing it' +
+      (isPlainObject(c.part_d_route_from_product_code)
+        ? `; ${plural(c.part_d_route_from_product_code.joined, 'row')} keep the figure on a route taken that way`
+        : '') +
+      '. The others are counted under the `multi_route_` reasons above.',
     '',
     `Estimated spreads at or above ${EXTREME_HIGH}× or at or below ${EXTREME_LOW}× carry the caveat that the two figures may ` +
       `not describe the same unit or product ([the rule](../methodology.html#extreme-gap)): ${plural(a.extremeRows.part_d + a.extremeRows.part_b, 'row')} ` +

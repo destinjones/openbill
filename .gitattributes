@@ -3,3 +3,7 @@
 *.png binary
 *.gif binary
 *.woff2 binary
+
+# The derived data file (~35 MB, rewritten by every refresh) lives in Git LFS so the
+# repository's history doesn't grow by a full copy each week. See docs/DECISIONS.md.
+data/drugs.json filter=lfs diff=lfs merge=lfs -text
