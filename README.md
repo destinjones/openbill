@@ -1,5 +1,7 @@
 # One page that tells a person what their medical care and drugs actually cost, with a source and a date on every single number.
 
+**Open it: [destinjones.github.io/openbill](https://destinjones.github.io/openbill/)**
+
 OpenBill is one offline page that puts what US pharmacies pay for a drug next to what Medicare pays for it. Data as of: NADAC week of 2026-10-14; Medicare Part D data year 2024; Medicare Part B October 2026 quarter.
 
 [![CI](https://github.com/destinjones/openbill/actions/workflows/ci.yml/badge.svg)](https://github.com/destinjones/openbill/actions/workflows/ci.yml)
@@ -70,7 +72,8 @@ in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ## Run it
 
-Open [openbill.html](openbill.html) in a browser. It works from a `file://` URL, offline,
+Visit [https://destinjones.github.io/openbill/](https://destinjones.github.io/openbill/), or download
+[openbill.html](openbill.html) and open it in a browser. It works from a `file://` URL, offline,
 and makes no network requests. Its data is inlined compressed, unpacked by the browser's
 own `DecompressionStream` and checked against the sha256 the build recorded, so it needs Chrome or Edge 103+, Firefox 113+ or Safari 16.4+; an
 older browser gets a plain message saying it cannot unpack the data, and no figures.
