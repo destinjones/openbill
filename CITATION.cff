@@ -16,6 +16,14 @@ version: "0.1.0"
 date-released: "2026-10-18"
 license: MIT
 repository-code: "https://github.com/destinjones/openbill"
+doi: "10.5281/zenodo.23457871"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.23457871"
+    description: All versions of OpenBill on Zenodo (resolves to the newest release)
+  - type: doi
+    value: "10.5281/zenodo.23457872"
+    description: OpenBill v0.1.0 on Zenodo
 keywords:
   - drug prices
   - price transparency
