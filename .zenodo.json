@@ -1,0 +1,24 @@
+{
+  "title": "OpenBill",
+  "upload_type": "software",
+  "version": "0.1.0",
+  "description": "<p>One page that tells a person what their medical care and drugs actually cost, with a source and a date on every single number.</p><p>Phase 1 covers drugs: what US pharmacies pay (CMS NADAC) beside what Medicare pays (Medicare Part D Spending by Drug, Medicare Part B payment limits), with the state, source file, effective date and retrieved date of every figure. The code is MIT-licensed; the data is derived from US government sources listed in docs/DATA_SOURCES.md.</p><p>Not medical advice. No warranty. Other people's data can be wrong.</p>",
+  "creators": [
+    { "name": "Jones, Destin" }
+  ],
+  "license": "MIT",
+  "keywords": [
+    "drug prices",
+    "price transparency",
+    "NADAC",
+    "Medicare Part D",
+    "Medicare Part B",
+    "average sales price",
+    "health care costs",
+    "open data",
+    "provenance"
+  ],
+  "related_identifiers": [
+    { "identifier": "https://github.com/destinjones/openbill", "relation": "isSupplementTo", "resource_type": "software" }
+  ]
+}
