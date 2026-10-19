@@ -1,6 +1,6 @@
 // Which products a drug page links to (docs/ARCHITECTURE.md, "Drug pages"): its brand and
-// generic siblings, its FDA pharmacologic classes, and up to five related products in the same
-// class. Products are groupProducts() entries (search.js), { name, rows }, over linked rows
+// generic siblings, its FDA pharmacologic classes, up to five related products in the same
+// class, and where its NADAC price sits in each class. Products are groupProducts() entries (search.js), { name, rows }, over linked rows
 // (pack.js linkRows), so row.part_d carries its Part D claims. Pure, DOM-free and deterministic:
 // the same products always give the same links in the same order.
 //
@@ -198,6 +198,97 @@ export function siblings(product, products) {
  */
 export function partDClaims(product) {
   return factsOf(product).claims;
+}
+
+/**
+ * Most rows in a drug page's table of other strengths, forms and brands, the product itself one
+ * of them; the siblings() ranking decides which are kept (decision 52).
+ */
+export const SIBLING_LIMIT = 24;
+
+/** Fewest other products, priced per the same unit, a class needs for classStanding(). */
+export const CLASS_STANDING_MIN = 3;
+
+const middles = new WeakMap();
+
+// The middle NADAC record of a product: the lower middle of its NDCs' NADAC records by value
+// (ties by NDC), so it is always one real filed price, never an average of two. Null when the
+// product has no usable NADAC record or its NDCs are priced per different units.
+function middleNadac(product) {
+  const memo = product !== null && typeof product === 'object';
+  if (memo && middles.has(product)) return middles.get(product);
+  const recs = rowsOf(product)
+    .filter((r) => r && r.nadac && r.nadac.kind === 'usd' && typeof r.nadac.value === 'number' && Number.isFinite(r.nadac.value))
+    .map((r) => ({ ndc: String(r.ndc), rec: r.nadac }));
+  let out = null;
+  if (recs.length && new Set(recs.map((x) => x.rec.per)).size === 1) {
+    recs.sort((a, b) => a.rec.value - b.rec.value || cmp(a.ndc, b.ndc));
+    out = Object.freeze({ record: recs[Math.floor((recs.length - 1) / 2)].rec, ndcs: recs.length, unit: recs[0].rec.per === undefined ? null : recs[0].rec.per });
+  }
+  if (memo) middles.set(product, out);
+  return out;
+}
+
+const classMiddles = new WeakMap();
+
+// A class's products priced per one unit, each with its middle NADAC, sorted by that price then
+// name; built once per class array and unit.
+function classMiddlesOf(list, unit) {
+  if (!classMiddles.has(list)) classMiddles.set(list, new Map());
+  const byUnit = classMiddles.get(list);
+  if (!byUnit.has(unit)) {
+    const out = [];
+    for (const p of list) {
+      const m = middleNadac(p);
+      if (m && m.unit === unit) out.push({ product: p, name: nameOf(p), record: m.record });
+    }
+    out.sort((a, b) => a.record.value - b.record.value || cmp(a.name, b.name));
+    byUnit.set(unit, out);
+  }
+  return byUnit.get(unit);
+}
+
+/**
+ * Where a product's NADAC price sits among the other products in one of its EPC classes
+ * (decision 52): compared per the same unit (EA, ML or GM), each product by its middle NADAC
+ * price (the lower middle of its NDCs' prices, so a real filed record). `middle` is the lower
+ * middle of the other products' middle prices, again one real filed record, with the product it
+ * belongs to; `lower`, `higher` and `same` count the other products whose middle price is below,
+ * above or equal to this product's. A unit is one tablet, capsule, mL or gram whatever its
+ * strength, so this compares prices per unit, not per dose.
+ *
+ * Null when the product's NDCs are priced per different units, or fewer than
+ * CLASS_STANDING_MIN other products in the class are priced per its unit.
+ * @param {{ name: string, rows: object[] }} product
+ * @param {readonly object[]} classProducts the class's products (classIndex(products).get(key))
+ * @returns {{ unit: string|null, mine: object, mineNdcs: number, middle: object, middleName: string, others: number, lower: number, higher: number, same: number }|null}
+ */
+export function classStanding(product, classProducts) {
+  if (!Array.isArray(classProducts)) throw new TypeError('classStanding needs the products of one class');
+  const mine = middleNadac(product);
+  if (!mine) return null;
+  const name = nameOf(product);
+  const others = classMiddlesOf(classProducts, mine.unit).filter((x) => x.product !== product && x.name !== name);
+  if (others.length < CLASS_STANDING_MIN) return null;
+  const mid = others[Math.floor((others.length - 1) / 2)];
+  const v = mine.record.value;
+  let lower = 0;
+  let higher = 0;
+  for (const x of others) {
+    if (x.record.value < v) lower += 1;
+    else if (x.record.value > v) higher += 1;
+  }
+  return Object.freeze({
+    unit: mine.unit,
+    mine: mine.record,
+    mineNdcs: mine.ndcs,
+    middle: mid.record,
+    middleName: mid.name,
+    others: others.length,
+    lower,
+    higher,
+    same: others.length - lower - higher,
+  });
 }
 
 /**

@@ -575,6 +575,66 @@ a:hover {
   border-bottom: 1px dotted var(--ink-2);
 }
 
+/* ---- Comparison tables: labelers, other strengths and forms ---- */
+
+.compare {
+  width: 100%;
+  margin: 6px 0;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.compare th,
+.compare td {
+  padding: 6px 8px 6px 0;
+  text-align: left;
+  vertical-align: top;
+  font-weight: 400;
+  border-bottom: 1px solid var(--rule);
+  overflow-wrap: anywhere;
+}
+
+.compare th:last-child,
+.compare td:last-child {
+  padding-right: 0;
+}
+
+.compare thead th {
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  border-bottom-color: var(--rule-strong);
+}
+
+.compare .num {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.compare td.num {
+  font-family: var(--mono);
+}
+
+.compare a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-weight: 600;
+}
+
+.compare .self th strong {
+  font-weight: 600;
+}
+
+.compare .item-meta {
+  padding-bottom: 0;
+}
+
+.more-link {
+  font-size: 0.875rem;
+}
+
 details.ndcs {
   margin: 12px 0;
 }

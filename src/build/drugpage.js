@@ -10,13 +10,13 @@
 import { esc } from '../core/esc.js';
 import { linkRows } from '../core/pack.js';
 import { groupProducts } from '../core/search.js';
-import { summarizeProduct, partDNameContext, defaultQuantity, freshness, inputDates, distinctLabelers, formatSpreadMultiple, HONESTY, RULES, COST_PLUS, COST_PLUS_CAVEATS, EXTREME_HEADLINE } from '../core/rules.js';
+import { summarizeProduct, partDNameContext, defaultQuantity, freshness, inputDates, distinctLabelers, labelerKey, rangesByUnit, formatSpreadMultiple, HONESTY, RULES, COST_PLUS, COST_PLUS_CAVEATS, EXTREME_HEADLINE } from '../core/rules.js';
 import { formatMoney, formatUnitPrice, formatCount, formatPercent } from '../core/money.js';
-import { STATE_INFO } from '../core/provenance.js';
+import { STATE_INFO, weakestState } from '../core/provenance.js';
 import { formatNdc, isNdc11 } from '../core/ndc.js';
 import { SOURCE_INFO, NADAC_EXPLANATION_CODES } from '../core/sources.js';
 import { uniqueSlugs, siteSlugs } from '../core/slug.js';
-import { epcClasses, classIndex, siblings, related, epcName } from '../core/related.js';
+import { epcClasses, classIndex, siblings, related, epcName, classStanding, SIBLING_LIMIT } from '../core/related.js';
 import { SITE_URL, APP_NAME, REPO_URL } from '../core/config.js';
 import { parsePeriod } from '../core/dates.js';
 import { issueUrl } from '../core/report.js';
@@ -31,8 +31,6 @@ export const SHOWCASE = Object.freeze({ drug: 'ARIPIPRAZOLE 10 MG TABLET', qty: 
 /** Most related products linked from a drug page (the contract: up to 5). */
 export const RELATED_LIMIT = 5;
 
-/** Most brand and generic siblings listed on a drug page before "and N more". */
-export const SIBLING_LIMIT = 12;
 
 /** NDCs listed openly on a drug page; more go inside a closed <details>. */
 export const NDC_OPEN_LIMIT = 6;
@@ -102,10 +100,51 @@ function link(href, text, attrs = '') {
   return html`<a href="${checkHref(href)}"${new Html(attrs)}>${text}</a>`;
 }
 
+/** Every methodology.html anchor a drug page links to (linkedAnchors(), checked by tools/site.mjs). */
+const LINKED_ANCHORS = Object.freeze([
+  'cost-plus',
+  'honesty',
+  'drug-pages',
+  'source-nadac',
+  'default-quantity',
+  'explanation-codes',
+  'limit-carried-forward',
+  'reference-price',
+  'join-part-d',
+  'join-part-b',
+  'source-partd',
+  'source-asp_limits',
+  'part-b-per-nadac-unit',
+  'spread',
+]);
+
+/**
+ * Links into methodology.html, where the explanations every drug page shares live, so a page
+ * links to them instead of repeating them (decision 52): [[anchor, text]], nulls skipped.
+ */
+function methodLinks(list) {
+  const items = list.filter(Boolean).map(([anchor, text]) => {
+    if (!LINKED_ANCHORS.includes(anchor)) throw new Error(`drugpage: methodology.html#${anchor} is not in LINKED_ANCHORS`);
+    return link(`${UP}methodology.html#${anchor}`, text);
+  });
+  return items.length ? html`<p class="more-link">${joinHtml(items, ' · ')}</p>` : '';
+}
+
 // ---------------------------------------------------------------- small text helpers
 
 function cmp(a, b) {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Names in reading order, numbers by value: "… 2 MG TABLET" before "… 10 MG TABLET". */
+function cmpNatural(a, b) {
+  const pa = String(a).split(/(\d+(?:\.\d+)?)/);
+  const pb = String(b).split(/(\d+(?:\.\d+)?)/);
+  for (let i = 0; i < Math.min(pa.length, pb.length); i++) {
+    const d = i % 2 ? Number(pa[i]) - Number(pb[i]) : cmp(pa[i], pb[i]);
+    if (d) return d;
+  }
+  return pa.length - pb.length || cmp(a, b);
 }
 
 function uniqueCaseless(list) {
@@ -709,7 +748,7 @@ function figCostPlus(f) {
 <h2 id="fig-cp" class="fig-label">Cost-plus estimate</h2>
 <p class="fig-value"><span class="amount" data-figure="cost-plus">${c.text}</span> ${chip(c.state)}</p>
 <p class="arith mono">${c.arith}</p>
-<p class="why">${COST_PLUS_CAVEATS[0]} Shipping is not included. ${link(`${UP}methodology.html#cost-plus`, 'How it is worked out')}</p>
+<p class="why">${COST_PLUS_CAVEATS[0]} Shipping is not included.${c.feeMostly ? ` For a pack this cheap, the ${formatMoney(COST_PLUS.fee_usd)} fee is most of the estimate.` : ''} ${link(`${UP}methodology.html#cost-plus`, 'How it is worked out')}</p>
 ${provLines('cost-plus', c.records, c.inputs)}
 </section>`;
 }
@@ -774,8 +813,8 @@ function whatItIs(f) {
   const listedText = listed.length && listed.length < n ? `; the FDA directory lists ${formatCount(listed.length)} of them` : '';
   out.push(
     n === 1
-      ? `The NADAC file of ${f.nadacAsOf} prices it under one NDC (National Drug Code, the number on the package), ${showNdc(s.ndcs[0])}.`
-      : `The NADAC file of ${f.nadacAsOf} prices it under ${formatCount(n)} NDCs (National Drug Codes, the numbers on the packages)${listedText}.`,
+      ? `The NADAC file of ${f.nadacAsOf} prices it under one NDC (National Drug Code), ${showNdc(s.ndcs[0])}.`
+      : `The NADAC file of ${f.nadacAsOf} prices it under ${formatCount(n)} NDCs (National Drug Codes)${listedText}.`,
   );
   const otc = s.otc === true ? ', and marks it as sold over the counter' : s.otc === false ? ', and does not mark it as sold over the counter' : ', and marks some of its NDCs as sold over the counter and some not';
   out.push(`NADAC classes it ${rateClassWords(s)}${otc}.`);
@@ -803,18 +842,72 @@ function pharmacySentence(f) {
   return `Pharmacies pay ${f.pharmacy.text} for ${f.qtyText}${exact}, by the CMS NADAC file of ${f.nadacAsOf}; ${eff}.`;
 }
 
+// What NADAC measures, why the page starts where it does (for a plain tablet or capsule), the
+// explanation codes and carried-forward prices are the same for every page, so the section links
+// to them on methodology.html (decision 52); what is particular to this product stays.
 function whatPharmaciesPay(f) {
   const s = f.s;
-  const out = [pharmacySentence(f)];
+  const out = [`${pharmacySentence(f)} That is what pharmacies pay their suppliers, not what they charge you.`];
   if (f.pharmacy.kind === 'unit') out.push(`There is no single total for a pack: ${f.pharmacy.reason}`);
-  else if (f.plainStart) out.push(`OpenBill starts at ${f.qtyText}, a common one-month supply of a once-a-day medicine; it is a starting point, not your prescription.`);
-  else out.push(s.default_quantity.reason);
   const codes = s.explanation_codes.filter((c) => NADAC_EXPLANATION_CODES[c]);
   if (codes.length) out.push(`NADAC’s explanation code${codes.length > 1 ? 's' : ''} for it: ${codes.map((c) => `${c}, ${NADAC_EXPLANATION_CODES[c]}`).join('; ')}.`);
   const carried = carriedSentence(s);
   if (carried) out.push(carried);
-  out.push(`${SOURCE_INFO.nadac.measures} It is what pharmacies pay, not what they charge you.`);
   return out;
+}
+
+function pharmacyLinks(f) {
+  return methodLinks([
+    ['source-nadac', 'What NADAC measures'],
+    f.pharmacy.kind === 'pack' && f.plainStart ? ['default-quantity', `Why ${f.qtyText}`] : null,
+    f.s.explanation_codes.length ? ['explanation-codes', 'NADAC explanation codes'] : null,
+    f.s.counts.carried_forward ? ['limit-carried-forward', 'Carried-forward prices'] : null,
+  ]);
+}
+
+/**
+ * When the product's NADAC prices took effect, for a product priced under several dates: one
+ * item per date, with its NDCs, how many were carried forward from an earlier file, and their
+ * prices (filed records, with the state). [] for one date.
+ */
+function priceDates(f) {
+  if (f.nadacEff.length < 2) return [];
+  return f.nadacEff
+    .slice()
+    .reverse()
+    .map((date) => {
+      const at = f.s.per_ndc.filter((x) => x.nadac.effective_date === date);
+      const cf = at.filter((x) => x.row.carried_forward).length;
+      const groups = rangesByUnit(at.map((x) => x.nadac));
+      return html`<li><span class="mono">${date}</span> · ${plural(at.length, 'NDC')}${cf ? `, ${cf === at.length ? (cf === 1 ? 'carried forward' : 'all carried forward') : `${formatCount(cf)} carried forward`} from an earlier file` : ''} · <span class="mono">${unitGroups(groups)}</span> ${chip(weakestState(groups.map((g) => g.range.state)))}</li>`;
+    });
+}
+
+/**
+ * The companies behind the product's NDCs, for a product with more NDCs than NDC_OPEN_LIMIT:
+ * one row per labeler (spellings of one company's name counted once, labelerKey), its NDCs and
+ * what pharmacies pay per unit for them.
+ */
+function labelerTable(f) {
+  const groups = new Map();
+  for (const x of f.s.per_ndc) {
+    const raw = x.row.identity && typeof x.row.identity.labeler === 'string' ? x.row.identity.labeler.trim() : '';
+    const k = raw ? labelerKey(raw) : '';
+    if (!groups.has(k)) groups.set(k, { name: raw || 'Not listed as a package in the FDA directory', listed: Boolean(raw), recs: [] });
+    groups.get(k).recs.push(x.nadac);
+  }
+  const rows = [...groups.values()].sort((a, b) => b.listed - a.listed || b.recs.length - a.recs.length || cmp(a.name, b.name));
+  const body = rows.map((g) => {
+    const r = rangesByUnit(g.recs);
+    return html`<tr><th scope="row">${g.name}</th><td class="num">${formatCount(g.recs.length)}</td><td><span class="mono">${unitGroups(r)}</span> ${chip(weakestState(r.map((x) => x.range.state)))}</td></tr>`;
+  });
+  return html`<h3>${rows.length === 1 ? 'The labeler' : `The ${formatCount(rows.filter((g) => g.listed).length)} labelers`}</h3>
+<table class="compare">
+<thead><tr><th scope="col">Labeler</th><th scope="col" class="num">NDCs</th><th scope="col">Pharmacies pay per unit</th></tr></thead>
+<tbody>
+${joinHtml(body, '\n')}
+</tbody>
+</table>`;
 }
 
 function partDNamesOf(f) {
@@ -848,14 +941,15 @@ function medicareSentence(f) {
   return `Medicare Part B’s payment limit for HCPCS ${andList(codes)}, for ${m.period}, comes to ${pack} once converted to NADAC’s unit for this product.`;
 }
 
+// The Medicare figure in words. Why its comparison with NADAC is estimated is the FAQ's question,
+// not repeated here, and a missing figure's reason is on the card, not repeated either (decision 52).
 function whatMedicarePaid(f) {
   const m = f.medicare;
   const s = f.s;
   const out = [];
   if (m.missing) {
-    out.push(medicareSentence(f));
-    out.push('OpenBill shows no Medicare figure rather than a guess or a zero.');
-    return { paragraphs: out, why: [] };
+    out.push('We don’t know yet; the card above says why.');
+    return out;
   }
   out.push(medicareSentence(f));
   if (m.kind === 'part_d') {
@@ -871,38 +965,37 @@ function whatMedicarePaid(f) {
   if (s.reference.without.length) {
     out.push(`${formatCount(s.reference.ndcs.length)} of the product’s ${formatCount(s.counts.rows)} NDCs have this Medicare figure; the other ${formatCount(s.reference.without.length)} do not, and the interactive card says why for each.`);
   }
-  const why = [];
-  if (!f.spread.missing) {
-    why.push(f.spread.sentence === EXTREME_HEADLINE ? `${EXTREME_HEADLINE}: the multiple is ${f.spread.text}.` : f.spread.sentence);
-    if (m.kind === 'part_d') {
-      why.push(
-        `The two figures measure different things. NADAC is what pharmacies pay their suppliers per unit, in the file of ${f.nadacAsOf}; the Part D average is what Medicare spent per unit in a past year, including pharmacy dispensing fees and what patients paid, before the rebates drug makers pay back.`,
-      );
-    }
-    if (f.spread.state === 'estimated' && f.spread.caveats.all) why.push(`OpenBill labels this comparison estimated because: ${f.spread.caveats.all}`);
-    else if (f.spread.basis) why.push(f.spread.basis);
-  } else {
-    why.push(`We don’t know the spread yet: ${f.spread.reason}`);
-  }
-  return { paragraphs: out, why };
-}
-
-function costPlusSentence(f) {
-  const c = f.costPlus;
-  if (c.missing) return `We don’t know yet: ${c.reason}`;
-  const fee = formatMoney(COST_PLUS.fee_usd);
-  return `If a pharmacy priced this pack the way Cost Plus Drugs publicly describes (its cost, plus a ${formatPercent(COST_PLUS.markup_pct)} markup, plus a ${fee} pharmacy fee ${COST_PLUS.basis}) and its cost were what NADAC says pharmacies pay, it would charge ${c.text} for ${f.qtyText}${f.s.cost_plus.same ? `: ${c.arith}` : ', depending on the NDC'}.`;
-}
-
-function costPlusProse(f) {
-  const c = f.costPlus;
-  if (c.missing) {
-    return [costPlusSentence(f), 'The estimate starts from what pharmacies pay for one pack at NADAC, so without a single pack total there is no estimate to show, rather than a guess.'];
-  }
-  const out = [costPlusSentence(f), COST_PLUS_CAVEATS.join(' ')];
-  if (c.feeMostly) out.push(`For a pack this cheap, the ${formatMoney(COST_PLUS.fee_usd)} fee is most of the estimate.`);
-  out.push('OpenBill copies no price from Cost Plus Drugs; it uses only the two parameters of its published method. There is no spread against this estimate, because it is built from NADAC itself.');
   return out;
+}
+
+function medicareLinks(f) {
+  const m = f.medicare;
+  if (m.missing) return methodLinks([['reference-price', 'Which Medicare figure OpenBill compares'], ['join-part-d', 'How Part D is matched'], ['join-part-b', 'How Part B is matched']]);
+  return methodLinks([
+    m.kind === 'part_d' ? ['source-partd', 'What Part D spending measures'] : ['source-asp_limits', 'What the Part B payment limit is'],
+    m.kind === 'part_b' ? ['part-b-per-nadac-unit', 'Converting it to the NADAC unit'] : ['reference-price', 'Which Medicare figure OpenBill compares'],
+    f.spread.missing ? null : ['spread', 'How the spread is worked out'],
+  ]);
+}
+
+/** The caveats the card shows under the spread (figSpread), so the FAQ does not repeat them. */
+function spreadCaveatsShown(sp) {
+  if (sp.extreme) return [sp.extremeCaveat, sp.caveats.first].filter(Boolean);
+  if (sp.caveats.first) return [sp.caveats.first];
+  return sp.basis ? [sp.basis] : [];
+}
+
+/**
+ * The reasons an estimated spread is estimated that the card does not show, verbatim from the
+ * spread record's reason; null when there are none (decision 52).
+ */
+function spreadAnswer(f) {
+  const sp = f.spread;
+  if (sp.missing || sp.state !== 'estimated' || !sp.caveats.all) return null;
+  let rest = sp.caveats.all;
+  for (const shown of spreadCaveatsShown(sp)) rest = rest.replace(shown, ' ');
+  rest = rest.replace(/\s+/g, ' ').trim();
+  return rest ? `Beyond what the card shows, the records give these reasons: ${rest}` : null;
 }
 
 // Generic siblings that match the product exactly by FDA: the same set of dosage forms
@@ -991,19 +1084,18 @@ function askAtCounter(f, sibs) {
   return out;
 }
 
+/**
+ * The questions the rest of the page does not already answer (decision 52): why the comparison
+ * with Medicare is estimated, beyond the reason the card shows (from the spread records' own
+ * reasons), and why the page starts at its quantity when that is not a plain tablet or capsule
+ * supply. Each answer is the page's own visible text, and its FAQPage JSON-LD; a page with
+ * neither has no FAQ.
+ */
 function faqItems(f) {
   const items = [];
-  items.push({ q: `What do pharmacies pay for ${f.name}?`, a: `${pharmacySentence(f)} That is what pharmacies pay their suppliers, not what they charge you.` });
-  if (f.medicare.missing) items.push({ q: `What did Medicare pay for ${f.name}?`, a: medicareSentence(f) });
-  else {
-    const spread = f.spread.missing ? '' : f.spread.extreme ? ` ${EXTREME_HEADLINE}: the multiple is ${f.spread.text}, ${f.spread.state}.` : ` ${f.spread.sentence.replace(/\.$/, '')} (${f.spread.state}).`;
-    items.push({ q: `What did Medicare pay for ${f.name}?`, a: `${medicareSentence(f)}${spread} ${honestyText('not-your-price', { firstSentenceOnly: true })}` });
-  }
-  items.push({ q: `What would a cost-plus pharmacy charge for ${f.name}?`, a: f.costPlus.missing ? costPlusSentence(f) : `${costPlusSentence(f)} This is OpenBill’s estimate, labelled estimated. ${COST_PLUS_CAVEATS.join(' ')}` });
-  items.push({
-    q: 'Is this the price I will pay?',
-    a: `No. ${honestyText('range')} ${f.medicare.missing ? '' : `${honestyText('not-your-price', { firstSentenceOnly: true })} `}What you pay depends on your pharmacy, your insurance, coupons and discounts, so ask the pharmacy for its cash price for your exact quantity.`,
-  });
+  const spread = spreadAnswer(f);
+  if (spread) items.push({ q: `Why is the comparison with Medicare for ${f.name} labelled estimated?`, a: spread });
+  if (f.pharmacy.kind === 'pack' && !f.plainStart) items.push({ q: `Why does this page start at ${f.qtyText}?`, a: f.s.default_quantity.reason });
   return items;
 }
 
@@ -1136,7 +1228,100 @@ function ndcList(f) {
   });
   const listHtml = html`<ul class="ndc-list">${joinHtml(items, '\n')}</ul>`;
   if (items.length <= NDC_OPEN_LIMIT) return html`<h3>${items.length === 1 ? 'The NDC' : `All ${formatCount(items.length)} NDCs`}</h3>\n${listHtml}`;
-  return html`<details class="ndcs"><summary>All ${formatCount(items.length)} NDCs, with labeler and price</summary>\n${listHtml}\n</details>`;
+  const dates = priceDates(f);
+  return html`${labelerTable(f)}
+${dates.length ? html`<h3>When these prices took effect</h3>
+<ul class="ndc-list">${joinHtml(dates, '\n')}</ul>` : ''}
+<details class="ndcs"><summary>All ${formatCount(items.length)} NDCs, with labeler and price</summary>\n${listHtml}\n</details>`;
+}
+
+function formsOf(p) {
+  return uniqueCaseless(p.rows.filter((r) => r.identity).map((r) => r.identity.dosage_form)).map((x) => x.toLowerCase());
+}
+
+function versionWords(s) {
+  const rc = s.rate_classes;
+  return rc.every((x) => x === 'G') ? 'generic' : rc.every((x) => x !== 'G') ? 'brand' : 'brand and generic';
+}
+
+/** "Part D 2024 average", "Part B limit 2026 Q4": what a Medicare figure in a table row is. */
+function medicareShort(m) {
+  if (m.kind === 'part_d') return `Part D ${m.year ? `${m.year} ` : ''}average`;
+  return `Part B limit ${quarterOf(m.records[0].period) || m.period}`;
+}
+
+/**
+ * The product and its brand and generic siblings (siblings(): products sharing an FDA
+ * nonproprietary name) in one table: each one's FDA dosage form, whether NADAC classes it brand
+ * or generic, what pharmacies pay per unit and the Medicare figure per unit, each with its state,
+ * and source lines for them all (decision 52). Up to SIBLING_LIMIT rows, keeping the siblings that
+ * share a strength or form with the product first, as siblings() ranks them; listed by name, with
+ * numbers in order.
+ */
+function siblingTable(model, f, sibs) {
+  if (!sibs.length) return '';
+  const shown = sibs.slice(0, SIBLING_LIMIT - 1);
+  const rows = [f.product, ...shown].map((p) => ({ p, forms: formsOf(p), f: drugFacts(model, p) })).sort((a, b) => cmpNatural(a.p.name, b.p.name));
+  const names = uniqueCaseless(f.s.names.nonproprietary).map((x) => x.toLowerCase());
+  const records = [];
+  const inputs = [];
+  const body = rows.map((r) => {
+    const sf = r.f;
+    const self = r.p === f.product;
+    records.push(...sf.s.nadac.records);
+    const m = sf.medicare;
+    let med;
+    if (m.missing) med = html`<span class="why">We don’t know yet</span>`;
+    else {
+      records.push(...m.records);
+      for (const i of m.inputs || []) if (!inputs.some((x) => x.text === i.text)) inputs.push(i);
+      med = html`<span class="mono">${m.unitText}</span> ${chip(m.state)}<br><span class="item-meta">${medicareShort(m)}</span>`;
+    }
+    const nameCell = self ? html`<strong>${r.p.name}</strong> <span class="item-flag">this page</span>` : link(`${UP}${drugPath(model, r.p.name)}`, r.p.name);
+    const eff = sf.nadacEff.length === 1 ? sf.nadacEff[0] : `${sf.nadacEff[0]} to ${sf.nadacEff[sf.nadacEff.length - 1]}`;
+    return html`<tr${self ? new Html(' class="self"') : ''}><th scope="row">${nameCell}<br><span class="item-meta">${versionWords(sf.s)}${r.forms.length ? ` · ${r.forms.join(' / ')}` : ''}</span></th><td><span class="mono">${unitGroups(sf.s.nadac_by_unit)}</span> ${chip(sf.s.nadac.state)}<br><span class="item-meta">eff. ${eff}</span></td><td>${med}</td></tr>`;
+  });
+  const partD = rows.some((r) => !r.f.medicare.missing && r.f.medicare.kind === 'part_d');
+  return html`<section class="prose" aria-labelledby="h-siblings">
+<h2 id="h-siblings">Other strengths, forms and brands</h2>
+<p>${plural(sibs.length, 'other product')} in the NADAC file ${sibs.length === 1 ? 'shares' : 'share'} ${names.length === 1 ? `the FDA nonproprietary name ${names[0]}` : 'an FDA nonproprietary name'} with ${f.name}.${
+    sibs.length > shown.length ? html` The ${formatCount(shown.length)} below share a strength or dosage form with it first; search ${link(UP, 'OpenBill')} for the rest.` : ''
+  }</p>
+<table class="compare">
+<thead><tr><th scope="col">Product</th><th scope="col">Pharmacies pay per unit</th><th scope="col">Medicare per unit</th></tr></thead>
+<tbody>
+${joinHtml(body, '\n')}
+</tbody>
+</table>
+${partD ? html`<p class="why">Part D is one average per brand and generic name, over every strength and form.</p>` : ''}
+${provLines('siblings', records, inputs)}
+</section>`;
+}
+
+/**
+ * Where the product's NADAC price sits in each of its FDA classes (classStanding(), decision 52):
+ * how many of the class's other products priced per the same unit pay more or less, and the
+ * product in the middle, with its filed price, state and source line. '' when no class compares.
+ */
+function classSection(model, f) {
+  const items = f.classes.map((c) => ({ c, st: classStanding(f.product, model.classes.get(c.key)) })).filter((x) => x.st);
+  if (!items.length) return '';
+  const first = items[0].st;
+  const mine = html`${first.mineNdcs === 1 ? 'Its NADAC price is' : `The middle of its ${formatCount(first.mineNdcs)} NDCs’ NADAC prices is`} <span class="mono">${unitPrice(first.mine)}</span> ${chip(first.mine.state)}.`;
+  const paras = items.map(({ c, st }) => {
+    const per = st.unit ? ` priced per ${st.unit}` : '';
+    const middle = link(`${UP}${drugPath(model, st.middleName)}`, st.middleName);
+    return html`<p>Of the ${formatCount(st.others)} other products in FDA’s ${link(`${UP}${classPath(model, c.key)}`, c.name)} class${per}, ${formatCount(st.higher)} ${st.higher === 1 ? 'has' : 'have'} a higher middle NADAC price and ${formatCount(st.lower)} a lower one${st.same ? `; ${formatCount(st.same)} ${st.same === 1 ? 'has' : 'have'} the same` : ''}. The one in the middle is ${middle}, at <span class="mono">${unitPrice(st.middle)}</span> ${chip(st.middle.state)} (eff. ${st.middle.effective_date}).</p>`;
+  });
+  const records = [first.mine, ...items.map((x) => x.st.middle)];
+  return html`<section class="prose" aria-labelledby="h-class">
+<h2 id="h-class">Compared with its class</h2>
+<p>${mine}</p>
+${joinHtml(paras, '\n')}
+<p class="why">Prices are compared per unit, whatever the strength or dose, and a class is not a list of substitutes.</p>
+${provLines('class', records)}
+${methodLinks([['drug-pages', 'How the class comparison works']])}
+</section>`;
 }
 
 function paragraphs(list) {
@@ -1146,16 +1331,9 @@ function paragraphs(list) {
   );
 }
 
-function linksSection(model, f, sibs, rel) {
+// The brand and generic siblings are linked from their table (siblingTable), not listed again.
+function linksSection(model, f, rel) {
   const blocks = [];
-  if (sibs.length) {
-    const shown = sibs.slice(0, SIBLING_LIMIT);
-    blocks.push(html`<h3>Same ingredient: brand and generic versions</h3>
-<ul class="link-list">${joinHtml(
-      shown.map((p) => html`<li>${link(`${UP}${drugPath(model, p.name)}`, p.name)}</li>`),
-      '',
-    )}</ul>${sibs.length > shown.length ? html`<p class="why">And ${formatCount(sibs.length - shown.length)} more with the same FDA nonproprietary name; search for it in ${link(UP, 'OpenBill')}.</p>` : ''}`);
-  }
   if (f.classes.length) {
     blocks.push(html`<h3>${f.classes.length === 1 ? 'Its pharmacologic class' : 'Its pharmacologic classes'}</h3>
 <ul class="link-list">${joinHtml(
@@ -1175,6 +1353,7 @@ function linksSection(model, f, sibs, rel) {
 <li>${link(`${UP}${appHash(f.name, f.qty)}`, 'This drug on the interactive card')}</li>
 <li>${link(`${UP}${letterPath(letterOf(f.name))}`, `Drugs A–Z: ${letterLabel(letterOf(f.name))}`)}</li>
 <li>${link(`${UP}methodology.html`, 'How OpenBill works out every number')}</li>
+<li>${link(`${UP}methodology.html#honesty`, 'The rules every price on this page follows')}</li>
 <li>${link(reportUrl(f), 'Wrong? Tell us', ' rel="nofollow noopener"')}</li>
 </ul>`);
   return html`<section class="prose links" aria-labelledby="h-links">
@@ -1266,15 +1445,15 @@ function drugLd(model, f, crumbList, faq) {
   if (s.otc === true) drug.prescriptionStatus = 'https://schema.org/OTC';
   drug.code = s.ndcs.map((n) => ({ '@type': 'MedicalCode', codeValue: showNdc(n), codingSystem: 'NDC' }));
   drug.cost = drugCosts(f);
-  return [
-    breadcrumbLd(crumbList),
-    drug,
-    {
+  const graph = [breadcrumbLd(crumbList), drug];
+  if (faq.length) {
+    graph.push({
       '@type': 'FAQPage',
       '@id': `${canonical}#faq`,
       mainEntity: faq.map((x) => ({ '@type': 'Question', name: x.q, acceptedAnswer: { '@type': 'Answer', text: x.a } })),
-    },
-  ];
+    });
+  }
+  return graph;
 }
 
 /**
@@ -1296,11 +1475,6 @@ export function renderDrugPage(model, product) {
   const sibs = siblings(product, model.products);
   const rel = related(product, model.products, model.classes, RELATED_LIMIT);
   const faq = faqItems(f);
-  const med = whatMedicarePaid(f);
-  const lede =
-    f.pharmacy.kind === 'pack'
-      ? `What pharmacies pay, what Medicare paid and a cost-plus estimate for ${f.qtyText}, with the source and date of every number.`
-      : 'What pharmacies pay per unit and what Medicare paid, with the source and date of every number.';
   const genericNadac = f.s.generic_nadac
     ? html`<p>NADAC also lists, on the row of ${f.s.generic_nadac.count === 1 ? 'one brand NDC' : 'its brand NDCs'}, what pharmacies pay for the generic equivalent, a different product: ${unitRange(f.s.generic_nadac)} ${chip(f.s.generic_nadac.state)}.</p>
 ${provLines('generic-nadac', f.s.generic_nadac.records)}`
@@ -1312,7 +1486,6 @@ ${crumbs(crumbList)}
 <main id="main">
 <h1 class="page-title">${f.name}</h1>
 ${f.genericName ? html`<p class="page-generic">FDA nonproprietary name: ${f.genericName}</p>` : ''}
-<p class="lede">${lede}</p>
 ${cardHtml(f)}
 ${joinHtml(staleNotes, '\n')}
 <section class="prose" aria-labelledby="h-what">
@@ -1323,40 +1496,35 @@ ${paragraphs(whatItIs(f))}
 <h2 id="h-pharmacy">What pharmacies pay</h2>
 ${paragraphs(whatPharmaciesPay(f))}
 ${genericNadac}
-<p class="why">This page was built from the NADAC file of ${f.nadacAsOf}. NADAC is published every week, so a newer price may exist; the interactive card shows how old each figure is today.</p>
+${pharmacyLinks(f)}
 ${ndcList(f)}
 </section>
+${siblingTable(model, f, sibs)}
+${classSection(model, f)}
 <section class="prose" aria-labelledby="h-medicare">
 <h2 id="h-medicare">What Medicare paid</h2>
-${paragraphs(med.paragraphs)}
+${paragraphs(whatMedicarePaid(f))}
 ${f.medicare.missing ? '' : html`<p class="not-yours">${honestyLine('not-your-price', { firstSentenceOnly: true })}</p>`}
-${med.why.length ? html`<h3>Why the two figures differ</h3>
-${paragraphs(med.why)}` : ''}
-</section>
-<section class="prose" aria-labelledby="h-costplus">
-<h2 id="h-costplus">The cost-plus estimate</h2>
-${paragraphs(costPlusProse(f))}
-<p class="more-link">${link(`${UP}methodology.html#cost-plus`, 'The cost-plus rule, with a worked example')}</p>
+${medicareLinks(f)}
 </section>
 <section class="prose" aria-labelledby="h-ask">
 <h2 id="h-ask">What to ask at the counter</h2>
+<p>None of these figures is your price: what you pay depends on your pharmacy, your insurance, coupons and discounts.</p>
 <ul class="ask">${joinHtml(
     askAtCounter(f, sibs).map((t) => html`<li>${t}</li>`),
     '\n',
   )}</ul>
 </section>
-<section class="prose faq" aria-labelledby="h-faq">
+${faq.length
+    ? html`<section class="prose faq" aria-labelledby="h-faq">
 <h2 id="h-faq">Questions</h2>
 <dl>${joinHtml(
-    faq.map((x) => html`<dt>${x.q}</dt><dd>${x.a}</dd>`),
-    '\n',
-  )}</dl>
-</section>
-<section class="prose" aria-labelledby="h-honesty">
-<h2 id="h-honesty">How to read these prices</h2>
-${honestyList()}
-</section>
-${linksSection(model, f, sibs, rel)}
+        faq.map((x) => html`<dt>${x.q}</dt><dd>${x.a}</dd>`),
+        '\n',
+      )}</dl>
+</section>`
+    : ''}
+${linksSection(model, f, rel)}
 </main>
 ${footer(model)}`;
   const head = headHtml({
@@ -1633,7 +1801,7 @@ export function sitemapXml(entries) {
  * @returns {string[]}
  */
 export function linkedAnchors() {
-  return ['cost-plus'];
+  return [...LINKED_ANCHORS];
 }
 
 /** Anchors methodology.html is generated with (its sections and one per rule), for link checks. */
