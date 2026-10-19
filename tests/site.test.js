@@ -473,7 +473,8 @@ test('the rest of the site: app pages, data, assets, sitemap', () => {
   const listedClasses = [...site.model.classes.values()].filter((l) => l.length >= SITEMAP_CLASS_MIN).length;
   assert.equal(site.pages.class - site.pages.classUnlisted, listedClasses);
   assert.ok(site.pages.classUnlisted > 0, 'some classes are too small to list');
-  assert.equal(locs.length, 2 + site.pages.drug + listedClasses + site.pages.letter);
+  // The home page, methodology.html and the press kit (decision 51), then the data pages.
+  assert.equal(locs.length, 3 + site.pages.drug + listedClasses + site.pages.letter);
   for (const [key, list] of site.model.classes) {
     const loc = `<loc>${SITE_URL}class/${site.model.classSlugs.get(key)}/</loc>`;
     assert.equal(xml.includes(loc), list.length >= SITEMAP_CLASS_MIN, loc);

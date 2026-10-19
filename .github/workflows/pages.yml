@@ -2,7 +2,8 @@
 # The site is built here and never committed (docs/ARCHITECTURE.md, "Drug pages"):
 # openbill.html (also served as index.html), methodology.html, the real data/drugs.json from Git
 # LFS (never its pointer), and tools/site.mjs's static pages: one per drug, one per FDA
-# pharmacologic class, an A–Z index, a 1200×630 preview image per drug, and sitemap.xml.
+# pharmacologic class, an A–Z index, a 1200×630 preview image per drug, the press kit (press/) with
+# its wordmark, screenshots and reveal clips (decision 51), and sitemap.xml.
 # Settings > Pages > Source must be "GitHub Actions" (set once; free on a public repository).
 name: Website
 
@@ -88,6 +89,14 @@ jobs:
             echo "only ${images} preview images for ${products} products plus og/site.png; refusing to publish" >&2
             exit 1
           fi
+          # The press kit and every picture it shows (the list is pressMediaFiles() in src/build/presspage.js).
+          node --input-type=module -e "
+            import fs from 'node:fs';
+            import { pressMediaFiles } from './src/build/presspage.js';
+            const missing = ['index.html', ...pressMediaFiles()].filter((f) => !fs.existsSync('_site/press/' + f) || fs.statSync('_site/press/' + f).size === 0);
+            if (missing.length) { console.error('_site/press/ is missing ' + missing.join(', ') + '; refusing to publish'); process.exit(1); }
+            console.log('press kit: index.html and ' + pressMediaFiles().length + ' pictures');
+          "
           du -sh _site
 
       - uses: actions/configure-pages@v6
