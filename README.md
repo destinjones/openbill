@@ -1,5 +1,10 @@
 # One page that tells a person what their medical care and drugs actually cost, with a source and a date on every single number.
 
+**Pharmacies pay $3.35 for 30 aripiprazole 10 mg tablets. Medicare Part D paid $46.50: 13.9×.**
+Medicare's figure is its 2024 average spending per dosage unit on generic aripiprazole, all
+strengths together, so the multiple is `estimated`. What pharmacies pay is CMS's NADAC, effective
+2026-09-23. Medicare's price is not your price. [See the card](https://destinjones.github.io/openbill/#drug=ARIPIPRAZOLE%2010%20MG%20TABLET&qty=30).
+
 **Open it: [destinjones.github.io/openbill](https://destinjones.github.io/openbill/)**
 
 OpenBill is one offline page that puts what US pharmacies pay for a drug next to what Medicare pays for it. Data as of: NADAC week of 2026-10-14; Medicare Part D data year 2024; Medicare Part B October 2026 quarter.
@@ -12,7 +17,7 @@ OpenBill is one offline page that puts what US pharmacies pay for a drug next to
 
 Not medical advice. Not a lead-gen funnel. No account, no ads, no tracking, no paywall.
 
-![The OpenBill card on a 360px-wide phone screen, light theme: METFORMIN HCL 500 MG TABLET, 57 NDCs, quantity 60. Pharmacy pays $0.87, filed, 60 × $0.01451 per EA, from the CMS NADAC file as of 2026-10-14, effective 2026-09-23. Below it, Medicare Part D paid $3.39, filed.](docs/img/card-360.png)
+![The OpenBill card on a 360px-wide phone screen, light theme: ARIPIPRAZOLE 10 MG TABLET, 31 NDCs, priced per each. Pharmacy pays $3.35, filed: 30 × $0.11173 per EA, CMS NADAC, effective 2026-09-23, file as of 2026-10-14. Medicare Part D paid $46.50, filed: 30 × $1.54994 per EA, the Part D average for 2024, with the line "Medicare's price is not your price." Cost-plus estimate $8.85, estimated: $3.35 (NADAC) × 1.15 + $5.00 fee, what a pharmacy that paid NADAC and charged cost + 15% + a $5.00 fee would charge; not a price anyone quoted. The spread: 13.9×, estimated.](docs/img/card-360.png)
 
 ## What it shows
 
@@ -21,11 +26,30 @@ Search a drug. The card shows:
 1. what pharmacies pay: CMS NADAC, the national average drug acquisition cost
 2. Medicare's reference price: Part D, or Part B when there is no usable Part D figure
 3. the spread: the multiple between the two, stated plainly
-4. the state, source, file, effective date and retrieved date of every number
-5. "Wrong? Tell us", a link that opens a prefilled GitHub issue
+4. a cost-plus estimate: what pharmacies pay, plus 15%, plus a $5.00 fee, always `estimated`
+5. if you type what you were charged, that amount as a multiple of the two figures above
+6. the state, source, file, effective date and retrieved date of every number
+7. "Wrong? Tell us", a link that opens a prefilled GitHub issue
 
-Phase 1 is drugs only. No procedures, no insurance matching, no accounts. Hospital price
-files come later.
+**The cost-plus estimate is not a cash price.** No source of cash prices may be reused: the
+companies and pharmacies that publish them forbid storing or copying them. So OpenBill works
+out what a pharmacy would charge if it priced the way Cost Plus Drugs describes (its cost plus
+a 15% markup and a $5.00 fee) and paid NADAC. It copies no price from anyone, and it is not
+compared with NADAC as a spread, because it is built from NADAC
+([decision 39](docs/DECISIONS.md#39-no-cash-prices-a-cost-plus-estimate-from-nadac-instead)).
+
+**What you were charged stays with you.** The amount is worked out in your browser. OpenBill
+never sends or saves it. It is kept after the `#` in the address, so you can share your own card
+if you want to, and so your browser's history keeps it like any other page you visit
+([decision 40](docs/DECISIONS.md#40-what-you-were-charged-the-readers-own-number-never-stored-or-sent)).
+
+**Drug pages.** On the website every product also has a static page with its numbers in the
+page itself, plus a page per FDA drug class and an A to Z index. They are built when the site
+is deployed, are not committed, and run no script; each links to its interactive card
+([decision 41](docs/DECISIONS.md#41-static-drug-pages-built-on-deploy-and-not-committed)).
+
+Drugs only so far. No procedures, no insurance matching, no accounts. Hospital price files
+come later.
 
 ## How it works
 
@@ -33,6 +57,8 @@ files come later.
 tools/fetch_*.py      network -> tools/cache/ + manifest.json (sha256, ETag, dates)
 tools/build_drugs.py  tools/cache/ -> data/drugs.json      (offline; filed facts only)
 build.js              src/ + data/ -> openbill.html, methodology.html, docs/DATA-QUALITY.md
+tools/site.mjs        the built pages + data/ -> _site/ (drug, class and A-Z pages, previews,
+                      sitemap; on deploy only, never committed)
 ```
 
 1. **Fetch.** Each fetcher downloads its government files into `tools/cache/`, skipping
@@ -78,7 +104,7 @@ and makes no network requests. Its data is inlined compressed, unpacked by the b
 own `DecompressionStream` and checked against the sha256 the build recorded, so it needs Chrome or Edge 103+, Firefox 113+ or Safari 16.4+; an
 older browser gets a plain message saying it cannot unpack the data, and no figures.
 
-`openbill.html` is an ordinary file, but the data it is built from, `data/drugs.json` (~35 MB),
+`openbill.html` is an ordinary file, but the data it is built from, `data/drugs.json` (~38 MB),
 is stored with [Git LFS](https://git-lfs.com) so each weekly refresh doesn't add a full copy to
 the repository's history. Install Git LFS before you clone, or run `git lfs install && git lfs pull`
 afterwards; without it the file is a small pointer and `node build.js` and the tests say so.
@@ -110,7 +136,13 @@ above are when those browsers added the format the page needs to `DecompressionS
 tested result ([decision 33](docs/DECISIONS.md#33-the-page-checks-the-inline-datas-sha256-browser-checks-run-in-chromium-firefox-and-webkit)).
 
 `node tools/shots.mjs` remakes the README screenshots in `docs/img/` from `openbill.html`
-(run `node build.js` first).
+(run `node build.js` first). `node tools/site.mjs --out ../openbill-site --limit 20` builds a
+small copy of the website, with drug pages for the first 20 products and the showcase; see
+[CONTRIBUTING.md](CONTRIBUTING.md#the-website).
+
+To check the numbers by hand against the government files, use
+[docs/HAND-CHECK.md](docs/HAND-CHECK.md): ten products, where each figure is in each raw file,
+and the value to expect.
 
 ## Cite it
 

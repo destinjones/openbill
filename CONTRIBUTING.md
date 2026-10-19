@@ -21,7 +21,7 @@ it is usually `python`. The npm scripts `npm run fetch` and `npm run data` call 
 devcontainer (`.devcontainer/devcontainer.json`), which sets up Node 22, Python 3.12, Git LFS
 and Playwright's Chromium, Firefox and WebKit for you.
 
-`data/drugs.json` (~35 MB) is stored with [Git LFS](https://git-lfs.com), so each data refresh
+`data/drugs.json` (~38 MB) is stored with [Git LFS](https://git-lfs.com), so each data refresh
 adds one LFS object instead of a full copy to the git history (decision 35). Install Git LFS
 before you clone, or run `git lfs install && git lfs pull` afterwards. Without it the file is a
 short pointer: `node build.js` stops with that message, and `tests/lfs.test.js` fails first.
@@ -34,6 +34,7 @@ A refresh commits the rebuilt file as usual; the LFS filter in `.gitattributes` 
 | `python3 tools/build_drugs.py` | `tools/cache/` -> `data/drugs.json` |
 | `node build.js` | write `openbill.html`, `methodology.html`, `docs/DATA-QUALITY.md` |
 | `node tools/shots.mjs` | remake the README screenshots in `docs/img/` from `openbill.html` (after `node build.js`) |
+| `node tools/site.mjs --out <dir>` | build the website (drug, class and A–Z pages, preview images, sitemap) into `<dir>`; see [The website](#the-website) |
 
 The other fetchers are `fetch_fda_ndc.py`, `fetch_partd.py` and `fetch_asp.py`, with the same
 flags. The builders never need the network once `tools/cache/` is filled; `tools/cache/` is
@@ -41,6 +42,35 @@ never committed.
 
 If you change anything in `src/` or `data/`, run `node build.js` and commit the regenerated
 files with your change. The sync test fails otherwise.
+
+### The website
+
+The deployed site is more than the app. `tools/site.mjs` writes one static page per product
+(`drug/<slug>/`), one per FDA pharmacologic class (`class/<slug>/`), an A–Z index
+(`drugs/<letter>/`), a preview image per product (`og/<slug>.png`) and `sitemap.xml`, next to
+copies of `openbill.html`, `methodology.html` and `data/drugs.json`. The Pages workflow runs it
+on every deploy. Its output is never committed
+([decision 41](docs/DECISIONS.md#41-static-drug-pages-built-on-deploy-and-not-committed)).
+
+To look at it locally, run `node build.js` first (the generator copies the built pages), then
+write a small site to a folder outside the repository:
+
+```bash
+node tools/site.mjs --out ../openbill-site --limit 20 --no-og   # 20 drug pages + the showcase, no images
+node tools/site.mjs --out ../openbill-site --only "ARIPIPRAZOLE 10 MG TABLET"
+node tools/site.mjs --out ../openbill-site                      # the whole site, as deployed
+```
+
+`--limit N` builds drug pages and preview images only for the first N products by name, plus
+the showcase; class and A–Z pages are always complete, so some of their links lead nowhere in a
+limited build. `--only NAME` (repeatable) builds just those products. `--no-og` skips the
+preview images, which need Playwright's Chromium (`npx playwright install chromium`). The output
+folder must be empty or one the tool wrote before. The pages run no script and load their
+stylesheet and fonts by relative links, so a page opens from `file://`. Links between pages
+point at folders, though, so browsing is easier with any static file server pointed at the
+folder.
+
+The generator stops if two product names share a slug, instead of picking one URL for both.
 
 ## Test it
 
@@ -106,20 +136,23 @@ tools/
   fetch_asp.py         Medicare Part B payment limits + NDC-HCPCS crosswalk, quarterly
   build_drugs.py       tools/cache/ -> data/drugs.json
   shots.mjs            README screenshots of openbill.html -> docs/img/ (Playwright)
+  site.mjs             the website: drug, class and A–Z pages, previews, sitemap -> --out
   cache/               raw downloads + manifest.json (sha256). Never committed.
 data/drugs.json        schema openbill.drugs/3: Part D and Part B tables, then one row per
                        NDC, one per line
 src/core/              DOM-free ES modules, unit-tested:
                          provenance, money, ndc, dates, sources, rules, search,
-                         pack, report, esc, sha256, config
+                         pack, report, esc, sha256, config, slug, related
 src/app/               the page: index.html, styles.css, app.js (the only DOM code), fonts/
-src/build/             methodology.js and quality.js, used by build.js
+src/build/             methodology.js and quality.js, used by build.js;
+                       drugpage.js, used by tools/site.mjs
+src/site/              the static pages' stylesheet and the preview card's
 build.js               bundler and generator
 openbill.html          generated page, committed
 methodology.html       generated, committed
 tests/                 *.test.js (node --test), spotchecks.json, browser/*.spec.js (Playwright)
 docs/                  ARCHITECTURE (the contract), DATA_SOURCES, DECISIONS,
-                       DATA-QUALITY (generated)
+                       DATA-QUALITY (generated), HAND-CHECK (the by-hand worksheet)
 .github/               CI, issue forms, pull request template
 ```
 
@@ -134,6 +167,8 @@ Pick by what you know:
 - **The page:** `src/app/`. Check it at 360px, light and dark.
 - **Checking our work:** add a spot check to `tests/spotchecks.json`. Find the row in the
   source file yourself and record which file and how you verified it.
+  [docs/HAND-CHECK.md](docs/HAND-CHECK.md) shows how to find each figure of ten products in
+  the raw files. The NADAC CSV is too long for Excel, so search it as text.
 
 ## Reporting a wrong price
 
@@ -192,7 +227,7 @@ gh label create data --description "About the data, not the code"
 Git LFS use counts against the repository owner's account. GitHub's free plan includes 10 GiB
 of LFS storage and 10 GiB of LFS bandwidth a month
 ([GitHub Docs](https://docs.github.com/en/billing/concepts/product-billing/git-lfs)). Each
-refresh stores one ~35 MB object, about 1.8 GB a year. CI caches the LFS objects by id
+refresh stores one ~38 MB object, about 2 GB a year. CI caches the LFS objects by id
 (`.github/workflows/ci.yml`), so a run downloads the file only when it has changed; clones and
 CI cache misses spend bandwidth. Check usage under the account's billing settings now and then,
 and decide on more storage or another home for old data well before storage reaches the limit.
@@ -221,8 +256,8 @@ multiple-source drugs, priced per unit and listed by NDC (written 5-4-2, like
 
 Products are grouped by NADAC description, so `ATORVASTATIN 20 MG TABLET` (69 NDCs) and
 `LIPITOR 20 MG TABLET` (1 NDC) are two separate products with separate cards. Search can
-reach Lipitor through its FDA generic name, but nothing says the two are the same drug and
-dose. The openFDA NDC bulk file carries `openfda.rxcui` per product, and the contract
+reach Lipitor through its FDA generic name, and the drug pages list the two as brand and
+generic versions because they share it, but nothing says they are the same drug and dose. The openFDA NDC bulk file carries `openfda.rxcui` per product, and the contract
 already reserves `identity.rxcui` and an optional `openfda_ndc` source. Careful: RxCUIs are
 listed per product NDC and there can be several (product `0378-7185`, metformin 500 mg,
 lists three: 861004, 861007 and 861010), so the join needs a rule and a test. Ambiguous
@@ -289,9 +324,9 @@ Every row with an FDA identity has a `package_description`. For NDC 0003-0893-21
 Skip anything else (kits, nested packages, units that don't match the NADAC unit) rather than
 guess.
 
-- Files: `src/core/rules.js` (`packageAmount()` already reads the mL or g in one package for
-  the starting quantity of ML and GM products, decision 23; counts of EA units are not read
-  yet) with unit tests in `tests/`, `src/app/app.js` for the presets, a Playwright check in
+- Files: `src/core/rules.js` (`packageAmount()` and `packageStart()` already read the mL or g in
+  one package, or in one inner unit of a wholesale case or multi-pack, for the starting quantity
+  of ML and GM products, decisions 23 and 49; counts of EA units are not read yet) with unit tests in `tests/`, `src/app/app.js` for the presets, a Playwright check in
   `tests/browser/`.
 - Why: the card offers 30, 60 and 90 for EA products, which are common supplies, not this
   product's packs. A package count is a filed fact already in `data/drugs.json`, so a preset

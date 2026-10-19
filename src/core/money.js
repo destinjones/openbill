@@ -357,6 +357,19 @@ export function formatPercent(pct) {
 }
 
 /**
+ * Format an exact decimal (a number or a plain decimal string, such as multiplyDecimal()'s
+ * result) with thousands separators and every digit kept: formatDecimal('1234.567891') →
+ * "1,234.567891", formatDecimal(0.5) → "0.5". Unlike formatCount, a string is read exactly,
+ * so a product with more digits than a JavaScript number holds is not rounded.
+ * @param {number|string} x
+ * @returns {string}
+ */
+export function formatDecimal(x) {
+  const r = render(toDecimal(x));
+  return (r.neg ? '-' : '') + r.body;
+}
+
+/**
  * Format a count with thousands separators, keeping any decimals exactly:
  * formatCount(14847081) → "14,847,081", formatCount(2.5) → "2.5".
  * @param {number} n

@@ -42,6 +42,12 @@ jobs:
       - name: Unit, data, spot-check, sync, quality and docs-link tests
         run: node --test
 
+      # The deploy builds the site from the same data; build its pages here too (without the
+      # preview images), so anything that would stop the deploy, such as two product names the
+      # slug rules cannot tell apart, fails this required check before merge instead.
+      - name: The website builds from this data
+        run: node tools/site.mjs --out "$RUNNER_TEMP/openbill-site" --no-og
+
       - name: Install Chromium, Firefox and WebKit for Playwright
         run: npx playwright install --with-deps chromium firefox webkit
 
@@ -81,7 +87,13 @@ jobs:
         with:
           node-version: 22
 
+      # Links into OpenBill's own website are checked against this commit's build of it, not the
+      # live deploy, which only catches up after the merge (decision 50).
+      - name: Build the website pages to check links into it
+        run: node tools/site.mjs --out "$RUNNER_TEMP/openbill-site" --no-og
+
       - name: External links resolve
         run: node --test tests/docs-links.test.js
         env:
           OPENBILL_CHECK_EXTERNAL: "1"
+          OPENBILL_SITE_DIR: ${{ runner.temp }}/openbill-site

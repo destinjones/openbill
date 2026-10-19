@@ -18,6 +18,7 @@ import {
   formatMultipleWithin,
   formatPercent,
   formatCount,
+  formatDecimal,
 } from '../src/core/money.js';
 
 test('toDecimal parses numbers and decimal strings exactly', () => {
@@ -243,6 +244,22 @@ test('formatPercent and formatCount', () => {
   assert.equal(formatCount(1e21), '1,000,000,000,000,000,000,000');
   assert.throws(() => formatCount(undefined), TypeError);
   assert.throws(() => formatCount(Infinity), TypeError);
+});
+
+test('formatDecimal keeps every digit of an exact decimal, with thousands separators', () => {
+  assert.equal(formatDecimal('1234.567891'), '1,234.567891');
+  assert.equal(formatDecimal(0.5), '0.5');
+  assert.equal(formatDecimal('3.3519'), '3.3519');
+  assert.equal(formatDecimal('3.3500'), '3.35');
+  assert.equal(formatDecimal('-1234.5'), '-1,234.5');
+  assert.equal(formatDecimal(1e-7), '0.0000001');
+  // More digits than a JavaScript number holds: formatCount(Number(x)) would round them.
+  assert.equal(formatDecimal('123444443.42109123456'), '123,444,443.42109123456');
+  assert.equal(formatDecimal(multiplyDecimal(12345.67891, 9999)), '123,444,443.42109');
+  assert.throws(() => formatDecimal(''), TypeError);
+  assert.throws(() => formatDecimal('abc'), TypeError);
+  assert.throws(() => formatDecimal(null), TypeError);
+  assert.throws(() => formatDecimal(NaN), RangeError);
 });
 
 test('money.js does not use Intl or toLocaleString', async () => {

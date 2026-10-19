@@ -1,6 +1,8 @@
 # Deploys the website, https://destinjones.github.io/openbill/, on every push to main.
-# The site is the three files the pages load: openbill.html (also served as index.html),
-# methodology.html, and the real data/drugs.json from Git LFS, never its pointer.
+# The site is built here and never committed (docs/ARCHITECTURE.md, "Drug pages"):
+# openbill.html (also served as index.html), methodology.html, the real data/drugs.json from Git
+# LFS (never its pointer), and tools/site.mjs's static pages: one per drug, one per FDA
+# pharmacologic class, an A–Z index, a 1200×630 preview image per drug, and sitemap.xml.
 # Settings > Pages > Source must be "GitHub Actions" (set once; free on a public repository).
 name: Website
 
@@ -9,23 +11,31 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# The build job runs npm packages, a downloaded Chromium and the tests, so it gets read access
+# only; the Pages scopes belong to the deploy job alone.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
+# A deployment that has started finishes; a newer push waits for it rather than cancelling it.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # configure-pages reads the Pages settings; nothing in this job can write to them.
+    permissions:
+      contents: read
+      pages: read
+    # About 3× a full local build (pages, every preview image, the tests); see the build step.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          # Full history: the sitemap's lastmod is the date of the last commit touching each file.
+          fetch-depth: 0
 
       # Same LFS cache as CI, so a deploy downloads data/drugs.json only when it has changed.
       - name: List the LFS objects this commit needs
@@ -42,24 +52,43 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The preview images are rendered with Playwright's Chromium.
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
 
       - name: The pages being published are in sync with src/ and data/
         run: node build.js --check
 
-      - name: Unit, data, spot-check, sync, quality and docs-link tests
+      - name: Unit, data, spot-check, sync, quality, docs-link and site tests
         run: node --test
 
-      - name: Assemble the site
+      - name: Build the site
+        run: node tools/site.mjs --out _site
+
+      - name: Check the site before publishing it
         run: |
-          mkdir -p _site/data
-          cp openbill.html _site/index.html
-          cp openbill.html methodology.html _site/
-          cp data/drugs.json _site/data/drugs.json
+          test -f _site/index.html || { echo "_site has no index.html" >&2; exit 1; }
           if head -c 64 _site/data/drugs.json | grep -q '^version https://git-lfs'; then
             echo "data/drugs.json is a Git LFS pointer; refusing to publish it" >&2
             exit 1
           fi
-          ls -l _site _site/data
+          products=$(node -e "const d=JSON.parse(require('fs').readFileSync('data/drugs.json','utf8'));console.log(new Set(d.rows.map((r)=>r.name)).size)")
+          pages=$(find _site/drug -mindepth 2 -maxdepth 2 -name index.html | wc -l)
+          images=$(find _site/og -maxdepth 1 -name '*.png' | wc -l)
+          echo "products ${products}, drug pages ${pages}, preview images ${images}"
+          if [ "${pages}" -lt "${products}" ]; then
+            echo "only ${pages} drug pages for ${products} products; refusing to publish" >&2
+            exit 1
+          fi
+          if [ "${images}" -le "${products}" ]; then
+            echo "only ${images} preview images for ${products} products plus og/site.png; refusing to publish" >&2
+            exit 1
+          fi
+          du -sh _site
 
       - uses: actions/configure-pages@v6
 
@@ -71,6 +100,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}

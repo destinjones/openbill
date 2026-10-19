@@ -9,7 +9,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { validateRecord } from '../src/core/provenance.js';
 import { isoDate } from '../src/core/dates.js';
-import { EXTREME_HEADLINE, distinctLabelers, formatSpreadMultiple } from '../src/core/rules.js';
+import { EXTREME_HEADLINE, HONESTY, COST_PLUS, COST_PLUS_CAVEATS, PAID_MAX_USD, PAID_PRIVACY, distinctLabelers, formatSpreadMultiple } from '../src/core/rules.js';
+import { formatMoney, formatPercent } from '../src/core/money.js';
 import { renderMethodology, BROWSER_FLOOR } from '../src/build/methodology.js';
 import {
   analyzeDoc,
@@ -239,6 +240,64 @@ test('methodology.html counts labelers as the page does and shows 0.2046 as the 
   assert.ok(text.includes(`card shows it as ${formatSpreadMultiple(0.2046)}`));
   // The builder's own count stays a count of names, and still agrees with the data.
   assert.ok(!analyzeDoc(DOC).mismatches.some((m) => m.key === 'part_b_single_labeler_codes'));
+});
+
+// Phase 2 (decisions 39, 40, 41, 43): the cost-plus estimate, "what you paid" and the drug pages
+// are described from the core's own constants, and the honesty lines appear word for word.
+const plain = (html) =>
+  html
+    .replace(/<[^>]+>/g, '')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+
+test('methodology.html describes the cost-plus estimate from COST_PLUS, with its sources and what it is not', () => {
+  const { bodyHtml } = renderMethodology({ doc: DOC });
+  const text = plain(bodyHtml);
+  for (const id of ['cost-plus', 'what-you-paid', 'drug-pages', 'limit-cost-plus']) assert.match(bodyHtml, new RegExp(`id="${id}"`), `#${id}`);
+  assert.ok(text.includes(`${formatPercent(COST_PLUS.markup_pct)} of that, rounded half-up to the cent`), 'markup parameter');
+  assert.ok(text.includes(`${formatMoney(COST_PLUS.fee_usd)} ${COST_PLUS.basis}`), 'fee parameter');
+  assert.ok(text.includes(COST_PLUS.description), 'where the parameters come from');
+  for (const s of COST_PLUS.sources) assert.ok(bodyHtml.includes(`href="${s.url}"`), `source link ${s.url}`);
+  for (const c of COST_PLUS_CAVEATS) assert.ok(text.includes(c), `caveat: ${c}`);
+  // The owner's decision: never call it a typical cash price; no spread against it.
+  assert.doesNotMatch(text, /typical cash price/i);
+  assert.match(text, /It is not compared with NADAC as a spread/);
+  // The showcase is the worked example, with the numbers decision 45 records.
+  assert.match(text, /for 30 EA of ARIPIPRAZOLE 10 MG TABLET: pharmacies pay \$3\.35; 15% of that, rounded to the cent, is \$0\.50; with the \$5\.00 fee the estimate is \$8\.85\./);
+});
+
+test('methodology.html says what happens to what you paid, and gives the honesty lines verbatim', () => {
+  const { bodyHtml } = renderMethodology({ doc: DOC });
+  const text = plain(bodyHtml);
+  assert.ok(text.includes(`at most ${formatMoney(PAID_MAX_USD)}`), 'the upper limit');
+  assert.ok(text.includes(PAID_PRIVACY), 'the privacy sentence, as on the card');
+  assert.match(text, /your browser’s history keeps it/);
+  assert.doesNotMatch(text, /stored, logged or sent|stays only in/, 'no claim that the amount leaves no trace');
+  assert.match(text, /A link you share carries your amount/);
+  assert.ok(text.includes('“You paid 3.6× what pharmacies pay for this pack, and 1.4× the cost-plus estimate.”'), 'the worked example sentence');
+  for (const h of HONESTY) assert.ok(text.includes(h.text), `honesty line: ${h.text}`);
+});
+
+test('pharmacologic class coverage is recomputed from the rows and checked against counts', () => {
+  const a = analyzeDoc(DOC);
+  assert.equal(a.pharmClasses.rows, DOC.counts.identity_with_pharm_classes);
+  assert.equal(a.pharmClasses.epcClasses, DOC.counts.epc_classes);
+  assert.ok(a.pharmClasses.epcRows <= a.pharmClasses.rows && a.pharmClasses.rows <= a.identity);
+  assert.ok(a.pharmClasses.productsWithEpc > 0 && a.pharmClasses.productsWithEpc <= a.products);
+  assert.ok(a.costPlus.products > 0 && a.costPlus.products <= a.products);
+  const md = renderDataQuality(DOC);
+  assert.ok(md.includes('| FDA pharmacologic classes (`identity.pharm_classes`) |'), 'coverage row in DATA-QUALITY.md');
+  assert.match(md, /^Cost-plus estimates \(\[the rule\]\(\.\.\/methodology\.html#cost-plus\)\)/m);
+  const bad = structuredClone(FIXTURE);
+  bad.counts.epc_classes = analyzeDoc(FIXTURE).pharmClasses.epcClasses + 1;
+  assert.ok(analyzeDoc(bad).mismatches.some((m) => m.key === 'epc_classes'), 'a wrong epc_classes count is reported');
+  const none = structuredClone(FIXTURE);
+  delete none.counts.epc_classes;
+  delete none.counts.identity_with_pharm_classes;
+  assert.ok(!analyzeDoc(none).mismatches.some((m) => m.key === 'epc_classes' || m.key === 'identity_with_pharm_classes'), 'a doc without the counts is not a mismatch');
 });
 
 // The page takes today from isoDate(new Date()): the UTC calendar date whatever the time zone

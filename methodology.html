@@ -2,12 +2,26 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; script-src &#39;none&#39;; style-src &#39;sha256-aH3CtKPXyg80dl+gH9GgLuqecdxMgCpaQkkvPKOls7A=&#39;; font-src data:; img-src data:; base-uri &#39;none&#39;; form-action &#39;none&#39;">
+<meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; script-src &#39;none&#39;; style-src &#39;sha256-rKuCFSb6QvtP403mCgMNEKn9CtUx+skDoAP9IPVmXUw=&#39;; font-src data:; img-src data:; base-uri &#39;none&#39;; form-action &#39;none&#39;">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
 <title>OpenBill methodology</title>
 <meta name="description" content="How OpenBill reads the NADAC, FDA and Medicare files, the rules it applies to them, and their limits.">
+<link rel="canonical" href="https://destinjones.github.io/openbill/methodology.html">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="OpenBill">
+<meta property="og:title" content="OpenBill methodology">
+<meta property="og:description" content="How OpenBill reads the NADAC, FDA and Medicare files, the rules it applies to them, and their limits.">
+<meta property="og:url" content="https://destinjones.github.io/openbill/methodology.html">
+<meta property="og:image" content="https://destinjones.github.io/openbill/og/site.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="OpenBill preview card for the showcase product: what pharmacies pay, what Medicare paid, the spread and a cost-plus estimate, each with its state and source date.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://destinjones.github.io/openbill/og/site.png">
+<meta name="twitter:image:alt" content="OpenBill preview card for the showcase product: what pharmacies pay, what Medicare paid, the spread and a cost-plus estimate, each with its state and source date.">
 <link rel="icon" href="data:,">
 <style>@font-face {
   font-family: 'IBM Plex Sans';
@@ -571,6 +585,54 @@ button.suggest {
   margin-top: 2px;
 }
 
+/* The cost-plus estimate: a model, set smaller than the two filed figures above it. */
+
+.costplus {
+  padding: 8px 0 8px;
+  border-top: 1px solid var(--rule);
+}
+
+.cp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 10px;
+}
+
+.cp-label {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.cp-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  margin: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cp-amount {
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.unknown-sm {
+  font-weight: 600;
+}
+
+.cp-what {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
 .rule {
   height: 0;
   margin: 4px 0;
@@ -618,6 +680,93 @@ button.suggest {
   margin-top: 2px;
 }
 
+/* What were you charged? The reader's own number, never stored or sent. */
+
+.paid {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.paid-label {
+  display: block;
+  font-weight: 600;
+}
+
+.paid-hint {
+  margin: 2px 0 6px;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+
+.paid-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.paid-cur {
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.paid-input {
+  width: 9em;
+  max-width: 100%;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 1.125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: 0;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* Told apart by the border's style as well as the text below it, never by colour alone. */
+.paid-input[aria-invalid='true'] {
+  border: 2px dashed var(--rule-strong);
+}
+
+.paid-result:empty {
+  display: none;
+}
+
+.paid-problem {
+  margin: 6px 0 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.paid-sentence {
+  margin: 6px 0 0;
+  font-weight: 600;
+}
+
+.paid-list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.paid-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 8px;
+  padding: 2px 0;
+  font-size: 0.875rem;
+}
+
+.paid-multiple {
+  font-size: 1.375rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
 /* State chips: neutral, told apart by their text and border style, never by colour. */
 
 .chip {
@@ -651,6 +800,12 @@ button.suggest {
 .chip-estimated {
   border: 2px dotted var(--chip-ink);
   padding: 0 6px;
+}
+
+/* Not a provenance state: marks a multiple worked out from the reader's own number. */
+.chip-yours {
+  border-radius: 999px;
+  padding: 1px 9px;
 }
 
 .chip-stale {
@@ -696,7 +851,8 @@ button.suggest {
   content: '\2212';
 }
 
-.report {
+.report,
+.share {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -709,7 +865,8 @@ button.suggest {
   text-decoration: none;
 }
 
-.report:hover {
+.report:hover,
+.share:hover {
   text-decoration: underline;
 }
 
@@ -1051,6 +1208,8 @@ button.suggest {
   .search,
   .try,
   .report,
+  .share,
+  .paid,
   .skip {
     display: none;
   }
@@ -1060,8 +1219,55 @@ button.suggest {
   }
 }
 
-/* Phones: the masthead stays one line, so the card starts higher. */
+/* Phones: the masthead stays one line and the spacing is tighter, so the card starts higher and
+   both prices, the cost-plus line and the spread fit the first screen at 360×780. */
 @media (max-width: 399px) {
+  .masthead {
+    padding: 4px 0;
+  }
+
+  .search {
+    padding-top: 4px;
+  }
+
+  .search-label {
+    margin-bottom: 2px;
+  }
+
+  .search-input {
+    min-height: 44px;
+  }
+
+  .card {
+    margin-top: 8px;
+    padding-top: 10px;
+  }
+
+  .card-kicker {
+    margin-bottom: 2px;
+  }
+
+  .fig,
+  .spread {
+    padding: 8px 0 6px;
+  }
+
+  .costplus {
+    padding: 6px 0;
+  }
+
+  .amount {
+    font-size: 2.125rem;
+  }
+
+  .arith {
+    font-size: 0.8125rem;
+  }
+
+  .rule {
+    margin: 2px 0;
+  }
+
   .stamp {
     padding: 3px 8px 4px;
   }
@@ -1098,6 +1304,7 @@ button.suggest {
 <li><a href="#reading-a-card">How to read a card</a></li>
 <li><a href="#rules">The rules</a></li>
 <li><a href="#honesty">How prices are presented</a></li>
+<li><a href="#drug-pages">The drug pages</a></li>
 <li><a href="#sources">Sources</a></li>
 <li><a href="#joins">How the files are joined</a></li>
 <li><a href="#explanation-codes">NADAC explanation codes</a></li>
@@ -1114,13 +1321,15 @@ button.suggest {
 <li><strong>What pharmacies pay.</strong> The national average price retail pharmacies pay to buy a drug from their suppliers (their acquisition cost), per unit, from a CMS survey of pharmacy invoices. The figure is CMS’s NADAC (National Average Drug Acquisition Cost).</li>
 <li><strong>A Medicare price for the same drug.</strong> What Medicare Part D spent per unit in its latest data year (2024 in this build), or else the Medicare Part B payment limit for the current quarter, converted to the same unit. <a href="#reference-price">Which one is used</a> is a rule below.</li>
 <li><strong>The spread.</strong> The Medicare price divided by what pharmacies pay, stated as a multiple in one plain sentence.</li>
+<li><strong>A cost-plus estimate.</strong> What a pharmacy would charge if it added a 15% markup and a $5.00 fee to what pharmacies pay. It is always estimated, and it is a model, not anyone’s price (<a href="#cost-plus">the rule</a>).</li>
+<li><strong>What you paid, if you type it.</strong> Your own amount, as a multiple of what pharmacies pay and of the cost-plus estimate. It stays in your browser (<a href="#what-you-paid">the rule</a>).</li>
 </ul>
 <p>Every one of those numbers carries its state, the file it came from and its dates.</p>
 <p>What it does not show:</p>
 <ul>
 <li><strong>Your price.</strong> NADAC is what pharmacies pay their suppliers, not what a patient pays at the counter. Medicare’s figures are what Medicare paid or pays. What you pay depends on your pharmacy, your insurance, your deductible and the quantity you are given.</li>
 <li><strong>A quote.</strong> A price here is a range to expect, read from government files that each have their own date.</li>
-<li><strong>Cash prices, pharmacy list prices or insurers’ prices.</strong> None of the files used so far publishes them, so OpenBill does not show them yet.</li>
+<li><strong>Cash prices, pharmacy list prices or insurers’ prices.</strong> No government file publishes them. The companies and pharmacies that do publish cash prices forbid storing or copying them, so OpenBill shows none. The cost-plus estimate is a calculation from NADAC; it is not a price any pharmacy charges.</li>
 <li><strong>Medical advice.</strong> Nothing here says which drug to take or where to buy it.</li>
 </ul>
 <p>There is no warranty. The figures come from other people’s data, which can be wrong, and from rules that can have mistakes. If you find a wrong number, <a href="#report">tell us</a>.</p>
@@ -1144,70 +1353,115 @@ button.suggest {
 </dl>
 <p>In this build all 38,503 records in data/drugs.json are filed: each is a number printed in a government file. The numbers the page calculates from them, such as a Part B price per NADAC unit or a spread, are derived or estimated: of the 19,302 spreads on cards, 25 are derived and 19,277 estimated, for the reasons in <a href="#rules">the rules</a>. A pack total is the exception: multiplying a price by your quantity is arithmetic, so the total keeps the state of the price it multiplies.</p>
 <h3 id="example">An example from this build</h3>
-<p>ELIQUIS 5 MG TABLET, 3 NDCs:</p>
+<p>ARIPIPRAZOLE 10 MG TABLET, 31 NDCs:</p>
 <dl class="example">
 <dt>What pharmacies pay</dt>
-<dd>$5.52114 per EA <span class="chip chip-filed">filed</span> <span class="mono">CMS NADAC · nadac-<wbr>national-<wbr>average-<wbr>drug-<wbr>acquisition-<wbr>cost-<wbr>20261014.<wbr>csv · effective 2026-09-23 · retrieved 2026-10-17</span></dd>
+<dd>$0.11173 per EA <span class="chip chip-filed">filed</span> <span class="mono">CMS NADAC · nadac-<wbr>national-<wbr>average-<wbr>drug-<wbr>acquisition-<wbr>cost-<wbr>20261014.<wbr>csv · effective 2026-09-23 · retrieved 2026-10-17</span></dd>
 <dt>For 30 EA</dt>
-<dd>$165.63 <span class="chip chip-filed">filed</span> (the state of the price it multiplies: <a href="#unit-total">pack total</a>)</dd>
+<dd>$3.35 <span class="chip chip-filed">filed</span> (the state of the price it multiplies: <a href="#unit-total">pack total</a>)</dd>
 <dt>Medicare Part D average spending</dt>
-<dd>$9.63704 per EA <span class="chip chip-filed">filed</span> <span class="mono">Medicare Part D · DSD_<wbr>PTD_<wbr>RY26_<wbr>P04_<wbr>V10_<wbr>DY24_<wbr>BGM.<wbr>csv · 2024-01-01 to 2024-12-31 · retrieved 2026-10-18</span></dd>
+<dd>$1.54994 per EA <span class="chip chip-filed">filed</span> <span class="mono">Medicare Part D · DSD_<wbr>PTD_<wbr>RY26_<wbr>P04_<wbr>V10_<wbr>DY24_<wbr>BGM.<wbr>csv · 2024-01-01 to 2024-12-31 · retrieved 2026-10-18</span></dd>
 <dt>The spread</dt>
-<dd>Medicare paid 1.7× what pharmacies pay. <span class="chip chip-estimated">estimated</span> (<a href="#spread">why it is estimated or derived</a>)</dd>
+<dd>Medicare paid 13.9× what pharmacies pay. <span class="chip chip-estimated">estimated</span> (<a href="#spread">why it is estimated or derived</a>)</dd>
+<dt>Cost-plus estimate for 30 EA</dt>
+<dd>$8.85 <span class="chip chip-estimated">estimated</span> (<a href="#cost-plus">how it is worked out</a>)</dd>
 </dl>
 </section>
 <section id="rules">
 <h2>The rules</h2>
 <p>These are the rules in src/core/rules.js, in the words the page uses. Every number OpenBill calculates links to its rule here.</p>
-<section id="unit-total" class="rule">
+<section id="unit-total" class="rule-entry">
 <h3>Pack total</h3>
 <p>The price for the quantity you enter is the price per unit times that quantity, worked out exactly and then rounded to the nearest cent, with a half cent rounding up. That is your own arithmetic on a published price, not a new estimate, so the total keeps the label (filed, derived or estimated), the source and the dates of the price per unit it multiplies, and its explanation shows the multiplication. A total above zero but under half a cent is shown as “&lt;$0.01”, never as $0.00.</p>
 <p class="formula">Formula: <code>pack total = quantity × price per unit, rounded half-up to the cent</code></p>
 </section>
-<section id="default-quantity" class="rule">
+<section id="default-quantity" class="rule-entry">
 <h3>Starting quantity</h3>
-<p>Before you type a quantity, each card fills one in for you. NADAC (National Average Drug Acquisition Cost, a weekly survey by CMS, the Centers for Medicare &amp; Medicaid Services, of what retail pharmacies pay for drugs) prices each drug per EA (each: one tablet, capsule, patch or other single unit), per ML (milliliter) or per GM (gram). For EA the card starts at 30, a common one-month supply of a once-a-day medicine. For ML and GM it starts at the amount in one package, read from the package description in the FDA NDC Directory (the U.S. Food and Drug Administration’s list of drug packages, each identified by its NDC, the National Drug Code printed on the package): “5 SYRINGE in 1 CARTON / 3 mL in 1 SYRINGE” is 15 mL. That is used only when every NDC of the product listed there gives the same amount; otherwise the card starts at 1. It is a starting point, not your prescription: change it to match what you were given.</p>
-<p class="formula">Formula: <code>per EA: 30; per ML or GM: the amount in one package, when every package description of the product agrees; otherwise 1</code></p>
+<p>Before you type a quantity, each card fills one in for you. NADAC (National Average Drug Acquisition Cost, a weekly survey by CMS, the Centers for Medicare &amp; Medicaid Services, of what retail pharmacies pay for drugs) prices each drug per EA (each: one tablet, capsule, patch or other single unit), per ML (milliliter) or per GM (gram). For an oral tablet or capsule priced per EA it starts at 30, a common one-month supply of a once-a-day medicine, with buttons for 30, 60, 90. That means every NDC of the product the FDA NDC Directory (the U.S. Food and Drug Administration’s list of drug packages, each identified by its NDC, the National Drug Code printed on the package) lists has a tablet or capsule dosage form of any kind (film coated, extended or delayed release, orally disintegrating, chewable), or is a lozenge or troche, with the route ORAL, or is a tablet or film with the route SUBLINGUAL or BUCCAL (taken under the tongue or against the cheek, and counted like one that is swallowed). When more than half of those NDCs are such a form and the product’s NADAC description says tablet or capsule, the others are treated as errors in FDA’s listing: the card starts at 30 and its explanation names each of them. For a product FDA does not list, its NADAC description must name such a form (TABLET, CAPSULE, CAPLET, SOFTGEL, ODT …) and no other form or route, except SL, SUBLINGUAL or BUCCAL next to a tablet or film. Anything else priced per EA, such as a kit, pen, syringe, vial, patch, inhaler or suppository, starts at 1, with buttons for 1, 2, 3: 30 of them could be many months of supply, and for some of them NADAC’s EA is the whole package, for others one dose in it. When neither FDA nor the NADAC description says what the product is, the card starts at 1 too and says so. For ML and GM it starts at the amount in one package, read from the package description in the FDA NDC Directory: “5 SYRINGE in 1 CARTON / 3 mL in 1 SYRINGE” is 15 mL. When that package is a wholesale pack (a shipping case, or a carton, box, package or tray of at least 10 identical bottles, tubes, vials, jars or ampules), it counts the amount in one of them instead: “40 CARTON in 1 CASE / 1 BOTTLE in 1 CARTON / 60 g in 1 BOTTLE” is 60 g, not 2,400 g. That is used only when every NDC of the product listed there gives the same amount; otherwise the whole packages decide, and when those differ too the card starts at 1. It is a starting point, not your prescription: change it to match what you were given.</p>
+<p class="formula">Formula: <code>per EA: 30 for an oral tablet, capsule, lozenge or troche, or a tablet or film taken under the tongue or against the cheek, else 1; per ML or GM: the amount in one package (in one inner unit of a wholesale case or multi-pack), when every package description of the product agrees; otherwise 1</code></p>
 </section>
-<section id="reference-price" class="rule">
+<section id="reference-price" class="rule-entry">
 <h3>Which Medicare price is compared</h3>
 <p>NADAC (National Average Drug Acquisition Cost) measures what retail pharmacies pay for a drug, and Medicare Part D is the part of Medicare that pays for drugs filled at pharmacies, so Part D comes first: the average Part D spent per unit in its latest data year, for the brand and generic name this drug matched. It is used only when it is per the same unit as NADAC and CMS (the Centers for Medicare &amp; Medicaid Services, which publishes both files) has not flagged it as an outlier, meaning a figure distorted by a few unusual records. When the outlier flag is blank in the CMS file, OpenBill counts it as not flagged and says so. Otherwise OpenBill uses Medicare Part B, the part of Medicare that pays for drugs given in a clinic or doctor’s office: the current quarter’s payment limit, matched by the exact NDC (National Drug Code, the number on the package) through the CMS crosswalk and converted to the NADAC unit (the next rule). Otherwise there is no Medicare price, and the card says why. When both exist, the card shows Part D and its details also show Part B, with a note that Part B pays for a pharmacy drug only in specific settings, such as a drug given in a clinic.</p>
 <p class="formula">Formula: <code>Medicare price = Part D average per unit if usable, else Part B payment limit per unit if usable, else none</code></p>
 <p>What the provenance panel says with every Part B figure: “Medicare Part B pays for a drug like this only in specific settings, such as a drug given in a clinic or doctor’s office or used with certain medical equipment; most prescriptions filled at a pharmacy are paid by Part D.”</p>
 <p>And with a Part D figure whose outlier flag is blank: “The Part D file leaves the outlier flag for this drug blank. OpenBill counts a blank flag as not flagged, so the figure is used, but CMS has not said whether unusual records distort it.”</p>
 </section>
-<section id="part-b-per-nadac-unit" class="rule">
+<section id="part-b-per-nadac-unit" class="rule-entry">
 <h3>Part B payment limit per NADAC unit</h3>
 <p>Medicare Part B sets a payment limit per HCPCS billing unit. HCPCS is the coding system Medicare uses for billing, and a billing unit is an amount such as “10 MG”. NADAC is per tablet (EA), milliliter (ML) or gram (GM) instead. To compare the two, OpenBill uses the CMS NDC-HCPCS crosswalk, a CMS table that gives, for each NDC (National Drug Code, the number on the package), the billing code it is billed under and how many billing units the whole package holds. The price per NADAC unit is the limit times the billing units in the whole package, divided by the amount in the package (the amount in one item times the number of items). This is done only when OpenBill could confirm, from the package description in the FDA NDC Directory (the U.S. Food and Drug Administration’s list of drug packages), that the package amount is in the same unit NADAC uses.</p>
 <p class="formula">Formula: <code>price per unit = payment limit × billing units in the package ÷ (amount in one item × number of items)</code></p>
 </section>
-<section id="part-b-coinsurance" class="rule">
+<section id="part-b-coinsurance" class="rule-entry">
 <h3>Part B coinsurance</h3>
 <p>Coinsurance is the share of the Part B payment limit a patient owes after meeting the deductible: the payment limit per billing unit times the coinsurance percentage printed for that billing code in the CMS payment limit file (usually 20%). Deductibles, supplemental insurance and other coverage change what a person actually owes.</p>
 <p class="formula">Formula: <code>coinsurance = payment limit × coinsurance percentage ÷ 100</code></p>
 </section>
-<section id="spread" class="rule">
+<section id="spread" class="rule-entry">
 <h3>The spread</h3>
 <p>The spread compares the two prices: the Medicare price per unit divided by what pharmacies pay per unit (NADAC). 4.9× means Medicare paid 4.9 times what pharmacies pay; 0.8× means Medicare paid 20% less. Every number on a card is labelled filed (read from a government file), derived (calculated by a fixed rule from published figures) or estimated (inferred, with the reason written down). A spread computed from Part D is always labelled estimated, because Part D puts every strength and form sold under one name into a single average, covers a past calendar year rather than this week, and counts spending the way CMS defines it (including pharmacy dispensing fees, and before the discounts drug makers pay back). A spread computed from Part B is labelled derived only when a single company sells under that billing code (the next rule); otherwise it is estimated too.</p>
 <p class="formula">Formula: <code>spread = Medicare price per unit ÷ NADAC price per unit</code></p>
 </section>
-<section id="part-b-single-labeler" class="rule">
+<section id="part-b-single-labeler" class="rule-entry">
 <h3>When a Part B spread counts as derived</h3>
 <p>Part B sets one payment limit per billing code, worked out from the average sales price of every product billed under that code. A labeler is the company named on a drug’s label. When the CMS crosswalk lists only one labeler for the code, the limit describes that company’s own product, so the spread is derived. CMS sometimes writes one company’s name more than one way on the same code (“UCB, INC.” and “UCB, Inc.”); names that differ only in capitals, punctuation, spacing or a closing Inc, LLC, Ltd, Corp or Co count as one labeler, and the explanation quotes each spelling. When several labelers share the code, the limit is an average across all their products and can sit well above or below the price of this one package, so the spread is estimated, and its explanation says how many labelers share the code.</p>
 <p class="formula">Formula: <code>derived when exactly one labeler (one company, however its name is spelled) is listed for the billing code on the crosswalk; otherwise estimated</code></p>
 </section>
-<section id="extreme-gap" class="rule">
+<section id="extreme-gap" class="rule-entry">
 <h3>Very large or very small spreads</h3>
 <p>An estimated spread of 20× or more, or 0.2× or less, also carries a warning that the two figures may not describe the same unit or product: for example, Part D may count a unit differently from NADAC, or average in strengths that cost far more or far less than this one. The number is still shown, with the warning; it is never hidden. But the card does not lead with a sentence such as “Medicare paid 99% less than pharmacies pay” for it: its headline becomes “These two figures may not measure the same thing”, the multiple is shown beside it, and the warning says why.</p>
 <p class="formula">Formula: <code>estimated spread ≥ 20× or ≤ 0.2× → add a warning; the card’s headline becomes “These two figures may not measure the same thing”</code></p>
 <p>The thresholds are tested on the ratio at full precision, before it is rounded for display. A ratio of 0.2046 is above 0.2, so it carries no warning and keeps its sentence, and the card shows it as 0.205×: near a threshold the multiple gets the digits that keep it from reading as the threshold itself.</p>
 </section>
-<section id="part-d-name-outlier" class="rule">
+<section id="part-d-name-outlier" class="rule-entry">
 <h3>A product far from the others under its Part D name</h3>
 <p>Part D gives one average for every product sold under a brand and generic name, weighted by claims. When one product costs far more than the others under that name (a specialty formulation or an uncommon strength of a cheap generic, for example), the average can mostly reflect what the others cost, and a spread against it then says little about this product. So OpenBill compares the middle NADAC price of this product’s NDCs with the middle of the other products’ own middle prices under the same name, per the same unit (the lower of the two middle prices when there is an even number, so the comparison is between real filed prices). When this product is 20 or more times the others, the spread says so with both prices. The spread is still shown; the join is not refused, because many such names really do average strengths that sit close together.</p>
 <p class="formula">Formula: <code>middle NADAC of this product ÷ middle of the other products’ middle NADACs under the same Part D name ≥ 20 → add a warning</code></p>
 </section>
-<section id="freshness" class="rule">
+<section id="cost-plus" class="rule-entry">
+<h3>Cost-plus estimate</h3>
+<p>No free source of the prices pharmacies charge people paying cash may be reused: the companies and pharmacies that publish those prices forbid storing or copying them. So OpenBill shows no one’s cash price. Instead it works out what a pharmacy would charge if it priced the way Cost Plus Drugs, an online pharmacy, publicly describes (what it pays for a drug, plus a 15% markup, plus a flat pharmacy fee) and paid what NADAC says pharmacies pay: the pack total at NADAC, rounded to the cent, plus 15% of it, rounded to the cent, plus $5.00 per fill. For example, if pharmacies pay $10.00 for a pack, the estimate is $10.00 + $1.50 + $5.00 = $16.50. It is always labelled estimated. It is a model, not a price any pharmacy quoted, and not a typical price: Cost Plus Drugs’ own costs differ from NADAC, other pharmacies price differently, and shipping is not included. OpenBill copies no price from Cost Plus Drugs. There is no spread against this estimate, because it is built from NADAC itself: for a cheap generic the $5.00 fee alone can make it many times NADAC.</p>
+<p class="formula">Formula: <code>cost-plus estimate = quantity × NADAC price per unit, rounded half-up to the cent, + 15% of that, rounded half-up to the cent, + $5.00 per fill (shipping not included)</code></p>
+<table class="source-facts">
+<caption>The parameters (COST_PLUS in src/core/rules.js)</caption>
+<tbody>
+<tr><th scope="row">Applied to</th><td>what pharmacies pay for the pack: quantity × NADAC per unit, rounded half-up to the cent</td></tr>
+<tr><th scope="row">Markup</th><td>15% of that, rounded half-up to the cent</td></tr>
+<tr><th scope="row">Pharmacy fee</th><td>$5.00 per fill</td></tr>
+<tr><th scope="row">Shipping</th><td>not included</td></tr>
+<tr><th scope="row">State</th><td><span class="chip chip-estimated">estimated</span>, always</td></tr>
+</tbody>
+</table>
+<p>Where the parameters come from: Cost Plus Drugs publicly describes how it sets its prices: what it pays for a drug, plus a 15% markup, plus a pharmacy labor fee, plus shipping. KFF Health News coverage of the company (February 2023) describes the same method, with a lower labor fee than today’s. The $5.00 fee is the one the company’s own website showed on 2026-10-18. OpenBill takes only those two parameters, the 15% markup and the $5.00 fee per fill, and applies them to NADAC in place of Cost Plus Drugs’ own cost, which it does not publish per drug. It copies no price from Cost Plus Drugs.</p>
+<ul class="sources">
+<li><a href="https://kffhealthnews.org/news/article/mark-cuban-cost-plus-drugs-pharma-industry">KFF Health News, 17 February 2023: coverage of Mark Cuban Cost Plus Drug Company, describing its pricing as its cost plus a 15% markup, a pharmacy labor fee (lower in 2023 than today) and shipping</a></li>
+<li><a href="https://www.costplusdrugs.com/">Cost Plus Drugs’ own website, which showed a $5.00 pharmacy labor fee on 2026-10-18 (the source of the fee)</a></li>
+</ul>
+<p>The two sources do not give the same fee. The KFF Health News article of February 2023 reports a $3 labor fee per drug and $5 shipping per order; the $5.00 fee here is the one Cost Plus Drugs’ website showed on 2026-10-18. If the company changes its fee or markup, OpenBill changes COST_PLUS and this date together.</p>
+<p>What the estimate is not:</p>
+<ul>
+<li>This is a model, not a price any pharmacy quoted.</li>
+<li>Cost Plus Drugs’ own costs differ from NADAC, and other pharmacies price differently.</li>
+<li>Shipping is not included.</li>
+<li>It is not a price from Cost Plus Drugs or from any other pharmacy. OpenBill copies, stores and shows none of their prices.</li>
+<li>It is not compared with NADAC as a spread. It is NADAC plus a markup and a fee, so the multiple would only measure the fee. The headline multiple on a card is always Medicare’s price ÷ what pharmacies pay.</li>
+</ul>
+<p>In this build, for 30 EA of ARIPIPRAZOLE 10 MG TABLET: pharmacies pay $3.35; 15% of that, rounded to the cent, is $0.50; with the $5.00 fee the estimate is $8.85.</p>
+<p>5,924 of 5,936 products have a cost-plus estimate at their starting quantity. The others show “We don’t know yet”, for the same reason as their pack total.</p>
+</section>
+<section id="what-you-paid" class="rule-entry">
+<h3>What you paid</h3>
+<p>You can type what you were charged for the pack shown on a card. The card then shows it as a multiple of what pharmacies pay for that pack and of the cost-plus estimate, labelled as your number: 3.6× means you paid 3.6 times as much. When a product has several NDCs at different prices, the multiple is a range. The amount must be more than $0 and at most $100,000.00, in dollars and cents; otherwise the card says why and shows no multiple. Your number is worked out in your browser. OpenBill never sends or saves it; it is kept in this page’s address after the #, so your browser’s history keeps it like any other page you visit. Browsers do not send the part after the # to the website; it is there so you can share your own card if you choose to, and a link you share carries your amount. Insurance, coupons and discounts change what different people pay, so a multiple is a question to ask your pharmacy, not proof of a mistake.</p>
+<p class="formula">Formula: <code>your multiple = what you paid ÷ what pharmacies pay for the pack; and what you paid ÷ the cost-plus estimate for the pack</code></p>
+<ul>
+<li>The amount must be more than $0 and at most $100,000.00, in dollars and cents (at most two digits after the point). A “$” and thousands commas are fine. For anything else the card says why and shows no multiple; it never repeats what you typed.</li>
+<li>The card labels the multiples “your number”: the amount is yours, not a figure from a file.</li>
+<li>The arithmetic runs in your browser. OpenBill never sends or saves it; it is kept in this page’s address after the #, so your browser’s history keeps it like any other page you visit. The amount is written after the # in the address as <code>&amp;paid=12.00</code>; browsers do not send that part to the website. That lets you share your own card. A link you share carries your amount, so share it only if you mean to.</li>
+<li>Only the interactive card has this box. The <a href="#drug-pages">drug pages</a> have no script.</li>
+</ul>
+<p>For example, if you type $12.00 on the card for 30 EA of ARIPIPRAZOLE 10 MG TABLET, it says: “You paid 3.6× what pharmacies pay for this pack, and 1.4× the cost-plus estimate.” The amount is an illustration, not anyone’s price.</p>
+</section>
+<section id="freshness" class="rule-entry">
 <h3>Freshness</h3>
 <p>Each figure’s age is counted in whole days up to today: for NADAC from the date of its weekly file (the “as of” date), for Medicare Part B from the first day of the quarter its payment limits apply to, and for Medicare Part D from the last day of its data year. A figure older than its source’s limit (14 days for NADAC, 100 days for Part B, 913 days for Part D) is labelled stale on the card; it is never hidden or replaced by a zero. If a date comes out later than today, which a device’s clock or time zone can cause, the age is shown as 0 days and the figure is not stale.</p>
 <p class="formula">Formula: <code>age = today − the source’s date, in whole days; stale when age &gt; the source’s limit</code></p>
@@ -1223,6 +1477,16 @@ button.suggest {
 <li id="honesty-provenance">State which dataset and which effective date produced every figure.</li>
 <li id="honesty-stale">If a source is stale or a file is empty, show that rather than a zero.</li>
 <li id="honesty-disclaimer">Disclaimer footer: not medical advice, no warranty, other people&#39;s data can be wrong.</li>
+</ul>
+</section>
+<section id="drug-pages">
+<h2>The drug pages</h2>
+<p>On the website, each product also has a page of its own, and there is a page for each drug class and an A to Z index. These pages are built from data/drugs.json with the same rules as the card each time the site is published; they are not kept in the repository. They have no script. Their numbers are in the page itself, each with its state and source line, and each page links to the interactive card for its product, where you can change the quantity or enter what you paid. Start from the <a href="https://destinjones.github.io/openbill/drugs/a/">A to Z index of every drug</a>.</p>
+<ul>
+<li><strong>Drug classes</strong> are the U.S. Food and Drug Administration’s Established Pharmacologic Classes (the “[EPC]” entries of PHARM_CLASSES in the FDA NDC Directory), read for each NDC’s exact package. A product’s classes come from its NDCs that have an FDA identity. In this build 24,902 of the 27,083 NDCs with an FDA identity have classes listed, 24,086 of them an established class; there are 329 classes, and 4,797 of 5,936 products belong to at least one. Where FDA lists none, the page shows no class rather than a guess.</li>
+<li><strong>Brand and generic versions</strong> are the products that share an FDA nonproprietary name (the generic name on the label) with this one. They stay separate products, each with its own NADAC prices.</li>
+<li><strong>Related drugs</strong> are up to five other drugs in the same classes, ranked by how many classes they share and then by Medicare Part D claims. A class says how a drug works. It does not mean one drug can replace another; that is a question for a doctor or pharmacist.</li>
+<li><strong>Structured data.</strong> Each page describes its figures to search engines as costs of the drug (schema.org DrugCost), never as an offer to sell it, and every number there equals the one on the page.</li>
 </ul>
 </section>
 <section id="sources">
@@ -1420,6 +1684,7 @@ button.suggest {
 <li id="limit-carried-forward"><strong>Some NADAC prices are carried forward.</strong> 955 of 30,031 rows (3.2%) carry explanation code 2 or 4: CMS carried the price forward from an earlier file instead of setting it from the latest survey. They are shown with their codes, not dropped.</li>
 <li id="limit-recall"><strong>Low recall, by design.</strong> 19,277 of 30,031 rows (64.2%) match a Part D name, and 10,729 (35.7%) have no Medicare price at all. A wrong Medicare price is worse than none, so an uncertain match is left empty and the card says “We don’t know yet”. Brand and generic versions of a drug are separate products, because OpenBill has no RxNorm identity yet. The 2,948 rows without an FDA identity have only the NADAC description and, for some, FDA’s record for their product code to match on, and they join a Part D name marked * only when that product record’s route is the one the name’s rows share.</li>
 <li id="limit-nadac"><strong>NADAC is a survey average.</strong> It is what retail community pharmacies paid on average in CMS’s survey. A given pharmacy may pay more or less, and NADAC says nothing about what a patient pays.</li>
+<li id="limit-cost-plus"><strong>The cost-plus estimate is a model.</strong> It applies one online pharmacy’s published markup and fee to NADAC, which is a survey average of what retail pharmacies pay, not what that pharmacy pays. Its real prices can be higher or lower, it charges shipping, and other pharmacies price in other ways. So the estimate says what a cost-plus price could look like, not what you will be charged (<a href="#cost-plus">the rule</a>).</li>
 <li id="limit-dates"><strong>Dates are UTC calendar dates.</strong> The page counts every age against today’s UTC date, read from the viewer’s device clock, so the time zone never changes an age; near midnight UTC an age can differ by a day from the viewer’s local calendar. A device clock set behind can make a file look dated tomorrow; its age is then shown as 0 days. <a href="https://github.com/destinjones/openbill/blob/main/docs/DATA-QUALITY.md#dates">DATA-QUALITY.md</a> gives each source’s age on the day it was retrieved.</li>
 <li id="limit-browser"><strong>Older browsers cannot open it.</strong> The page carries its data compressed (deflate-raw, then base64) and unpacks it with the browser’s own DecompressionStream, which reads that format from Chrome 103, Edge 103, Firefox 113 and Safari 16.4. An older browser cannot unpack it; the page then says so in plain words and shows no figures rather than wrong ones.</li>
 </ul>
@@ -1459,8 +1724,9 @@ node --test</code></pre>
 <li><a href="methodology.html">Methodology</a></li>
 <li><a href="https://github.com/destinjones/openbill" rel="noopener">Source code on GitHub</a></li>
 <li><a href="data/drugs.json">data/drugs.json</a></li>
+<li><a href="https://destinjones.github.io/openbill/drugs/a/">Browse every drug A–Z</a> <span class="mono">(on the website)</span></li>
 </ul>
-<p class="mono build-line">build abd9930b8410</p>
+<p class="mono build-line">build 0c3902448001</p>
 </footer>
 </body>
 </html>

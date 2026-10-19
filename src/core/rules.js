@@ -7,13 +7,30 @@
 // record; the page shows the reason ("We don't know yet") rather than a zero.
 
 import { makeRecord, deriveRecord, validateRecord, weakestState } from './provenance.js';
-import { multiplyMoney, roundMoney, divideMoney, multiplyDecimal, subtractDecimal, roundHalfUp, decimalString, quantityProblem, formatMoney, formatUnitPrice, formatMultiple, formatMultipleWithin, formatCount, formatPercent } from './money.js';
+import { multiplyMoney, roundMoney, divideMoney, multiplyDecimal, subtractDecimal, roundHalfUp, decimalString, quantityProblem, formatMoney, formatUnitPrice, formatMultiple, formatMultipleWithin, formatCount, formatPercent, formatDecimal } from './money.js';
 import { daysBetween, isIsoDate, parsePeriod } from './dates.js';
 import { SOURCE_INFO } from './sources.js';
 import { formatNdc, isNdc11 } from './ndc.js';
 
-/** Starting quantity for products NADAC prices per EA (see defaultQuantity). */
+/** Starting quantity for oral tablets and capsules NADAC prices per EA (see defaultQuantity). */
 export const DEFAULT_EA_QUANTITY = 30;
+
+/** Starting quantity for anything else NADAC prices per EA: kits, pens, syringes, vials, patches … */
+export const DEFAULT_EA_OTHER_QUANTITY = 1;
+
+/**
+ * The fewest identical bottles, tubes, vials, jars or ampules in a carton, box, package or tray
+ * that make it a wholesale multi-pack, whose one inner unit a card priced per ML or GM starts at
+ * (packageStart(), decision 49).
+ */
+export const WHOLESALE_MIN_UNITS = 10;
+
+/** The quantity buttons a card offers next to the number box (defaultQuantity().chips). */
+export const QUANTITY_CHIPS = Object.freeze({
+  oral: Object.freeze([30, 60, 90]),
+  other: Object.freeze([1, 2, 3]),
+  none: Object.freeze([]),
+});
 
 /** An estimated spread at or above this multiple carries the extreme-gap caveat. */
 export const EXTREME_HIGH = 20;
@@ -49,6 +66,62 @@ export function formatSpreadMultiple(ratio) {
 const days = (n) => `${formatCount(n)} day${n === 1 ? '' : 's'}`;
 
 /**
+ * The parameters of the cost-plus estimate (docs/ARCHITECTURE.md, "The cost-plus estimate"):
+ * what a pharmacy pricing the way Cost Plus Drugs publicly describes (its cost, plus a 15%
+ * markup, plus a flat pharmacy fee) would charge if its cost were NADAC. These are the two
+ * parameters of a published pricing method, not prices: no Cost Plus Drugs price, and no
+ * figure Cost Plus Drugs shows for other pharmacies, is stored anywhere in OpenBill. The
+ * estimate is never a "typical cash price", and there is no spread against it.
+ * `sources` say where each parameter comes from, for methodology.html to link.
+ * @type {Readonly<{ markup_pct: number, fee_usd: number, basis: string, description: string, sources: readonly { label: string, url: string }[] }>}
+ */
+export const COST_PLUS = Object.freeze({
+  markup_pct: 15,
+  fee_usd: 5,
+  basis: 'per fill',
+  description:
+    'Cost Plus Drugs publicly describes how it sets its prices: what it pays for a drug, plus a 15% markup, plus a pharmacy labor fee, plus shipping. KFF Health News coverage of the company (February 2023) describes the same method, with a lower labor fee than today’s. The $5.00 fee is the one the company’s own website showed on 2026-10-18. OpenBill takes only those two parameters, the 15% markup and the $5.00 fee per fill, and applies them to NADAC in place of Cost Plus Drugs’ own cost, which it does not publish per drug. It copies no price from Cost Plus Drugs.',
+  sources: Object.freeze([
+    Object.freeze({
+      label: 'KFF Health News, 17 February 2023: coverage of Mark Cuban Cost Plus Drug Company, describing its pricing as its cost plus a 15% markup, a pharmacy labor fee (lower in 2023 than today) and shipping',
+      url: 'https://kffhealthnews.org/news/article/mark-cuban-cost-plus-drugs-pharma-industry',
+    }),
+    Object.freeze({
+      label: 'Cost Plus Drugs’ own website, which showed a $5.00 pharmacy labor fee on 2026-10-18 (the source of the fee)',
+      url: 'https://www.costplusdrugs.com/',
+    }),
+  ]),
+});
+
+/** The most a reader can enter as what they paid, in dollars (paidComparison). */
+export const PAID_MAX_USD = 100000;
+
+/**
+ * What happens to the amount a reader types, said the same way on the card, in the rule and on
+ * methodology.html. The amount rides in the address after # (history.replaceState), so the
+ * browser's own history keeps it; OpenBill itself never sends or saves it.
+ */
+export const PAID_PRIVACY =
+  'OpenBill never sends or saves it; it is kept in this page’s address after the #, so your browser’s history keeps it like any other page you visit.';
+
+const COST_PLUS_FEE = formatMoney(COST_PLUS.fee_usd);
+const COST_PLUS_MARKUP = formatPercent(COST_PLUS.markup_pct);
+
+// Integer cents throughout: the markup is rounded half-up to the cent on its own, so a reader can
+// check each step from the figures on the card.
+function costPlusCents(packCents) {
+  const markup = divideMoney(multiplyDecimal(packCents, COST_PLUS.markup_pct), 100, 0);
+  const fee = Number(multiplyDecimal(COST_PLUS.fee_usd, 100));
+  return { markup, fee, total: packCents + markup + fee };
+}
+
+// The worked example in the cost-plus rule, computed from COST_PLUS so the wording cannot drift.
+const COST_PLUS_EXAMPLE = (() => {
+  const c = costPlusCents(1000);
+  return Object.freeze({ pack: 10, markup: divideMoney(c.markup, 100, 2), total: divideMoney(c.total, 100, 2) });
+})();
+
+/**
  * @typedef {object} Rule
  * @property {string} id           anchor on methodology.html (source_url of calculated records)
  * @property {string} title
@@ -70,9 +143,9 @@ export const RULES = Object.freeze([
   Object.freeze({
     id: 'default-quantity',
     title: 'Starting quantity',
-    summary: 'Starting quantity: 30 for a product priced per EA; one package for a product priced per ML or GM when every FDA package description of it agrees; otherwise 1.',
-    formula: 'per EA: 30; per ML or GM: the amount in one package, when every package description of the product agrees; otherwise 1',
-    description: `Before you type a quantity, each card fills one in for you. NADAC (National Average Drug Acquisition Cost, a weekly survey by CMS, the Centers for Medicare & Medicaid Services, of what retail pharmacies pay for drugs) prices each drug per EA (each: one tablet, capsule, patch or other single unit), per ML (milliliter) or per GM (gram). For EA the card starts at ${DEFAULT_EA_QUANTITY}, a common one-month supply of a once-a-day medicine. For ML and GM it starts at the amount in one package, read from the package description in the FDA NDC Directory (the U.S. Food and Drug Administration’s list of drug packages, each identified by its NDC, the National Drug Code printed on the package): “5 SYRINGE in 1 CARTON / 3 mL in 1 SYRINGE” is 15 mL. That is used only when every NDC of the product listed there gives the same amount; otherwise the card starts at 1. It is a starting point, not your prescription: change it to match what you were given.`,
+    summary: `Starting quantity: ${DEFAULT_EA_QUANTITY} for an oral tablet or capsule priced per EA; ${DEFAULT_EA_OTHER_QUANTITY} for anything else priced per EA; one package (one unit of a wholesale case or multi-pack) for a product priced per ML or GM when every FDA package description of it agrees; otherwise 1. A tablet or film taken under the tongue or against the cheek counts as oral.`,
+    formula: `per EA: ${DEFAULT_EA_QUANTITY} for an oral tablet, capsule, lozenge or troche, or a tablet or film taken under the tongue or against the cheek, else ${DEFAULT_EA_OTHER_QUANTITY}; per ML or GM: the amount in one package (in one inner unit of a wholesale case or multi-pack), when every package description of the product agrees; otherwise 1`,
+    description: `Before you type a quantity, each card fills one in for you. NADAC (National Average Drug Acquisition Cost, a weekly survey by CMS, the Centers for Medicare & Medicaid Services, of what retail pharmacies pay for drugs) prices each drug per EA (each: one tablet, capsule, patch or other single unit), per ML (milliliter) or per GM (gram). For an oral tablet or capsule priced per EA it starts at ${DEFAULT_EA_QUANTITY}, a common one-month supply of a once-a-day medicine, with buttons for ${QUANTITY_CHIPS.oral.join(', ')}. That means every NDC of the product the FDA NDC Directory (the U.S. Food and Drug Administration’s list of drug packages, each identified by its NDC, the National Drug Code printed on the package) lists has a tablet or capsule dosage form of any kind (film coated, extended or delayed release, orally disintegrating, chewable), or is a lozenge or troche, with the route ORAL, or is a tablet or film with the route SUBLINGUAL or BUCCAL (taken under the tongue or against the cheek, and counted like one that is swallowed). When more than half of those NDCs are such a form and the product’s NADAC description says tablet or capsule, the others are treated as errors in FDA’s listing: the card starts at ${DEFAULT_EA_QUANTITY} and its explanation names each of them. For a product FDA does not list, its NADAC description must name such a form (TABLET, CAPSULE, CAPLET, SOFTGEL, ODT …) and no other form or route, except SL, SUBLINGUAL or BUCCAL next to a tablet or film. Anything else priced per EA, such as a kit, pen, syringe, vial, patch, inhaler or suppository, starts at ${DEFAULT_EA_OTHER_QUANTITY}, with buttons for ${QUANTITY_CHIPS.other.join(', ')}: ${DEFAULT_EA_QUANTITY} of them could be many months of supply, and for some of them NADAC’s EA is the whole package, for others one dose in it. When neither FDA nor the NADAC description says what the product is, the card starts at ${DEFAULT_EA_OTHER_QUANTITY} too and says so. For ML and GM it starts at the amount in one package, read from the package description in the FDA NDC Directory: “5 SYRINGE in 1 CARTON / 3 mL in 1 SYRINGE” is 15 mL. When that package is a wholesale pack (a shipping case, or a carton, box, package or tray of at least ${WHOLESALE_MIN_UNITS} identical bottles, tubes, vials, jars or ampules), it counts the amount in one of them instead: “40 CARTON in 1 CASE / 1 BOTTLE in 1 CARTON / 60 g in 1 BOTTLE” is 60 g, not 2,400 g. That is used only when every NDC of the product listed there gives the same amount; otherwise the whole packages decide, and when those differ too the card starts at 1. It is a starting point, not your prescription: change it to match what you were given.`,
   }),
   Object.freeze({
     id: 'reference-price',
@@ -127,6 +200,20 @@ export const RULES = Object.freeze([
     summary: `A Part D spread says so when this product’s NADAC is ${NAME_OUTLIER_FACTOR} or more times the NADAC of the other products CMS averages under the same name.`,
     formula: `middle NADAC of this product ÷ middle of the other products’ middle NADACs under the same Part D name ≥ ${NAME_OUTLIER_FACTOR} → add a warning`,
     description: `Part D gives one average for every product sold under a brand and generic name, weighted by claims. When one product costs far more than the others under that name (a specialty formulation or an uncommon strength of a cheap generic, for example), the average can mostly reflect what the others cost, and a spread against it then says little about this product. So OpenBill compares the middle NADAC price of this product’s NDCs with the middle of the other products’ own middle prices under the same name, per the same unit (the lower of the two middle prices when there is an even number, so the comparison is between real filed prices). When this product is ${NAME_OUTLIER_FACTOR} or more times the others, the spread says so with both prices. The spread is still shown; the join is not refused, because many such names really do average strengths that sit close together.`,
+  }),
+  Object.freeze({
+    id: 'cost-plus',
+    title: 'Cost-plus estimate',
+    summary: `Cost-plus estimate: what pharmacies pay for the pack (NADAC), plus ${COST_PLUS_MARKUP}, plus a ${COST_PLUS_FEE} pharmacy fee ${COST_PLUS.basis}, shipping not included; a model of a published pricing method, not a price any pharmacy quoted.`,
+    formula: `cost-plus estimate = quantity × NADAC price per unit, rounded half-up to the cent, + ${COST_PLUS_MARKUP} of that, rounded half-up to the cent, + ${COST_PLUS_FEE} ${COST_PLUS.basis} (shipping not included)`,
+    description: `No free source of the prices pharmacies charge people paying cash may be reused: the companies and pharmacies that publish those prices forbid storing or copying them. So OpenBill shows no one’s cash price. Instead it works out what a pharmacy would charge if it priced the way Cost Plus Drugs, an online pharmacy, publicly describes (what it pays for a drug, plus a ${COST_PLUS_MARKUP} markup, plus a flat pharmacy fee) and paid what NADAC says pharmacies pay: the pack total at NADAC, rounded to the cent, plus ${COST_PLUS_MARKUP} of it, rounded to the cent, plus ${COST_PLUS_FEE} ${COST_PLUS.basis}. For example, if pharmacies pay ${formatMoney(COST_PLUS_EXAMPLE.pack)} for a pack, the estimate is ${formatMoney(COST_PLUS_EXAMPLE.pack)} + ${formatMoney(COST_PLUS_EXAMPLE.markup)} + ${COST_PLUS_FEE} = ${formatMoney(COST_PLUS_EXAMPLE.total)}. It is always labelled estimated. It is a model, not a price any pharmacy quoted, and not a typical price: Cost Plus Drugs’ own costs differ from NADAC, other pharmacies price differently, and shipping is not included. OpenBill copies no price from Cost Plus Drugs. There is no spread against this estimate, because it is built from NADAC itself: for a cheap generic the ${COST_PLUS_FEE} fee alone can make it many times NADAC.`,
+  }),
+  Object.freeze({
+    id: 'what-you-paid',
+    title: 'What you paid',
+    summary: 'What you paid: the amount you type for this pack, divided by what pharmacies pay for it (NADAC) and by the cost-plus estimate.',
+    formula: 'your multiple = what you paid ÷ what pharmacies pay for the pack; and what you paid ÷ the cost-plus estimate for the pack',
+    description: `You can type what you were charged for the pack shown on a card. The card then shows it as a multiple of what pharmacies pay for that pack and of the cost-plus estimate, labelled as your number: 3.6× means you paid 3.6 times as much. When a product has several NDCs at different prices, the multiple is a range. The amount must be more than $0 and at most ${formatMoney(PAID_MAX_USD)}, in dollars and cents; otherwise the card says why and shows no multiple. Your number is worked out in your browser. ${PAID_PRIVACY} Browsers do not send the part after the # to the website; it is there so you can share your own card if you choose to, and a link you share carries your amount. Insurance, coupons and discounts change what different people pay, so a multiple is a question to ask your pharmacy, not proof of a mistake.`,
   }),
   Object.freeze({
     id: 'freshness',
@@ -262,6 +349,189 @@ export function unitTotal(record, qty) {
     reason: `${arithmetic} The price per unit: ${record.reason}`,
     per: record.per ? `${decimalString(qty)} ${record.per}` : undefined,
   });
+}
+
+/** The limitations every cost-plus estimate carries; they make it `estimated`. */
+export const COST_PLUS_CAVEATS = Object.freeze([
+  'This is a model, not a price any pharmacy quoted.',
+  'Cost Plus Drugs’ own costs differ from NADAC, and other pharmacies price differently.',
+  'Shipping is not included.',
+]);
+
+/**
+ * The cost-plus estimate for a pack (docs/ARCHITECTURE.md, "The cost-plus estimate"): what a
+ * pharmacy pricing the way Cost Plus Drugs publicly describes would charge if its cost were
+ * NADAC. In integer cents, each step rounded half-up to the cent:
+ *   pack = qty × NADAC per unit → cents; markup = pack × COST_PLUS.markup_pct ÷ 100 → cents;
+ *   estimate = pack + markup + COST_PLUS.fee_usd.
+ * A usd record, always `estimated` (COST_PLUS_CAVEATS), source_name "OpenBill calculation",
+ * source_url methodology.html#cost-plus, NADAC's source_file and dates, per "<qty> <unit>"
+ * like a pack total. Its reason gives the formula with the numbers. It is never a "typical
+ * cash price", and nothing compares a spread against it. Missing for an unusable quantity;
+ * throws if `nadacRecord` is not a valid usd record.
+ * @param {object} nadacRecord usd record per unit, e.g. row.nadac or summarizeProduct().nadac.min
+ * @param {number|string} qty
+ * @returns {object|Missing}
+ */
+export function costPlusEstimate(nadacRecord, qty) {
+  assertRecord(nadacRecord, 'usd', 'costPlusEstimate record');
+  const problem = quantityProblem(qty);
+  if (problem) return missing(problem);
+  const q = decimalString(qty);
+  const exact = multiplyDecimal(nadacRecord.value, q);
+  const packDollars = roundHalfUp(exact, 2);
+  const packCents = Number(multiplyDecimal(packDollars, 100));
+  const c = costPlusCents(packCents);
+  const value = divideMoney(c.total, 100, 2);
+  const cents = (n) => formatMoney(divideMoney(n, 100, 2));
+  const price = `${formatUnitPrice(nadacRecord.value)}${nadacRecord.per ? ` per ${nadacRecord.per}` : ''}`;
+  const packText =
+    packCents > 0
+      ? `${formatCount(Number(q))} × ${price} = ${cents(packCents)}${decimalString(packDollars) === exact ? '' : ` (exactly $${formatDecimal(exact)}, rounded half-up to the cent)`}, what pharmacies pay for the pack by NADAC`
+      : `${formatCount(Number(q))} × ${price} = $${formatDecimal(exact)}, what pharmacies pay for the pack by NADAC, which is under half a cent and counts as $0.00 here`;
+  const detail = `${packText}; plus a ${COST_PLUS_MARKUP} markup, ${cents(c.markup)}; plus a ${COST_PLUS_FEE} pharmacy fee ${COST_PLUS.basis}: ${cents(packCents)} + ${cents(c.markup)} + ${cents(c.fee)} = ${formatMoney(value)}`;
+  return deriveRecord({
+    value,
+    kind: 'usd',
+    per: nadacRecord.per ? `${q} ${nadacRecord.per}` : undefined,
+    rule: ruleFor('cost-plus'),
+    inputs: [nadacRecord],
+    labels: ['what pharmacies pay per unit'],
+    comparable: false,
+    caveats: [...COST_PLUS_CAVEATS],
+    detail,
+  });
+}
+
+// "$12", "12.5", ".50", "1,234.56", "$ 12.00": dollars, an optional "$", thousands commas only in
+// their places, and at most two digits after the point.
+const PAID_RE = /^\$?\s*(\d{1,3}(?:,\d{3})+|\d*)(?:\.(\d*))?$/;
+
+// Longest text parsePaid() reads at all. "$100,000.00" is 11 characters; anything much longer is
+// not an amount a person typed, and is refused before any arithmetic, so a crafted &paid= in a
+// link cannot make the decimal maths allocate huge numbers (a BigInt RangeError in WebKit and
+// Firefox, about a second in V8).
+export const PAID_MAX_CHARS = 32;
+
+function paidProblem(paid) {
+  const ask = 'Type what you paid for this pack in dollars and cents, like 12.50.';
+  if (paid === undefined || paid === null || (typeof paid === 'string' && paid.trim() === '')) return { problem: `No amount entered. ${ask}` };
+  let text;
+  if (typeof paid === 'number') {
+    if (!Number.isFinite(paid)) return { problem: `That is not an amount in dollars. ${ask}` };
+    text = decimalString(paid);
+    if (text.startsWith('-')) return { problem: 'What you paid must be more than $0.' };
+  } else if (typeof paid === 'string') {
+    if (paid.length > PAID_MAX_CHARS * 4) return { problem: `That is too long to be an amount in dollars. ${ask}` };
+    text = paid.trim();
+    if (/^-/.test(text) || /^\$\s*-/.test(text)) return { problem: 'What you paid must be more than $0.' };
+  } else {
+    return { problem: `That is not an amount in dollars. ${ask}` };
+  }
+  if (text.length > PAID_MAX_CHARS) return { problem: `That is too long to be an amount in dollars. ${ask}` };
+  const m = PAID_RE.exec(text);
+  const frac = m && m[2] !== undefined ? m[2] : '';
+  if (!m || (m[1] === '' && frac === '')) return { problem: `That is not an amount in dollars. ${ask}` };
+  if (frac.length > 2) return { problem: `Use at most two digits after the point (dollars and cents). ${ask}` };
+  const whole = m[1].replace(/,/g, '').replace(/^0+(?=\d)/, '');
+  // More than six whole-dollar digits is over PAID_MAX_USD ($100,000) whatever follows.
+  if (whole.length > String(Math.trunc(PAID_MAX_USD)).length) return { problem: `OpenBill compares amounts up to ${formatMoney(PAID_MAX_USD)}; check the amount you typed.` };
+  const amount = `${whole || '0'}${frac ? `.${frac}` : ''}`;
+  const value = roundHalfUp(amount, 2);
+  if (!(value > 0)) return { problem: 'What you paid must be more than $0.' };
+  if (value > PAID_MAX_USD) return { problem: `OpenBill compares amounts up to ${formatMoney(PAID_MAX_USD)}; check the amount you typed.` };
+  return { value };
+}
+
+/**
+ * Read what the reader typed as what they paid: { valid: true, value } (dollars, a number with
+ * at most two decimals) or { valid: false, problem } (a plain sentence saying why, which never
+ * repeats what was typed). Accepts a number, or a string such as "12", "12.50", "$12.50" or
+ * "1,234.50"; the amount must be more than $0 and at most PAID_MAX_USD ($100,000.00).
+ * @param {*} paid
+ * @returns {{ valid: true, value: number } | { valid: false, problem: string }}
+ */
+export function parsePaid(paid) {
+  const r = paidProblem(paid);
+  return Object.freeze(r.problem ? { valid: false, problem: r.problem } : { valid: true, value: r.value });
+}
+
+function vsRange(paid, range, what) {
+  if (!range || range.missing === true) {
+    return missing(range && range.reason ? range.reason : `There is no ${what} to compare with.`);
+  }
+  const lo = range.min;
+  const hi = range.max;
+  if (!lo || !hi || lo.missing || hi.missing) return missing((lo && lo.reason) || (hi && hi.reason) || `There is no ${what} to compare with.`);
+  assertRecord(lo, 'usd', `paidComparison ${what} min`);
+  assertRecord(hi, 'usd', `paidComparison ${what} max`);
+  // Paying a fixed amount: the dearest pack gives the smallest multiple.
+  const min = divideMoney(paid, hi.value, 10);
+  const max = divideMoney(paid, lo.value, 10);
+  if (!(min > 0)) return missing(`What you paid is too small next to the ${what} to state as a multiple.`);
+  return Object.freeze({ min, max, same: min === max, inputs: Object.freeze([lo, hi]) });
+}
+
+// One multiple: "3.6× what pharmacies pay for this pack"; 0.95 to under 1.05 "about what …";
+// under 0.95 "20% less than what …" (as describeSpread words a spread).
+const percentLess = (r) => roundHalfUp(multiplyDecimal(subtractDecimal(1, r), 100), 0);
+
+function paidPhraseOne(r, whatText) {
+  if (r >= 1.05) return `${formatMultiple(r)} ${whatText}`;
+  if (r >= 0.95) return `about ${whatText}`;
+  const pct = percentLess(r);
+  return pct >= 100 ? `less than 1% of ${whatText}` : `${pct}% less than ${whatText}`;
+}
+
+// A range of multiples: one phrase when both ends read the same; "between 42% and 43% less
+// than …" when both are under 0.95 and neither rounds to 100% less; else "between A× and B× …".
+function paidPhrase(vs, whatText) {
+  const lo = paidPhraseOne(vs.min, whatText);
+  if (vs.same || lo === paidPhraseOne(vs.max, whatText)) return lo;
+  const depending = ', depending on the NDC';
+  if (vs.max < 0.95 && percentLess(vs.min) < 100) {
+    return `between ${percentLess(vs.max)}% and ${percentLess(vs.min)}% less than ${whatText}${depending}`;
+  }
+  return `between ${formatMultiple(vs.min)} and ${formatMultiple(vs.max)} ${whatText}${depending}`;
+}
+
+/**
+ * The reader's own number ("What were you charged?", docs/ARCHITECTURE.md): what they paid for
+ * the pack as a multiple of what pharmacies pay for it (NADAC) and of the cost-plus estimate.
+ * Pure; the amount is never stored or sent anywhere by this code.
+ *
+ * - paidUsd: what the reader typed (see parsePaid: more than $0, at most $100,000.00).
+ * - packRange: summarizeProduct().pack ({ min, max } of usd records) or Missing.
+ * - costPlusRange: summarizeProduct().cost_plus ({ min, max } of usd records) or Missing.
+ *
+ * Returns (frozen) { valid: false, problem } for an unusable amount, else
+ * { valid: true, paid, vs_pharmacy, vs_cost_plus, sentence }: vs_* is { min, max, same, inputs }
+ * (plain ratios: what you paid ÷ the dearest and the cheapest figure in the range; inputs are
+ * the records divided by, for their provenance) or Missing ({ missing: true, reason }) when
+ * there is nothing to compare with. sentence: "You paid 3.6× what pharmacies pay for this pack,
+ * and 1.9× the cost-plus estimate." Near 1 it says "about"; below 0.95 "N% less than"; a range
+ * says "between A and B …, depending on the NDC". The page labels the multiples "your number".
+ * Throws if a range holds records that are not valid usd records.
+ * @param {number|string} paidUsd
+ * @param {object} packRange
+ * @param {object} costPlusRange
+ * @returns {object}
+ */
+export function paidComparison(paidUsd, packRange, costPlusRange) {
+  const p = parsePaid(paidUsd);
+  if (!p.valid) return Object.freeze({ valid: false, problem: p.problem });
+  const vsPharmacy = vsRange(p.value, packRange, 'what pharmacies pay for this pack');
+  const vsCostPlus = vsRange(p.value, costPlusRange, 'cost-plus estimate');
+  let sentence;
+  if (!vsPharmacy.missing) {
+    sentence = `You paid ${paidPhrase(vsPharmacy, 'what pharmacies pay for this pack')}`;
+    sentence += vsCostPlus.missing ? '.' : `, and ${paidPhrase(vsCostPlus, 'the cost-plus estimate')}.`;
+  } else if (!vsCostPlus.missing) {
+    sentence = `You paid ${paidPhrase(vsCostPlus, 'the cost-plus estimate')}.`;
+  } else {
+    sentence = `We can’t compare what you paid yet: ${vsPharmacy.reason}`;
+  }
+  return Object.freeze({ valid: true, paid: p.value, vs_pharmacy: vsPharmacy, vs_cost_plus: vsCostPlus, sentence });
 }
 
 /**
@@ -473,9 +743,18 @@ export const PART_D_BLANK_FLAG_NOTE =
  * @property {string} [part_d_reason] why Part D is not used, when it is not
  */
 
+/**
+ * Said when a row has no Part D join. data/drugs.json does not record why the builder left a row
+ * unjoined (counts.part_d_unmatched has only the totals), and Part D often does have a row with the
+ * drug's name that was refused (mixed units, several routes or release forms, OTC), so this must
+ * not claim that no row exists.
+ */
+export const PART_D_UNMATCHED_REASON =
+  'OpenBill did not match this NDC to a usable Medicare Part D spending row. Either Part D has none for it, or the rows that share its name could not safely be tied to it (for example, they mix units, routes or release forms, or the drug is sold over the counter, which Part D does not cover).';
+
 function partDProblem(row) {
   const pd = row && row.part_d;
-  if (!pd) return 'No Medicare Part D spending row matched this drug by brand or generic name.';
+  if (!pd) return PART_D_UNMATCHED_REASON;
   if (pd.outlier === true) {
     return 'The Part D file flags this drug’s average spending per dosage unit as an outlier, so OpenBill does not use it as a reference price.';
   }
@@ -1060,33 +1339,341 @@ export function packageAmount(description) {
   return amount > 0 ? Object.freeze({ amount, unit }) : null;
 }
 
+// An outermost FDA package level that is a shipping case holds any number of inner units; a
+// carton, box, package or tray is a wholesale multi-pack only when it holds at least
+// WHOLESALE_MIN_UNITS identical bottles, tubes, vials, jars or ampules (decision 49).
+const CASE_CONTAINER_RE = /^CASE$/;
+const MULTI_PACK_CONTAINER_RE = /^(CARTON|BOX|PACKAGE|TRAY)$/;
+const MULTI_PACK_UNIT_RE = /^(BOTTLE|TUBE|VIAL|JAR|AMPULE)\b/;
+
+/**
+ * What a one-package start reads from an FDA NDC Directory package description:
+ * { amount, unit, pack } (frozen), or null when packageAmount() gives null. For an ordinary
+ * package, amount is packageAmount()'s and pack is null. When the outermost level is plainly a
+ * wholesale multi-pack of identical inner units, amount is that of ONE inner unit and pack is
+ * { count, inner, outer, whole } (FDA's words; whole = the whole package's amount):
+ * - a shipping case: "40 CARTON in 1 CASE / 1 BOTTLE in 1 CARTON / 60 g in 1 BOTTLE" → 60 g;
+ * - a carton, box, package or tray of at least WHOLESALE_MIN_UNITS bottles, tubes, vials, jars
+ *   or ampules whose amount is printed on the next level: "25 VIAL in 1 CARTON / 4 mL in 1 VIAL" → 4 mL.
+ * The inner unit's amount must read on its own in the same unit; otherwise the whole package counts.
+ * @param {*} description
+ * @returns {{ amount: number, unit: 'ML'|'GM', pack: { count: number, inner: string, outer: string, whole: number } | null } | null}
+ */
+export function packageStart(description) {
+  const whole = packageAmount(description);
+  if (!whole) return null;
+  const plain = Object.freeze({ amount: whole.amount, unit: whole.unit, pack: null });
+  const levels = description.trim().split(' / ');
+  if (levels.length < 2) return plain;
+  const [, n, inner, , outer] = PACKAGE_LEVEL_RE.exec(levels[0].trim());
+  const count = Number(n);
+  if (!Number.isInteger(count) || count < 2) return plain;
+  const isCase = CASE_CONTAINER_RE.test(outer);
+  const isMulti = MULTI_PACK_CONTAINER_RE.test(outer) && MULTI_PACK_UNIT_RE.test(inner) && levels.length === 2 && count >= WHOLESALE_MIN_UNITS;
+  if (!isCase && !isMulti) return plain;
+  const one = packageAmount(levels.slice(1).join(' / '));
+  if (!one || one.unit !== whole.unit) return plain;
+  return Object.freeze({ amount: one.amount, unit: one.unit, pack: Object.freeze({ count, inner, outer, whole: whole.amount }) });
+}
+
+// FDA dosage forms (DOSAGEFORMNAME) that are an oral solid when FDA's route is ORAL: tablets and
+// capsules of every kind (film coated, extended or delayed release, orally disintegrating,
+// chewable …), lozenges and troches.
+const ORAL_SOLID_FORM_RE = /^(TABLET|CAPSULE|LOZENGE|TROCHE)\b/;
+
+// FDA dosage forms that count as an oral solid too when FDA's route puts them under the tongue or
+// against the cheek (SUBLINGUAL, BUCCAL): tablets of every kind and films (decision 49).
+const MOUTH_SOLID_FORM_RE = /^(TABLET|FILM)\b/;
+const MOUTH_ROUTES = Object.freeze(['SUBLINGUAL', 'BUCCAL']);
+
+// FDA dosage forms whose single unit is the thing itself, so one EA is one of it: [form, one, many].
+// Kits and forms of a substance (an injection, a powder, a solution, a spray …) are not here:
+// NADAC's EA for them may be the whole package or one dose in it (ADVAIR DISKUS is priced per
+// blister, AFREZZA kits per cartridge), so the card does not name what one EA is.
+const COUNTED_FORMS = Object.freeze([
+  [/^TABLET\b/, 'tablet', 'tablets'],
+  [/^CAPSULE\b/, 'capsule', 'capsules'],
+  [/^LOZENGE\b/, 'lozenge', 'lozenges'],
+  [/^TROCHE\b/, 'troche', 'troches'],
+  [/^SUPPOSITORY\b/, 'suppository', 'suppositories'],
+  [/^PATCH\b/, 'patch', 'patches'],
+  [/^FILM\b/, 'film', 'films'],
+  [/^RING\b/, 'ring', 'rings'],
+  [/^INSERT\b/, 'insert', 'inserts'],
+  [/^IMPLANT\b/, 'implant', 'implants'],
+  [/^GUM\b/, 'piece of gum', 'pieces of gum'],
+]);
+
+// Words in a NADAC description, for a product the FDA NDC Directory does not list: an oral solid's
+// form ([word, one, many]), and words that say it is something else or taken another way.
+const NAME_ORAL_WORDS = Object.freeze([
+  [/^(TABLETS?|TABS?|TB|ODT)$/, 'tablet', 'tablets'],
+  [/^(CAPSULES?|CAPS?)$/, 'capsule', 'capsules'],
+  [/^(CAPLETS?|CPLT)$/, 'caplet', 'caplets'],
+  [/^SOFTGELS?$/, 'softgel', 'softgels'],
+  [/^GELCAPS?$/, 'gelcap', 'gelcaps'],
+  [/^LOZENGES?$/, 'lozenge', 'lozenges'],
+  [/^TROCHES?$/, 'troche', 'troches'],
+]);
+// The NADAC words that name a tablet or capsule (not a lozenge or troche): the name check for an
+// FDA listing with an outlier NDC (decision 49).
+const NAME_TABLET_CAPSULE_NOUNS = Object.freeze(['tablet', 'capsule', 'caplet', 'softgel', 'gelcap']);
+// A NADAC word for a route under the tongue or against the cheek ("SL TABLET").
+const NAME_MOUTH_ROUTE_RE = /^(SL|SUBLINGUAL|BUCCAL)$/;
+const NAME_OTHER_WORDS = Object.freeze([
+  [/^(SUPP|SUPPOSITOR(Y|IES))$/, 'suppository', 'suppositories'],
+  [/^PATCH(ES)?$/, 'patch', 'patches'],
+  [/^FILMS?$/, 'film', 'films'],
+  [/^RINGS?$/, 'ring', 'rings'],
+  [/^INSERTS?$/, 'insert', 'inserts'],
+  [/^IMPLANTS?$/, 'implant', 'implants'],
+  // Not NASAL or TOPICAL: "NASAL DECONG PE 10 MG TAB" is a tablet taken by mouth.
+  [/^(SL|SUBLINGUAL|BUCCAL|VAGINAL|RECTAL|OPHTH\w*|OTIC|INHAL\w*|INH|KIT|KT|SYRINGES?|SYRG|SYRNG|SYR|PENS?|\w+PEN|VIALS?|VL|AMPULE?S?|CARTRIDGES?|AUTO-?INJ\w*|INJ\w*|SPRAY|GEL|CREAM|DEVICE|NEBULES?)$/, null, null],
+]);
+
+const UNIT_NOUN = Object.freeze(['unit (EA)', 'units (EA)']);
+
+function quoteList(values) {
+  return values.map((v) => `“${v}”`).join(', ');
+}
+
+function routeParts(route) {
+  return String(route || '')
+    .split(';')
+    .map((x) => x.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+/**
+ * Whether one FDA identity is a daily solid: 'oral' (a tablet, capsule, lozenge or troche with
+ * route ORAL alone), 'mouth' (a tablet or film whose route is SUBLINGUAL or BUCCAL, with or
+ * without ORAL, and nothing else), or null.
+ */
+function dailySolidKind(identity) {
+  const form = String(identity.dosage_form || '').trim().toUpperCase();
+  const parts = routeParts(identity.route);
+  if (!parts.length) return null;
+  if (ORAL_SOLID_FORM_RE.test(form) && parts.every((x) => x === 'ORAL')) return 'oral';
+  const mouthOnly = parts.every((x) => x === 'ORAL' || MOUTH_ROUTES.includes(x)) && parts.some((x) => MOUTH_ROUTES.includes(x));
+  if (MOUTH_SOLID_FORM_RE.test(form) && mouthOnly) return 'mouth';
+  return null;
+}
+
+function countedNoun(form) {
+  const hit = COUNTED_FORMS.find(([re]) => re.test(form));
+  return hit ? `${hit[1]}|${hit[2]}` : null;
+}
+
+function nameWords(name) {
+  return String(name || '')
+    .toUpperCase()
+    .split(/[^A-Z0-9-]+/)
+    .filter(Boolean);
+}
+
+function findWord(words, table) {
+  for (const w of words) {
+    const hit = table.find(([re]) => re.test(w));
+    if (hit) return { word: w, one: hit[1], many: hit[2] };
+  }
+  return null;
+}
+
+/**
+ * What one EA of a product priced per EA is, for its starting quantity and the words around it:
+ * { oral_solid, plain, some_oral, mouth, one, many, basis, forms, routes, listed, daily, outliers,
+ * word } (frozen). Pure.
+ * - With an FDA identity on any NDC (basis 'fda'): an NDC is a daily solid when its dosage form is
+ *   a tablet, capsule, lozenge or troche (ORAL_SOLID_FORM_RE) with route ORAL alone, or a tablet or
+ *   film (MOUTH_SOLID_FORM_RE) with route SUBLINGUAL or BUCCAL (`mouth` is true when such an NDC
+ *   counts). oral_solid when every listed NDC is one; or when more than half of the listed NDCs
+ *   are and the NADAC name says tablet or capsule, and then `outliers` lists the others
+ *   ({ ndc, dosage_form, route }, by NDC) and `word` is the name's word. `forms` and `routes` are
+ *   FDA's words for every listed NDC, `daily` ({ count, forms, routes }) those of the daily-solid
+ *   ones, `listed` how many NDCs FDA lists.
+ * - Otherwise from the NADAC description's words (basis 'name'): oral_solid when it has an oral
+ *   solid's word (TABLET, TAB, CAP, CAPLET, SOFTGEL, ODT, LOZENGE …) and none that says another
+ *   form or route (KIT, SYRINGE, VIAL, PATCH, VAGINAL …), or when its only such words are SL,
+ *   SUBLINGUAL or BUCCAL with a tablet or film (`mouth`); `word` is the word it went by.
+ * - When the words decide nothing (basis 'none'): not oral_solid.
+ * `plain` is true for an oral solid that is swallowed and has no outlier NDC, the case where the
+ * card needs no note under the quantity. one/many name the unit when one EA is plainly one of it
+ * (a tablet, a patch, a suppository); otherwise "unit (EA)", because for a kit, pen, syringe,
+ * vial or inhaler NADAC's EA may be the whole package or one dose in it.
+ * @param {object[]} rows the product's rows
+ */
+export function eaForm(rows) {
+  const make = (fields) => Object.freeze(fields);
+  const none = Object.freeze([]);
+  const listed = rows.filter((r) => r && r.identity);
+  const words = nameWords(rows[0] && rows[0].name);
+  if (listed.length) {
+    const formOf = (r) => String(r.identity.dosage_form || '').trim().toUpperCase();
+    const kinds = listed.map((r) => dailySolidKind(r.identity));
+    const daily = listed.filter((r, i) => kinds[i]);
+    const off = listed.filter((r, i) => !kinds[i]);
+    let word = null;
+    if (off.length && daily.length * 2 > listed.length) {
+      const hit = findWord(words, NAME_ORAL_WORDS);
+      if (hit && NAME_TABLET_CAPSULE_NOUNS.includes(hit.one)) word = hit.word;
+    }
+    const oralSolid = off.length === 0 || word !== null;
+    const nouns = [...new Set((oralSolid ? daily : listed).map((r) => countedNoun(formOf(r))))];
+    const [one, many] = nouns.length === 1 && nouns[0] ? nouns[0].split('|') : UNIT_NOUN;
+    const mouth = oralSolid && kinds.includes('mouth');
+    const fdaWords = (rs, key) => Object.freeze(distinctSorted(rs.map((r) => r.identity[key] && String(r.identity[key]).trim())));
+    const outliers = oralSolid
+      ? Object.freeze(
+          [...off]
+            .sort((a, b) => cmp(a.ndc, b.ndc))
+            .map((r) => Object.freeze({ ndc: r.ndc, dosage_form: r.identity.dosage_form || null, route: r.identity.route || null })),
+        )
+      : none;
+    return make({
+      oral_solid: oralSolid,
+      plain: oralSolid && !mouth && outliers.length === 0,
+      some_oral: daily.length > 0,
+      mouth,
+      one,
+      many,
+      basis: 'fda',
+      forms: fdaWords(listed, 'dosage_form'),
+      routes: fdaWords(listed, 'route'),
+      listed: listed.length,
+      daily: Object.freeze({ count: daily.length, forms: fdaWords(daily, 'dosage_form'), routes: fdaWords(daily, 'route') }),
+      outliers,
+      word,
+    });
+  }
+  const base = { basis: 'name', forms: none, routes: none, listed: 0, daily: Object.freeze({ count: 0, forms: none, routes: none }), outliers: none };
+  const oral = findWord(words, NAME_ORAL_WORDS);
+  const others = words.map((w) => findWord([w], NAME_OTHER_WORDS)).filter(Boolean);
+  const route = others.find((x) => NAME_MOUTH_ROUTE_RE.test(x.word));
+  if (route) {
+    // "SL TABLET", "BUCCAL FILM": a tablet or film taken under the tongue or against the cheek.
+    const film = others.find((x) => x.one === 'film');
+    const rest = others.filter((x) => x !== film && !NAME_MOUTH_ROUTE_RE.test(x.word));
+    const noun = oral && oral.one === 'tablet' && !film ? oral : film && !oral ? film : null;
+    if (noun && !rest.length) return make({ ...base, oral_solid: true, plain: false, some_oral: true, mouth: true, one: noun.one, many: noun.many, word: route.word });
+  }
+  const other = others[0] || null;
+  if (other) {
+    // A named form of its own (a patch) is counted as one; a route word (VAGINAL TABLET) keeps the oral word's noun.
+    const noun = other.one ? other : oral || null;
+    return make({ ...base, oral_solid: false, plain: false, some_oral: false, mouth: false, one: noun ? noun.one : UNIT_NOUN[0], many: noun ? noun.many : UNIT_NOUN[1], word: other.word });
+  }
+  if (oral) return make({ ...base, oral_solid: true, plain: true, some_oral: true, mouth: false, one: oral.one, many: oral.many, word: oral.word });
+  return make({ ...base, basis: 'none', oral_solid: false, plain: false, some_oral: false, mouth: false, one: UNIT_NOUN[0], many: UNIT_NOUN[1], word: null });
+}
+
+// How many of a product's n NDCs the FDA NDC Directory lists: "its NDC", "all 3 of its NDCs",
+// "2 of its 3 NDCs (it does not list the other one)".
+function listedCoverage(listed, n) {
+  if (listed === n) return n === 1 ? 'its NDC' : `all ${formatCount(n)} of its NDCs`;
+  const rest = n - listed;
+  return `${formatCount(listed)} of its ${formatCount(n)} NDCs (it does not list the other ${rest === 1 ? 'one' : formatCount(rest)})`;
+}
+
+// "under the tongue", "against the cheek", "under the tongue or against the cheek", from FDA's routes.
+function mouthPlace(routes) {
+  const parts = new Set(routes.flatMap(routeParts));
+  const where = [];
+  if (parts.has('SUBLINGUAL')) where.push('under the tongue');
+  if (parts.has('BUCCAL')) where.push('against the cheek');
+  return where.join(' or ');
+}
+
+const MOUTH_NOTE = 'OpenBill counts a tablet or film taken under the tongue or against the cheek as an oral solid, like one that is swallowed.';
+
+// The reason for a product priced per EA (see defaultQuantity).
+function eaReason(rows, f, qty) {
+  const n = rows.length;
+  const name = String(rows[0].name || '');
+  const unlisted = n === 1 ? 'its NDC' : `any of its ${formatCount(n)} NDCs`;
+  const counted = f.one !== UNIT_NOUN[0];
+  const change = 'change it to match your prescription.';
+  const named = (list, word) => `${word}${list.length === 1 ? '' : 's'} ${quoteList(list)}`;
+  if (f.oral_solid) {
+    const start = `The card starts at ${formatCount(qty)} ${f.many}, a common one-month supply of a once-a-day medicine; ${change}`;
+    const lead = f.mouth ? `${MOUTH_NOTE} ` : '';
+    if (f.basis === 'fda') {
+      const d = f.daily;
+      const place = f.mouth ? mouthPlace(d.routes) : '';
+      const each = counted ? f.one : f.mouth ? 'tablet or film' : 'tablet or capsule';
+      const forms = `${named(d.forms, 'dosage form')}, ${named(d.routes, 'route')}`;
+      if (!f.outliers.length) {
+        const what = f.mouth ? (counted ? `a ${f.one} taken ${place}` : `tablets or films taken ${place}`) : counted ? `an oral ${f.one}` : 'oral tablets or capsules';
+        return `NADAC prices this product per EA, and the FDA NDC Directory lists ${listedCoverage(f.listed, n)} as ${what} (${forms}), so one EA is one ${each}. ${lead}${start}`;
+      }
+      const whatMany = f.mouth ? (counted ? `${f.many} taken ${place}` : `tablets or films taken ${place}`) : counted ? `oral ${f.many}` : 'oral tablets or capsules';
+      const listing = (x) => `dosage form “${x.dosage_form || '(none given)'}” with ${x.route ? `route “${x.route}”` : 'no route'}`;
+      const o = f.outliers;
+      const odd =
+        o.length === 1
+          ? `It lists the other one, NDC ${showNdc(o[0].ndc)}, as ${listing(o[0])}. That matches neither the NADAC name nor the product’s other NDCs and looks like an error in the listing, so OpenBill goes by the majority.`
+          : `It lists the other ${formatCount(o.length)} differently: ${o.map((x) => `NDC ${showNdc(x.ndc)} as ${listing(x)}`).join('; ')}. Those match neither the NADAC name nor the product’s other NDCs and look like errors in the listing, so OpenBill goes by the majority.`;
+      return `NADAC prices this product per EA, and its NADAC name (“${name}”) says “${f.word}”. The FDA NDC Directory lists ${listedCoverage(f.listed, n)}, ${formatCount(d.count)} of them as ${whatMany} (${forms}), so one EA is one ${each}. ${odd} ${lead}${start}`;
+    }
+    if (f.mouth) {
+      const place = f.word === 'BUCCAL' ? 'against the cheek' : 'under the tongue';
+      return `NADAC prices this product per EA. The FDA NDC Directory does not list ${unlisted}, but its NADAC name (“${name}”) says “${f.word}”, a ${f.one} taken ${place}, so one EA is one ${f.one}. ${lead}${start}`;
+    }
+    return `NADAC prices this product per EA. The FDA NDC Directory does not list ${unlisted}, but its NADAC name (“${name}”) says “${f.word}”, an oral ${f.one}, so one EA is one ${f.one}. ${start}`;
+  }
+  const kit = f.forms.length > 0 && f.forms.every((x) => /^KIT\b/i.test(x));
+  const one = counted
+    ? `So the card starts at ${formatCount(qty)} ${f.one}, priced per ${f.one}, rather than guess how many make up a fill; ${change}`
+    : f.some_oral
+      ? `Its NDCs are listed as different dosage forms, so the card does not name what one EA is and starts at ${formatCount(qty)} ${f.one} rather than guess how many make up a fill; ${change}`
+      : `NADAC’s EA for it may be ${kit ? 'the whole kit or one item in it' : 'a whole package (such as a kit, pen, syringe, vial or inhaler) or one dose inside it'}, and the files do not say which. So the card starts at ${formatCount(qty)} ${f.one} rather than guess how many make up a fill; ${change}`;
+  const only = `Only a tablet, capsule, lozenge or troche with route “ORAL”, or a tablet or film with route “SUBLINGUAL” or “BUCCAL”, starts at ${DEFAULT_EA_QUANTITY}`;
+  if (f.basis === 'fda') {
+    const cov = f.listed === n ? (n === 1 ? 'its NDC' : `its ${formatCount(n)} NDCs`) : listedCoverage(f.listed, n);
+    const routes = f.routes.length ? named(f.routes, 'route') : 'no route';
+    let not = f.listed === 1 ? 'this is not one' : 'none of these is one';
+    if (f.some_oral) {
+      not = 'not all of its NDCs are one';
+      if (f.daily.count * 2 > f.listed) not += '; most are, but its NADAC name does not say tablet or capsule, so OpenBill does not set the others aside';
+    }
+    return `NADAC prices this product per EA, and the FDA NDC Directory lists ${cov} as dosage form${f.forms.length === 1 ? '' : 's'} ${f.forms.length ? quoteList(f.forms) : '(none given)'} with ${routes}. ${only}, and ${not}. ${one}`;
+  }
+  if (f.basis === 'name') {
+    return `NADAC prices this product per EA. The FDA NDC Directory does not list ${unlisted}, and its NADAC name (“${name}”) says “${f.word}”, and only an oral tablet or capsule (or a tablet or film taken under the tongue or against the cheek) starts at ${DEFAULT_EA_QUANTITY}. ${one}`;
+  }
+  return `NADAC prices this product per EA. The FDA NDC Directory does not list ${unlisted}, and its NADAC name (“${name}”) does not say whether it is an oral tablet or capsule, so the card starts at ${formatCount(qty)} rather than guess a month’s supply; ${change}`;
+}
+
 /**
  * The quantity a product card starts at, before the reader types one:
- * { qty, unit, reason } (frozen). Pure.
- * - Priced per EA: DEFAULT_EA_QUANTITY (30).
+ * { qty, unit, reason, chips, form } (frozen). Pure.
+ * - Priced per EA, an oral solid by eaForm() (tablets and capsules of any kind, lozenges and
+ *   troches, taken by mouth): DEFAULT_EA_QUANTITY (30), chips 30 / 60 / 90.
+ * - Priced per EA, anything else (kits, pens, syringes, vials, patches, inhalers, suppositories,
+ *   and products whose FDA listing and NADAC name do not say): DEFAULT_EA_OTHER_QUANTITY (1),
+ *   chips 1 / 2 / 3. A smaller start is the honest failure: 30 of something that is not a daily
+ *   tablet can be months of supply.
  * - Priced per ML or GM: the amount in one NDC, from packageAmount() of the FDA package
  *   description, when every NDC of the product with an identity gives the same amount in that
- *   unit and it is a usable quantity (at most 9999, at most 3 decimals); otherwise 1.
- * - NDCs priced per different units (unit null) or any other unit: 1.
- * The reason says which case applied and why, for the page to show next to the quantity.
+ *   unit and it is a usable quantity (at most 9999, at most 3 decimals); otherwise 1. No chips.
+ * - NDCs priced per different units (unit null) or any other unit: 1. No chips.
+ * `form` is eaForm() for a product priced per EA, else null. The reason says which case applied
+ * and why, naming the form, for the page to show next to the quantity.
  * @param {{ rows: object[] }|object[]} product a product from groupProducts() (search.js), or its rows
- * @returns {{ qty: number, unit: string|null, reason: string }}
+ * @returns {{ qty: number, unit: string|null, reason: string, chips: readonly number[], form: object|null }}
  */
 export function defaultQuantity(product) {
   const rows = Array.isArray(product) ? product : product && Array.isArray(product.rows) ? product.rows : null;
   if (!rows || rows.length === 0) throw new Error('defaultQuantity needs a product with at least one row');
-  const result = (qty, unit, reason) => Object.freeze({ qty, unit, reason });
+  const result = (qty, unit, reason, chips = QUANTITY_CHIPS.none, form = null) => Object.freeze({ qty, unit, reason, chips, form });
   const units = distinctSorted(rows.map((r) => r.unit));
   if (units.length !== 1) {
     return result(1, null, `This product’s NDCs are priced per different units (${units.join(', ')}), so there is no one quantity to start from; the card starts at 1.`);
   }
   const unit = units[0];
   if (unit === 'EA') {
-    return result(
-      DEFAULT_EA_QUANTITY,
-      'EA',
-      `NADAC prices this product per EA (each tablet, capsule or other single unit). The card starts at ${DEFAULT_EA_QUANTITY}, a common one-month supply of a once-a-day medicine; change it to match your prescription.`,
-    );
+    const form = eaForm(rows);
+    const qty = form.oral_solid ? DEFAULT_EA_QUANTITY : DEFAULT_EA_OTHER_QUANTITY;
+    return result(qty, 'EA', eaReason(rows, form, qty), form.oral_solid ? QUANTITY_CHIPS.oral : QUANTITY_CHIPS.other, form);
   }
   if (unit !== 'ML' && unit !== 'GM') {
     return result(1, unit, `NADAC prices this product per ${unit}, a unit OpenBill has no starting quantity for, so the card starts at 1 ${unit}.`);
@@ -1097,14 +1684,21 @@ export function defaultQuantity(product) {
   if (listed.length === 0) {
     return fallback('None of this product’s NDCs is in the FDA NDC Directory, so OpenBill cannot read how much one package holds.');
   }
-  const read = listed.map((r) => ({ row: r, a: packageAmount(r.identity.package_description) }));
+  let read = listed.map((r) => ({ row: r, a: packageStart(r.identity.package_description) }));
   const unread = read.find((x) => !x.a || x.a.unit !== unit);
   if (unread) {
     return fallback(
       `The FDA package description of NDC ${showNdc(unread.row.ndc)} (“${unread.row.identity.package_description}”) does not give one amount in ${word}, NADAC’s unit for this product.`,
     );
   }
-  const amounts = [...new Set(read.map((x) => x.a.amount))].sort((a, b) => a - b);
+  const distinctAmounts = (xs) => [...new Set(xs.map((x) => x.a.amount))].sort((a, b) => a - b);
+  let amounts = distinctAmounts(read);
+  if (read.some((x) => x.a.pack) && (amounts.length > 1 || quantityProblem(amounts[0]))) {
+    // Counting one inner unit of a wholesale pack must give one usable amount; otherwise the whole
+    // packages decide, as before decision 49.
+    read = read.map((x) => (x.a.pack ? { row: x.row, a: Object.freeze({ amount: x.a.pack.whole, unit: x.a.unit, pack: null }) } : x));
+    amounts = distinctAmounts(read);
+  }
   if (amounts.length > 1) {
     return fallback(`The FDA package descriptions of this product’s NDCs give different amounts (${amounts.map((n) => `${formatCount(n)} ${word}`).join(', ')}).`);
   }
@@ -1117,6 +1711,29 @@ export function defaultQuantity(product) {
         ? 'for this product’s NDC'
         : `for all ${formatCount(rows.length)} NDCs of this product`
       : `for the ${formatCount(listed.length)} of this product’s ${formatCount(rows.length)} NDCs it lists`;
+  const packs = read.filter((x) => x.a.pack);
+  if (packs.length) {
+    // A wholesale multi-pack counts one inner unit (decision 49), and the reason says so.
+    const amt = `${formatCount(qty)} ${word}`;
+    const lower = (s) => String(s).split(',')[0].trim().toLowerCase();
+    const plural = (s, k) => (k === 1 ? s : /(x|ch|sh|s)$/.test(s) ? `${s}es` : `${s}s`);
+    const describe = (x) => {
+      const p = x.a.pack;
+      const what = p.outer === 'CASE' ? 'a shipping case' : `a ${lower(p.outer)}`;
+      return `NDC ${showNdc(x.row.ndc)} (“${x.row.identity.package_description}”) is ${what} of ${formatCount(p.count)} ${plural(lower(p.inner), p.count)}, ${formatCount(p.whole)} ${word} in all`;
+    };
+    const plainOnes = read.filter((x) => !x.a.pack);
+    const packText =
+      packs.length === 1
+        ? `In the FDA NDC Directory, ${describe(packs[0])}: a wholesale pack of identical units, so OpenBill counts one ${lower(packs[0].a.pack.inner)} of it.`
+        : `In the FDA NDC Directory, ${formatCount(packs.length)} of this product’s NDCs are wholesale packs of identical units, so OpenBill counts one unit of each; for example, ${describe(packs[0])}.`;
+    const others = plainOnes.length
+      ? ` Its package description${plainOnes.length === 1 ? '' : 's'} of the other ${plainOnes.length === 1 ? 'NDC gives' : `${formatCount(plainOnes.length)} NDCs give`} ${amt} in one package (“${plainOnes[0].row.identity.package_description}”).`
+      : '';
+    const missing = rows.length - listed.length;
+    const unlisted = missing ? ` It does not list ${missing === 1 ? 'one of this product’s NDCs' : `${formatCount(missing)} of this product’s NDCs`}.` : '';
+    return result(qty, unit, `NADAC prices this product per ${unit}. ${packText}${others}${unlisted} So the card starts at one ${packs.length === 1 ? lower(packs[0].a.pack.inner) : 'unit'}: ${formatCount(qty)} ${unit}. Change it to match your prescription.`);
+  }
   return result(
     qty,
     unit,
@@ -1219,6 +1836,11 @@ function referencePack(using, pack) {
  *   with the NADAC record's state and source fields, or Missing); or Missing when the
  *   quantity is absent ("No quantity entered."), unusable, or the NDCs are priced per
  *   different units
+ * - cost_plus: { qty, min, max, same }, min/max = costPlusEstimate() of nadac.min/max for the
+ *   quantity (usd records, always `estimated`, source_url methodology.html#cost-plus; label it
+ *   "Cost-plus estimate", never a typical cash price; no spread is computed against it); same
+ *   is true when both round to the same cent. Missing exactly when `pack` is, with its reason.
+ *   Pass `pack` and `cost_plus` to paidComparison() for the reader's own number.
  * - reference: Missing, or { kind: 'part_d'|'part_b', label, tense: 'past'|'present',
  *   range: Range of usd records per NADAC unit, ndcs: string[] (the NDCs it covers),
  *   without: [{ ndc, reason }] (NDCs in this product without that kind of reference, and why),
@@ -1313,6 +1935,17 @@ export function summarizeProduct(rows, qty, opts = {}) {
           `These NDCs are priced per different units (${nadac.units.join(', ')}), so there is no single pack total for a quantity of ${decimalString(qty)}; see the price for each NDC.`,
         )
       : Object.freeze({ qty: Number(decimalString(qty)), min: unitTotal(nadac.min, qty), max: unitTotal(nadac.max, qty), same: nadac.same });
+  }
+
+  // The cost-plus estimate over the same NADAC range, for the same quantity; Missing whenever
+  // the pack total is (no quantity, an unusable one, or NDCs priced per different units).
+  let costPlus;
+  if (pack.missing) {
+    costPlus = pack;
+  } else {
+    const lo = costPlusEstimate(nadac.min, qty);
+    const hi = costPlusEstimate(nadac.max, qty);
+    costPlus = Object.freeze({ qty: pack.qty, min: lo, max: hi, same: lo.value === hi.value });
   }
 
   const kind = perNdc.some((x) => x.reference.kind === 'part_d') ? 'part_d' : perNdc.some((x) => x.reference.kind === 'part_b') ? 'part_b' : null;
@@ -1418,6 +2051,7 @@ export function summarizeProduct(rows, qty, opts = {}) {
     nadac_by_unit: rangesByUnit(perNdc.map((x) => x.nadac)),
     generic_nadac: generics.length ? rangeOf(generics) : null,
     pack,
+    cost_plus: costPlus,
     reference,
     spread: spreadSummary,
     coinsurance: coins.length ? rangeOf(coins) : null,

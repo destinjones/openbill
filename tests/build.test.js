@@ -19,9 +19,14 @@ import {
   DEFAULT_PRODUCT,
   TRY_PRODUCTS,
   SIZE_LIMIT,
+  OG_IMAGE,
+  socialMeta,
+  showcaseDescription,
 } from '../build.js';
-import { unpackDrugs } from '../src/core/pack.js';
-import { RULES } from '../src/core/rules.js';
+import { unpackDrugs, linkRows } from '../src/core/pack.js';
+import { RULES, summarizeProduct, partDNameContext } from '../src/core/rules.js';
+import { formatMoney } from '../src/core/money.js';
+import { SITE_URL } from '../src/core/config.js';
 
 const root = new URL('../', import.meta.url);
 const read = (rel) => readFileSync(new URL(rel, root), 'utf8');
@@ -132,6 +137,9 @@ test('no external scripts, styles or fonts; no style= attributes, inline handler
   const code = inlineScripts(built.files['openbill.html'])[0].body;
   assert.doesNotMatch(code, /\beval\s*\(|new Function\s*\(|setTimeout\s*\(\s*['"`]/, 'the bundle uses no eval');
   assert.doesNotMatch(code, /\bfetch\s*\(|XMLHttpRequest|WebSocket|sendBeacon|EventSource/, 'the bundle makes no network calls');
+  // "What were you charged?" is never stored or logged: the page keeps no browser storage at all
+  // and writes nothing to the console.
+  assert.doesNotMatch(code, /localStorage|sessionStorage|indexedDB|document\.cookie|caches\.open|console\.(log|info|debug|warn|error)\s*\(/, 'the bundle stores and logs nothing');
 });
 
 test('the inline data unpacks to exactly data/drugs.json', () => {
@@ -173,6 +181,73 @@ test('the build block carries the build id, the source dates, the default card a
   assert.equal(TRY_PRODUCTS.length, 4);
   for (const n of TRY_PRODUCTS) assert.ok(names.has(n), `${n} is a product in the data`);
   assert.ok(html.includes(`build ${built.buildId}`), 'the footer shows the build id');
+});
+
+// docs/ARCHITECTURE.md, "Showcase", and the owner's decision of 2026-10-18.
+test('the default card is the showcase, ARIPIPRAZOLE 10 MG TABLET at 30; metformin stays in the Try list', () => {
+  assert.deepEqual({ ...DEFAULT_PRODUCT }, { drug: 'ARIPIPRAZOLE 10 MG TABLET', qty: 30 });
+  assert.ok(TRY_PRODUCTS.includes('METFORMIN HCL 500 MG TABLET'));
+  assert.ok(!TRY_PRODUCTS.includes(DEFAULT_PRODUCT.drug), 'the Try list does not repeat the default card');
+  assert.equal(new Set(TRY_PRODUCTS).size, TRY_PRODUCTS.length);
+});
+
+function metaContent(html, attr, name) {
+  const m = new RegExp(`<meta ${attr}="${name.replace(/[.:]/g, (c) => `\\${c}`)}" content="([^"]*)">`).exec(html);
+  return m ? unescapeAttr(m[1]) : null;
+}
+
+test('both pages carry a canonical URL and link-preview tags; og:description is built from the showcase’s own figures', () => {
+  const doc = JSON.parse(read('data/drugs.json'));
+  const pages = { 'openbill.html': SITE_URL, 'methodology.html': `${SITE_URL}methodology.html` };
+  assert.equal(OG_IMAGE, `${SITE_URL}og/site.png`);
+  assert.match(SITE_URL, /^https:\/\/[^/]+\/.*\/$/);
+  for (const [rel, url] of Object.entries(pages)) {
+    const html = built.files[rel];
+    const head = html.slice(0, html.indexOf('</head>'));
+    const canon = [...head.matchAll(/<link rel="canonical" href="([^"]*)">/g)].map((m) => unescapeAttr(m[1]));
+    assert.deepEqual(canon, [url], `${rel}: one canonical URL`);
+    assert.equal(metaContent(head, 'property', 'og:url'), url, `${rel}: og:url`);
+    assert.equal(metaContent(head, 'property', 'og:image'), OG_IMAGE, `${rel}: og:image`);
+    assert.equal(metaContent(head, 'property', 'og:image:type'), 'image/png', `${rel}: og:image:type`);
+    assert.equal(metaContent(head, 'property', 'og:type'), 'website');
+    assert.equal(metaContent(head, 'name', 'twitter:card'), 'summary_large_image');
+    // SEO-13: the same image and alt text for every preview service.
+    assert.equal(metaContent(head, 'name', 'twitter:image'), OG_IMAGE, `${rel}: twitter:image`);
+    assert.ok(metaContent(head, 'property', 'og:image:alt'), `${rel}: og:image:alt`);
+    assert.equal(metaContent(head, 'name', 'twitter:image:alt'), metaContent(head, 'property', 'og:image:alt'), `${rel}: twitter:image:alt`);
+    const title = unescapeAttr(/<title>([^<]*)<\/title>/.exec(head)[1]);
+    assert.equal(metaContent(head, 'property', 'og:title'), title, `${rel}: og:title is the page title`);
+    assert.ok(metaContent(head, 'property', 'og:description'), `${rel}: og:description`);
+    // The tags are inert: the CSP still allows no image, and nothing is preloaded.
+    assert.match(cspOf(html), /img-src data:;/);
+  }
+  const desc = metaContent(built.files['openbill.html'], 'property', 'og:description');
+  assert.equal(desc, showcaseDescription(doc));
+  // Every number in it is the card's own, worked out here from the core.
+  const linked = linkRows(doc);
+  const s = summarizeProduct(
+    linked.filter((r) => r.name === DEFAULT_PRODUCT.drug),
+    DEFAULT_PRODUCT.qty,
+    { partDContext: partDNameContext(linked) },
+  );
+  assert.ok(desc.startsWith(`${DEFAULT_PRODUCT.drug}, quantity ${DEFAULT_PRODUCT.qty}: `), desc);
+  for (const part of [
+    `pharmacies pay ${formatMoney(s.pack.min.value)} (CMS NADAC eff. ${s.pack.min.effective_date}, ${s.pack.min.state})`,
+    // H4: Part D is an average over every strength and form of the name, and says so.
+    `Medicare Part D paid on average, across all strengths and forms of the name, ${formatMoney(s.reference.pack.min.value)}`,
+    `${s.spread.sentence.replace(/\.$/, '')} (${s.spread.state})`,
+    `cost-plus estimate ${formatMoney(s.cost_plus.min.value)} (estimated)`,
+  ]) {
+    assert.ok(desc.includes(part), `og:description has "${part}": ${desc}`);
+  }
+  assert.ok(desc.includes("Medicare's price is not your price."), 'a summary that shows the Medicare figure says it is not your price');
+  // SEO-2: both pages link the static A–Z index in their HTML, so crawlers can reach the drug pages.
+  for (const rel of Object.keys(pages)) assert.ok(built.files[rel].includes(`href="${SITE_URL}drugs/a/"`), `${rel}: a static link to the A–Z index`);
+  // Owner decision 2026-10-18: the estimate is never called a cash price.
+  for (const rel of Object.keys(pages)) assert.doesNotMatch(built.files[rel].slice(0, built.files[rel].indexOf('</head>')), /cash price/i);
+  assert.throws(() => socialMeta({ title: 't', description: 'd', url: 'http://example.com/' }), /https/);
+  assert.throws(() => socialMeta({ title: 't', description: 'd', url: SITE_URL, image: 'og/site.png' }), /https/);
+  assert.throws(() => showcaseDescription(doc, { drug: 'NOT A DRUG', qty: 30 }), /not in data/);
 });
 
 test('openbill.html stays under the size budget', () => {

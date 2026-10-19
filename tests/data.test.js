@@ -32,7 +32,11 @@ const RATE_CLASSES = ['G', 'B', 'B-ANDA', 'B-BIO'];
 const ROW_FIELDS = ['ndc', 'name', 'unit', 'otc', 'rate_class', 'explanation_codes', 'carried_forward', 'identity', 'nadac', 'part_d', 'part_b'];
 const ROW_OPTIONAL = ['generic_nadac'];
 const IDENTITY_FIELDS = ['source', 'package_ndc', 'proprietary_name', 'nonproprietary_name', 'dosage_form', 'route', 'strength', 'labeler', 'package_description'];
-const IDENTITY_OPTIONAL = ['rxcui'];
+// pharm_classes: FDA's PHARM_CLASSES for the row's FDA product, one entry per class, in FDA's
+// order; left out (never null or []) when FDA gives none. rxcui: reserved, not built yet.
+const IDENTITY_OPTIONAL = ['rxcui', 'pharm_classes'];
+/** One PHARM_CLASSES entry: a name, then its class type in brackets ("Factor Xa Inhibitor [EPC]"). */
+const PHARM_CLASS_RE = /^\S(?:.*\S)? \[[^[\]]+\]$/;
 const PART_D_REF_FIELDS = ['key', 'basis'];
 // Only when the row's * join depends on a route taken from FDA's product record (the FDA NDC
 // Directory does not list the NDC as a package of its own): route_from = "fda_product", route =
@@ -326,6 +330,12 @@ test('rows: every field and type per the contract', () => {
         }
         if (nonEmpty(id.package_ndc) && nonEmpty(id.package_description) && !id.package_description.includes(`(${id.package_ndc})`)) {
           problems.push(`${at}: identity.package_description does not name its package NDC ${id.package_ndc}`);
+        }
+        if (hasOwn(id, 'pharm_classes')) {
+          const pc = id.pharm_classes;
+          if (!Array.isArray(pc) || pc.length === 0) problems.push(`${at}: identity.pharm_classes must be a non-empty array (left out when FDA gives none), got ${JSON.stringify(pc)}`);
+          else if (pc.some((c) => !nonEmpty(c) || c !== c.trim() || !PHARM_CLASS_RE.test(c))) problems.push(`${at}: identity.pharm_classes ${JSON.stringify(pc)} must be non-empty strings "<name> [<type>]"`);
+          else if (new Set(pc).size !== pc.length) problems.push(`${at}: identity.pharm_classes ${JSON.stringify(pc)} repeats an entry`);
         }
       }
     }
@@ -790,6 +800,8 @@ test('counts that are simple counts equal the counts recomputed from the rows an
     records_by_state: sortKeys(tally(RECORDS.map((x) => x.rec.state))),
     distinct_names: new Set(rows.map((r) => r.name)).size,
     identity_matched: rows.filter((r) => isObj(r.identity)).length,
+    identity_with_pharm_classes: rows.filter((r) => isObj(r.identity) && hasOwn(r.identity, 'pharm_classes')).length,
+    epc_classes: new Set(rows.flatMap((r) => (isObj(r.identity) && Array.isArray(r.identity.pharm_classes) ? r.identity.pharm_classes : [])).filter((x) => x.endsWith(' [EPC]'))).size,
     part_d_matched: pd.length,
     part_d_by_basis: sortKeys(tally(pd.map((r) => r.part_d.basis))),
     part_d_by_rate_class: Object.fromEntries(
@@ -834,4 +846,105 @@ test('counts that are simple counts equal the counts recomputed from the rows an
   }
   assert.ok(compared >= 10, `only ${compared} counts were comparable; counts lost its summary keys`);
   noProblems(problems, 'counts');
+});
+
+// ---------------------------------------------------------------------------------------
+// identity.pharm_classes (docs/ARCHITECTURE.md, "Phase 2": the class pages use its [EPC] entries)
+
+test('counts.identity_with_pharm_classes and counts.epc_classes are present; ambiguous classes are a whole number within identity_matched', () => {
+  const c = doc.counts;
+  for (const k of ['identity_with_pharm_classes', 'epc_classes', 'identity_pharm_classes_ambiguous']) {
+    assert.ok(Number.isInteger(c[k]) && c[k] >= 0, `counts.${k} is a whole number`);
+  }
+  assert.ok(c.identity_with_pharm_classes + c.identity_pharm_classes_ambiguous <= c.identity_matched, 'rows with classes, plus ambiguous ones, are rows with an identity');
+  // Values are checked against the rows in "counts that are simple counts ..." above. Floors, so a
+  // build that silently lost the field fails: FDA NDC Directory file of this build, 24,902 of
+  // 27,083 identity rows, 329 distinct [EPC] classes.
+  assert.ok(c.identity_with_pharm_classes >= 0.8 * c.identity_matched, `only ${c.identity_with_pharm_classes} of ${c.identity_matched} identity rows carry pharm_classes`);
+  assert.ok(c.epc_classes >= 250, `only ${c.epc_classes} distinct [EPC] classes`);
+});
+
+test('identity.pharm_classes spot checks (FDA NDC Directory product.txt, PHARM_CLASSES, file of this build)', () => {
+  const byNdc = new Map(rows.map((r) => [r.ndc, r]));
+  const classes = (ndc) => {
+    const r = byNdc.get(ndc);
+    assert.ok(r && isObj(r.identity), `row ${ndc} has an FDA identity`);
+    return r.identity.pharm_classes;
+  };
+  // The contract's example: ELIQUIS 5 MG TABLET, 0003-0894-21, "Factor Xa Inhibitor [EPC], Factor Xa Inhibitors [MoA]".
+  assert.deepEqual(classes('00003089421'), ['Factor Xa Inhibitor [EPC]', 'Factor Xa Inhibitors [MoA]']);
+  // The showcase product: ARIPIPRAZOLE 10 MG TABLET, 0904-7368-06, "Atypical Antipsychotic [EPC]".
+  assert.deepEqual(classes('00904736806'), ['Atypical Antipsychotic [EPC]']);
+  // A class name holding ", " stays one entry: IBUPROFEN 800 MG TABLET, 0904-5855-40,
+  // "Anti-Inflammatory Agents, Non-Steroidal [CS], Cyclooxygenase Inhibitors [MoA], Nonsteroidal Anti-inflammatory Drug [EPC]".
+  assert.deepEqual(classes('00904585540'), ['Anti-Inflammatory Agents, Non-Steroidal [CS]', 'Cyclooxygenase Inhibitors [MoA]', 'Nonsteroidal Anti-inflammatory Drug [EPC]']);
+  // FDA repeats an entry once per active ingredient; each is kept once, in FDA's order:
+  // DEXTROAMPH-AMPHET ER 50 MG CAP, 57664-953-88, "Central Nervous System Stimulant [EPC]" x4, "Central Nervous System Stimulation [PE]" x4.
+  assert.deepEqual(classes('57664095388'), ['Central Nervous System Stimulant [EPC]', 'Central Nervous System Stimulation [PE]']);
+  // No row without an FDA identity carries classes (they belong to the identity object).
+  assert.ok(rows.every((r) => !hasOwn(r, 'pharm_classes')), 'pharm_classes is only ever inside identity');
+});
+
+// Independent of tools/build_drugs.py: reads FDA's product.txt and package.txt (standard library,
+// python -I) and prints, for each FDA package NDC given on stdin, the PHARM_CLASSES strings of the
+// product records package.txt lists it under.
+const FDA_PHARM = String.raw`
+import json, sys, zipfile
+want = set(json.loads(sys.stdin.read()))
+def table(z, name):
+    lines = z.read(name).decode("cp1252").split("\r\n")
+    head = lines[0].split("\t")
+    return [dict(zip(head, l.split("\t"))) for l in lines[1:] if l]
+with zipfile.ZipFile(sys.argv[1]) as z:
+    products = {p["PRODUCTID"]: p["PHARM_CLASSES"] for p in table(z, "product.txt")}
+    out = {}
+    for p in table(z, "package.txt"):
+        code = p["NDCPACKAGECODE"].strip()
+        if code in want and p["PRODUCTID"] in products:
+            out.setdefault(code, []).append(products[p["PRODUCTID"]])
+print(json.dumps(out))
+`;
+
+test("identity.pharm_classes is FDA's PHARM_CLASSES for the row's product, split into entries, or left out when FDA gives none (when the cache is present)", (t) => {
+  if (!existsSync(FDA_ZIP)) {
+    t.skip('tools/cache/ndctext.zip not present (the raw cache is never committed)');
+    return;
+  }
+  const exe = ['python3', 'python'].find((x) => spawnSync(x, ['-c', 'import sys; assert sys.version_info >= (3, 10)']).status === 0);
+  if (!exe) {
+    t.skip('Python 3.10+ is not on PATH');
+    return;
+  }
+  const want = rows.filter((r) => isObj(r.identity));
+  const out = spawnSync(exe, ['-I', '-c', FDA_PHARM, fileURLToPath(FDA_ZIP)], {
+    input: JSON.stringify(want.map((r) => r.identity.package_ndc)),
+    encoding: 'utf8',
+    maxBuffer: 1 << 27,
+  });
+  assert.equal(out.status, 0, out.stderr);
+  const fda = JSON.parse(out.stdout.trim().split('\n').pop());
+  // FDA joins entries with ", "; a ", " inside a class name ("Anti-Inflammatory Agents,
+  // Non-Steroidal [CS]") is not a boundary, since every entry ends with its bracketed type.
+  const entries = (s) => [...new Set(s.split(/ +/).join(' ').trim().split(/(?<=\]), /).filter(Boolean))];
+  const problems = [];
+  for (const r of want) {
+    const raw = fda[r.identity.package_ndc];
+    if (!raw) {
+      problems.push(`${r.ndc}: package ${r.identity.package_ndc} not found in package.txt`);
+      continue;
+    }
+    const lists = [...new Set(raw.map((s) => JSON.stringify(entries(s))))];
+    const pc = r.identity.pharm_classes;
+    if (lists.length !== 1) {
+      if (pc !== undefined) problems.push(`${r.ndc}: FDA lists the package under products with different PHARM_CLASSES, but the row carries ${JSON.stringify(pc)}`);
+      continue;
+    }
+    const expected = JSON.parse(lists[0]);
+    if (expected.length === 0) {
+      if (hasOwn(r.identity, 'pharm_classes')) problems.push(`${r.ndc}: FDA gives no PHARM_CLASSES, but the row carries ${JSON.stringify(pc)}`);
+    } else if (JSON.stringify(pc) !== JSON.stringify(expected)) {
+      problems.push(`${r.ndc} (${r.name}): pharm_classes ${JSON.stringify(pc)}, FDA's PHARM_CLASSES gives ${JSON.stringify(expected)}`);
+    }
+  }
+  noProblems(problems, 'identity.pharm_classes vs product.txt');
 });

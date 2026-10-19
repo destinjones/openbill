@@ -4,20 +4,20 @@
 import { esc, safeHref } from '../core/esc.js';
 import { unpackDrugs, linkRows } from '../core/pack.js';
 import { groupProducts, buildIndex, search, suggest, normalizeQuery } from '../core/search.js';
-import { summarizeProduct, partDNameContext, freshness, inputDates, rangesByUnit, isExtremeSpread, formatSpreadMultiple, HONESTY, RULES } from '../core/rules.js';
-import { formatMoney, formatUnitPrice, formatCount } from '../core/money.js';
+import { summarizeProduct, partDNameContext, freshness, inputDates, rangesByUnit, isExtremeSpread, formatSpreadMultiple, paidComparison, parsePaid, COST_PLUS, HONESTY, RULES, PAID_PRIVACY } from '../core/rules.js';
+import { formatMoney, formatUnitPrice, formatCount, formatMultiple } from '../core/money.js';
 import { formatValue, validateRecord, STATE_INFO } from '../core/provenance.js';
 import { formatNdc, isNdc11, looksLikeNdc, ndcCandidates } from '../core/ndc.js';
 import { SOURCE_INFO, NADAC_EXPLANATION_CODES } from '../core/sources.js';
 import { issueUrl } from '../core/report.js';
-import { REPO_URL } from '../core/config.js';
+import { REPO_URL, SITE_URL } from '../core/config.js';
+import { siteSlugs } from '../core/slug.js';
 import { isoDate, parsePeriod } from '../core/dates.js';
 import { sha256Hex } from '../core/sha256.js';
 
 const SCRIPT_START = performance.now();
 const RESULT_LIMIT = 20;
 const COUNT_LIMIT = 1000;
-const EA_CHIPS = ['30', '60', '90'];
 const INLINE_FORMAT = 'openbill.inline/1';
 const CALCULATION = 'OpenBill calculation';
 const CANNOT_UNPACK = 'This browser cannot unpack the inline data (it has no DecompressionStream for deflate-raw). A current Firefox, Chrome, Edge or Safari can.';
@@ -32,10 +32,15 @@ const app = {
   partDContext: null, // partDNameContext(rows): each Part D name's products, for nameOutlier()
   index: null,
   today: null,
-  current: null, // { product, qty: string, ndc?: string }
+  // { product, qty: string, paid: string, paidNote: string|null, summary }. `paid` is what the
+  // reader typed as what they were charged: kept in memory and in the address after # only
+  // (so the browser's history has it), never saved or sent by OpenBill.
+  current: null,
   cache: new Map(), // product name → summarizeProduct(rows) without a quantity
   priceCache: new Map(), // product name → NADAC ranges per unit, for search results
   announce: null, // timer for the card's status message
+  paidTimer: null, // timer for the "What were you charged?" result
+  slugs: null, // product name → its website slug (siteSlugs, as tools/site.mjs builds the pages)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -206,15 +211,18 @@ function caveatsOf(rec) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Hash state: #drug=<name>&qty=<n>
+// Hash state: #drug=<name>&qty=<n>&paid=<dollars>. `paid` is the reader's own number; the part
+// after # never leaves the browser, and it is the only place the page keeps that number.
 
-function hashFor(name, qty) {
-  return `#drug=${encodeURIComponent(name)}${qty === undefined || qty === null || qty === '' ? '' : `&qty=${encodeURIComponent(String(qty))}`}`;
+function hashFor(name, qty, paid) {
+  const q = qty === undefined || qty === null || qty === '' ? '' : `&qty=${encodeURIComponent(String(qty))}`;
+  const p = paid ? `&paid=${encodeURIComponent(paid)}` : '';
+  return `#drug=${encodeURIComponent(name)}${q}${p}`;
 }
 
 function readHash() {
   const raw = location.hash.replace(/^#/, '');
-  if (!raw) return { drug: app.build.default.drug, qty: String(app.build.default.qty), fromHash: false };
+  if (!raw) return { drug: app.build.default.drug, qty: String(app.build.default.qty), paid: null, fromHash: false };
   let params;
   try {
     params = new URLSearchParams(raw);
@@ -224,7 +232,38 @@ function readHash() {
   const drug = params.get('drug');
   if (drug === null || drug.trim() === '') return { error: 'The address names no drug (it needs #drug=<name>).' };
   const qty = params.get('qty');
-  return { drug, qty: qty === null ? null : qty, fromHash: true };
+  return { drug, qty: qty === null ? null : qty, paid: params.get('paid'), fromHash: true };
+}
+
+// The reader's amount (typed, or from a link's &paid=) is untrusted: if the core ever threw on
+// one, that must cost only the comparison, never the card or the search box.
+const PAID_UNREADABLE = 'That amount could not be read. Type what you paid for this pack in dollars and cents, like 12.50.';
+
+function safeParsePaid(text) {
+  try {
+    return parsePaid(text);
+  } catch {
+    return { valid: false, problem: PAID_UNREADABLE };
+  }
+}
+
+function safePaidComparison(paid, pack, costPlus) {
+  try {
+    return paidComparison(paid, pack, costPlus);
+  } catch {
+    return { valid: false, problem: PAID_UNREADABLE };
+  }
+}
+
+/** What the reader typed, as it goes in the address: "12.50" when it is a usable amount, else ''. */
+function paidForHash(text) {
+  const p = safeParsePaid(text);
+  return p.valid ? p.value.toFixed(2) : '';
+}
+
+function currentHash() {
+  const c = app.current;
+  return hashFor(c.product.name, c.qty, paidForHash(c.paid));
 }
 
 function replaceHash(hash) {
@@ -286,6 +325,59 @@ ${provLines(s.nadac.records)}</section>`;
 <p class="fig-value"><span class="amount" data-figure="pharmacy">${esc(moneyRange(p.min, p.max, p.same))}</span> ${chip(state)}${stale ? ` ${staleChip()}` : ''}</p>
 <p class="arith mono">${esc(`${formatCount(p.qty)} × ${unitRange(s.nadac)}`)}${p.same ? '' : `<span class="arith-note"> (the ${esc(formatCount(s.counts.rows))} NDCs differ)</span>`}</p>
 ${provLines(s.nadac.records)}</section>`;
+}
+
+/** The NADAC records the cost-plus estimate is built from (its range's ends), dated. */
+function costPlusInputs(s) {
+  const recs = s.nadac.same ? [s.nadac.min] : [s.nadac.min, s.nadac.max];
+  return inputDates(recs.map((record) => ({ label: 'NADAC', record })));
+}
+
+/**
+ * "$3.35 (NADAC) × 1.15 + $5.00 fee", from COST_PLUS and the pack total printed just above (itself
+ * "30 × $0.11173"). It starts from the pack total in cents, as costPlusEstimate() does, so working
+ * it out gives the card's own figure to the cent: "30 × $0.11173 × 1.15 + $5.00" rounded once
+ * would be a cent away for about three products in ten. The exact steps are in the record's reason.
+ */
+function costPlusFormula(s) {
+  const a = formatMoney(s.pack.min.value);
+  const b = formatMoney(s.pack.max.value);
+  const factor = String((100 + COST_PLUS.markup_pct) / 100);
+  const base = s.pack.same || a === b ? `${a} (NADAC)` : `(${a} to ${b}, NADAC)`;
+  return `${base} × ${factor} + ${formatMoney(COST_PLUS.fee_usd)} fee`;
+}
+
+/**
+ * The cost-plus line's source line: "OpenBill calculation from NADAC eff. 2026-09-23 (file of
+ * 2026-10-14)". Short on purpose, so the spread stays on a phone's first screen: its input is the
+ * NADAC figure printed just above, whose own line names the file and the retrieved date, and the
+ * record in "Sources and method" carries every field.
+ */
+function costPlusSourceText(s) {
+  const parts = costPlusInputs(s).map((i) => `${i.label} eff. ${i.effective_dates.join(', ')}${i.as_of_dates.length ? ` (file of ${i.as_of_dates.join(', ')})` : ''}`);
+  return `${CALCULATION} from ${parts.join('; ')}`;
+}
+
+const COST_PLUS_WHAT = `What a pharmacy that paid NADAC and charged cost + ${COST_PLUS.markup_pct}% + a ${formatMoney(COST_PLUS.fee_usd)} fee would charge; not a price anyone quoted.`;
+
+/**
+ * The cost-plus estimate (docs/ARCHITECTURE.md, "The cost-plus estimate"): a model, always
+ * `estimated`, labelled as an estimate and never as anyone's cash price; no spread against it.
+ */
+function costPlusBlock(s) {
+  const cp = s.cost_plus;
+  if (isMissing(cp)) {
+    return `<section class="costplus costplus-missing" aria-labelledby="fig-cp">
+<div class="cp-row"><h2 id="fig-cp" class="cp-label">Cost-plus estimate</h2><p class="cp-value"><span class="unknown-sm">We don’t know yet</span></p></div>
+<p class="why">${esc(cp.reason)}</p>
+</section>`;
+  }
+  const state = cp.min.state === cp.max.state ? cp.min.state : 'estimated';
+  return `<section class="costplus" aria-labelledby="fig-cp">
+<div class="cp-row"><h2 id="fig-cp" class="cp-label">Cost-plus estimate</h2><p class="cp-value"><span class="cp-amount" data-figure="cost-plus">${esc(moneyRange(cp.min, cp.max, cp.same))}</span> ${chip(state)}</p></div>
+<p class="arith mono cp-formula">${esc(costPlusFormula(s))}</p>
+<p class="cp-what">${esc(COST_PLUS_WHAT)}</p>
+<p class="prov mono">${esc(costPlusSourceText(s))}</p></section>`;
 }
 
 function referencePack(s) {
@@ -371,7 +463,9 @@ function notesHtml(s) {
     }
     for (const note of ref.setting_notes) out.push(`<p class="why">${esc(note)}</p>`);
   }
-  if (s.unit !== 'EA') out.push(`<p class="why qty-note">${esc(s.default_quantity.reason)}</p>`);
+  // The starting quantity's reason, wherever it is not a plain month of swallowed tablets or
+  // capsules (decisions 48 and 49: sublingual and buccal ones and an outlier FDA listing get it too).
+  if (s.unit !== 'EA' || !s.default_quantity.form.plain) out.push(`<p class="why qty-note">${esc(s.default_quantity.reason)}</p>`);
   const fda = fdaFreshness(s);
   if (fda) {
     const all = uniqueCaseless([...s.names.proprietary, ...s.names.nonproprietary], 2);
@@ -399,6 +493,7 @@ function reportHref(s, refPack) {
     addFiles(s.reference.range.records);
   } else shown.push('Medicare: we don’t know yet');
   if (!isMissing(s.spread)) shown.push(`spread ${multipleRange(s.spread.range)} (${s.spread.state})`);
+  if (!isMissing(s.cost_plus)) shown.push(`cost-plus estimate ${moneyRange(s.cost_plus.min, s.cost_plus.max, s.cost_plus.same)} (estimated)`);
   return issueUrl({
     template: 'wrong-price.yml',
     title: `Wrong price: ${s.name}`,
@@ -423,6 +518,7 @@ function figuresHtml(s) {
   return {
     html: `${figurePharmacy(s)}
 ${figureMedicare(s, refPack)}
+${costPlusBlock(s)}
 <hr class="rule">
 ${spreadBlock(s)}`,
     after: `${notesHtml(s)}
@@ -444,6 +540,7 @@ function statusText(s, refPack) {
     const label = s.reference.kind === 'part_b' ? 'Medicare Part B pays' : 'Medicare Part D paid';
     bits.push(`${label} ${refPack ? moneyRange(refPack.min, refPack.max, refPack.same) : unitRange(s.reference.range)}`);
   } else bits.push('Medicare: we don’t know yet');
+  if (!isMissing(s.cost_plus)) bits.push(`cost-plus estimate ${moneyRange(s.cost_plus.min, s.cost_plus.max, s.cost_plus.same)}, estimated`);
   if (!isMissing(s.spread)) bits.push(`spread ${multipleRange(s.spread.range)}, ${s.spread.state}${s.spread.extreme ? `. ${s.spread.sentence}` : ''}`);
   return `${bits.join('; ')}.`;
 }
@@ -516,8 +613,10 @@ function missingHtml(title, reason) {
 }
 
 function rulesApplied(s) {
-  const used = new Set(['default-quantity', 'reference-price', 'freshness']);
+  // Every card offers "What were you charged?", so its rule is always listed.
+  const used = new Set(['default-quantity', 'reference-price', 'freshness', 'what-you-paid']);
   if (!isMissing(s.pack)) used.add('unit-total');
+  if (!isMissing(s.cost_plus)) used.add('cost-plus');
   if (!isMissing(s.spread)) used.add('spread');
   for (const x of s.per_ndc) {
     if (!isMissing(x.reference) && (x.reference.kind === 'part_b' || x.reference.alternate)) used.add('part-b-per-nadac-unit');
@@ -600,6 +699,12 @@ function panelHtml(s, refPack) {
     parts.push(missingHtml('Pharmacy pays: pack total', s.pack.reason));
   }
   parts.push(recordGroup('Pharmacy pays per unit (NADAC)', s.nadac.records));
+  if (!isMissing(s.cost_plus)) {
+    const cp = s.cost_plus;
+    parts.push(recordGroup('Cost-plus estimate: pack total', cp.same ? [cp.min] : [cp.min, cp.max], () => costPlusInputs(s)));
+  } else {
+    parts.push(missingHtml('Cost-plus estimate', s.cost_plus.reason));
+  }
   if (s.generic_nadac) parts.push(recordGroup('Generic equivalent’s NADAC per unit (a different product)', s.generic_nadac.records));
   if (isMissing(s.reference)) {
     parts.push(missingHtml('Medicare reference price', s.reference.reason));
@@ -670,17 +775,125 @@ function panelHtml(s, refPack) {
 // ---------------------------------------------------------------------------------------------
 // Card rendering
 
+/** The quantity buttons the core offers for this product (30/60/90 for oral tablets and capsules, 1/2/3 for anything else per EA). */
+function qtyChips(s) {
+  return s.default_quantity.chips.map(String);
+}
+
 function qtyControls(s, qty) {
   const unit = s.unit || 'units';
-  const isChip = s.unit === 'EA' && EA_CHIPS.includes(qty);
-  const chips =
-    s.unit === 'EA'
-      ? `<div class="qty-chips">${EA_CHIPS.map((c) => `<button type="button" class="qty-chip" data-qty="${esc(c)}" aria-pressed="${c === qty ? 'true' : 'false'}">${esc(c)}</button>`).join('')}</div>`
-      : '';
+  const offered = qtyChips(s);
+  const isChip = offered.includes(qty);
+  const chips = offered.length
+    ? `<div class="qty-chips">${offered.map((c) => `<button type="button" class="qty-chip" data-qty="${esc(c)}" aria-pressed="${c === qty ? 'true' : 'false'}">${esc(c)}</button>`).join('')}</div>`
+    : '';
   return `<div class="qty" role="group" aria-labelledby="qty-label">
 <span id="qty-label" class="qty-label">Quantity</span>
 ${chips}<label class="qty-field${isChip ? ' qty-field-quiet' : ''}"><span class="visually-hidden">Other quantity</span><input id="qty" class="qty-input" type="number" inputmode="decimal" min="0.001" max="9999" step="any" value="${esc(qty)}" aria-label="${esc(`Quantity in ${unitWords(unit)}`)}"><span id="qty-unit" class="qty-unit">${esc(unitWords(s.unit))}</span></label>
 </div>`;
+}
+
+// "What were you charged?" (docs/ARCHITECTURE.md): the reader's own number, compared in this
+// page by paidComparison(). It is kept in app.current and in the address after # only: never
+// saved or sent by OpenBill, and never put in the "Wrong? Tell us" link or the page link.
+
+const PAID_HINT = `Optional: what you paid for this pack, in dollars. ${PAID_PRIVACY}`;
+
+function multiplesText(vs) {
+  const a = formatMultiple(vs.min);
+  const b = formatMultiple(vs.max);
+  return vs.same || a === b ? a : `${a} – ${b}`;
+}
+
+/** What the reader's number is divided by: "$3.35 CMS NADAC pack total (filed)". */
+function dividedBy(vs, what) {
+  const [lo, hi] = vs.inputs;
+  const state = lo.state === hi.state ? lo.state : 'estimated';
+  return `${moneyRange(lo, hi, lo.value === hi.value)} ${what} (${state})`;
+}
+
+function paidResultHtml(s) {
+  const c = app.current;
+  const note = c.paidNote ? `<p class="paid-problem">${esc(c.paidNote)}</p>` : '';
+  if (!c.paid || !c.paid.trim()) return note;
+  const r = safePaidComparison(c.paid, s.pack, s.cost_plus);
+  if (!r.valid) return `${note}<p class="paid-problem">${esc(r.problem)}</p>`;
+  const rows = [];
+  const by = [];
+  if (!isMissing(r.vs_pharmacy)) {
+    rows.push(`<li><span class="paid-multiple" data-figure="paid-pharmacy">${esc(multiplesText(r.vs_pharmacy))}</span> <span class="chip chip-yours">your number</span> <span class="paid-what">what pharmacies pay for this pack</span></li>`);
+    by.push(dividedBy(r.vs_pharmacy, 'CMS NADAC pack total'));
+  }
+  if (!isMissing(r.vs_cost_plus)) {
+    rows.push(`<li><span class="paid-multiple" data-figure="paid-cost-plus">${esc(multiplesText(r.vs_cost_plus))}</span> <span class="chip chip-yours">your number</span> <span class="paid-what">the cost-plus estimate</span></li>`);
+    by.push(dividedBy(r.vs_cost_plus, 'cost-plus estimate'));
+  }
+  const how = by.length ? `<p class="prov mono">${esc(`Your number, ${formatMoney(r.paid)}, ÷ ${by.join('; ÷ ')}. Worked out in this page.`)}</p>` : '';
+  return `${note}<p class="paid-sentence">${esc(r.sentence)}</p>${rows.length ? `<ul class="paid-list">${rows.join('')}</ul>` : ''}${how}`;
+}
+
+function paidInvalid(text) {
+  return Boolean(text && text.trim() && !safeParsePaid(text).valid);
+}
+
+function paidControls(s) {
+  const c = app.current;
+  return `<section class="paid" aria-labelledby="paid-label">
+<label id="paid-label" class="paid-label" for="paid">What were you charged?</label>
+<p id="paid-hint" class="paid-hint">${esc(PAID_HINT)}</p>
+<div class="paid-field"><span class="paid-cur" aria-hidden="true">$</span><input id="paid" class="paid-input" type="text" inputmode="decimal" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24" aria-describedby="paid-hint paid-result" aria-invalid="${paidInvalid(c.paid) ? 'true' : 'false'}" value="${esc(c.paid || '')}"></div>
+<div id="paid-result" class="paid-result" aria-live="polite" aria-atomic="true">${paidResultHtml(s)}</div>
+</section>`;
+}
+
+function renderPaid() {
+  const c = app.current;
+  const box = $('paid-result');
+  if (!c || !box || !c.summary) return;
+  box.innerHTML = paidResultHtml(c.summary);
+  const input = $('paid');
+  if (input) input.setAttribute('aria-invalid', paidInvalid(c.paid) ? 'true' : 'false');
+}
+
+/** The reader typed in "What were you charged?": update the result and the address once typing pauses. */
+function setPaid(text) {
+  if (!app.current) return;
+  app.current.paid = String(text);
+  app.current.paidNote = null;
+  clearTimeout(app.paidTimer);
+  app.paidTimer = setTimeout(() => {
+    if (!app.current) return;
+    renderPaid();
+    replaceHash(currentHash());
+  }, 250);
+}
+
+/**
+ * The address's &paid=, checked before it is used: a usable amount fills the box as "12.50"; any
+ * other value is dropped (from the box and the address), and the card says why without
+ * repeating it.
+ */
+function paidFromHash(raw) {
+  if (raw === null || raw === undefined || raw === '') return { paid: '', note: null };
+  const p = safeParsePaid(raw);
+  if (p.valid) return { paid: p.value.toFixed(2), note: null };
+  return { paid: '', note: `The amount in this link was not used. ${p.problem}` };
+}
+
+/**
+ * The product's page on the website, by the same siteSlugs() rule tools/site.mjs builds the pages
+ * with, or null if the names cannot be given slugs (then the site build would have failed too).
+ */
+function pageUrl(name) {
+  if (app.slugs === null) {
+    try {
+      app.slugs = siteSlugs(app.products.map((p) => p.name));
+    } catch {
+      app.slugs = new Map();
+    }
+  }
+  const slug = app.slugs.get(name);
+  return slug ? `${SITE_URL}drug/${slug}/` : null;
 }
 
 function headHtml(s) {
@@ -695,13 +908,16 @@ function renderCard({ focus = false } = {}) {
   const card = $('card');
   const { product, qty } = app.current;
   const s = summarizeProduct(product.rows, qty === '' ? undefined : qty, { partDContext: app.partDContext });
+  app.current.summary = s;
   const f = figuresHtml(s);
+  const share = pageUrl(product.name);
   card.innerHTML = `${headHtml(s)}
 <div id="figures" class="figures">${f.html}</div>
 ${qtyControls(s, qty)}
+${paidControls(s)}
 <div id="after" class="after">${f.after}</div>
 <div class="card-foot">
-<a id="report" class="report" href="${esc(f.report)}" target="_blank" rel="noopener">Wrong? Tell us</a>
+${share ? `<a id="share" class="share" href="${esc(share)}" target="_blank" rel="noopener">Shareable page</a>\n` : ''}<a id="report" class="report" href="${esc(f.report)}" target="_blank" rel="noopener">Wrong? Tell us</a>
 <details id="panel" class="panel"><summary>Sources and method</summary><div id="panel-body" class="panel-body">${panelHtml(s, f.refPack)}</div></details>
 </div>`;
   card.setAttribute('aria-busy', 'false');
@@ -717,14 +933,16 @@ ${qtyControls(s, qty)}
 function renderFigures() {
   const { product, qty } = app.current;
   const s = summarizeProduct(product.rows, qty === '' ? undefined : qty, { partDContext: app.partDContext });
+  app.current.summary = s;
   const f = figuresHtml(s);
   $('figures').innerHTML = f.html;
+  renderPaid();
   $('after').innerHTML = f.after;
   $('panel-body').innerHTML = panelHtml(s, f.refPack);
   $('report').setAttribute('href', f.report);
   for (const b of document.querySelectorAll('.qty-chip')) b.setAttribute('aria-pressed', b.dataset.qty === qty ? 'true' : 'false');
   const field = document.querySelector('.qty-field');
-  if (field) field.classList.toggle('qty-field-quiet', s.unit === 'EA' && EA_CHIPS.includes(qty));
+  if (field) field.classList.toggle('qty-field-quiet', qtyChips(s).includes(qty));
   // Say what changed, once typing pauses (WCAG 4.1.3: status messages).
   clearTimeout(app.announce);
   const text = statusText(s, f.refPack);
@@ -764,14 +982,23 @@ function renderFromHash({ focus = false } = {}) {
     qty = String(dq.qty);
   }
   qty = qty.trim();
+  const paid = paidFromHash(h.paid);
+  // A link's unusable &paid= is dropped from the address as well as the box.
+  if (paid.note) replaceHash(hashFor(product.name, h.qty, ''));
   if (app.current && app.current.product === product && $('qty')) {
     app.current.qty = qty;
     const input = $('qty');
     if (document.activeElement !== input) input.value = qty;
+    const box = $('paid');
+    if (box && document.activeElement !== box && paidForHash(app.current.paid) !== paid.paid) {
+      app.current.paid = paid.paid;
+      box.value = paid.paid;
+    }
+    app.current.paidNote = paid.note;
     renderFigures();
     return;
   }
-  app.current = { product, qty };
+  app.current = { product, qty, paid: paid.paid, paidNote: paid.note, summary: null };
   renderCard({ focus });
 }
 
@@ -799,8 +1026,7 @@ function resultPrices(product) {
 function setQty(qty) {
   if (!app.current) return;
   app.current.qty = String(qty).trim();
-  const hash = hashFor(app.current.product.name, app.current.qty);
-  if (replaceHash(hash)) renderFigures();
+  if (replaceHash(currentHash())) renderFigures();
 }
 
 function openProduct(name, { qty } = {}) {
@@ -920,6 +1146,7 @@ function bind() {
   });
   card.addEventListener('input', (e) => {
     if (e.target && e.target.id === 'qty') setQty(e.target.value);
+    else if (e.target && e.target.id === 'paid') setPaid(e.target.value);
   });
   window.addEventListener('hashchange', () => {
     const h = readHash();
