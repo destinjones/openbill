@@ -388,7 +388,9 @@ NDC join); `spotchecks.test.js` driven by `tests/spotchecks.json` (each entry na
 source file and how it was independently verified; at least ten must apply to the current
 data); `build.test.js` (generated files in sync); `quality.test.js` (floors: at least 70% of
 rows `filed`, no source without a URL); `docs-links.test.js` (every relative link and anchor
-resolves; external links when `OPENBILL_CHECK_EXTERNAL=1`). Browser checks live in
+resolves; external links when `OPENBILL_CHECK_EXTERNAL=1`); `site.test.js` and `press.test.js`
+(the static pages and the press kit against the core); `gif.test.js` (the clip's encoder against
+an independent decoder, `tests/gifdecode.js`). Browser checks live in
 `tests/browser/*.spec.js` (Playwright), not picked up by `node --test`.
 
 ## Phase 2: the cost-plus estimate, "what you were charged", and the drug pages
@@ -443,6 +445,8 @@ input must be a positive amount up to $100,000, else the card says why.
 | `drugs/<letter>/index.html` | A–Z index of products |
 | `og/<slug>.png` | 1200×630 preview card per product, rendered with Playwright as a PNG (JPEG was tried and was 14.4% larger; [decision 48](DECISIONS.md#48-starting-quantity-by-dosage-form-preview-images-stay-png)) |
 | `og/site.png` | the site's preview card (the showcase product); `openbill.html` and `methodology.html` point at it |
+| `press/index.html` | the press kit: the showcase's figures, the build's counts and source dates, a paragraph to paste, the DOIs, contact, the honesty lines ([Press kit and reveal clip](#press-kit-and-reveal-clip)) |
+| `press/*.png`, `press/*.gif` | its pictures: the wordmark, the three card screenshots, the reveal clips and a still; skipped by `--no-og` |
 | `assets/site.css`, `assets/fonts/*.woff2` | shared by the static pages (same origin) |
 | `sitemap.xml` | every page; `lastmod` from git (data pages: last commit touching `data/drugs.json`) |
 
@@ -498,3 +502,29 @@ The default card, README, screenshots and the site's preview card use
 Medicare Part D paid $46.50 (30 × $1.5499353611, 2024 average for generic aripiprazole); 13.9×,
 `estimated`. Chosen as a widely used generic with a large, non-extreme gap whose Part D row
 excludes ODT and injectable forms (checked in the raw Part D file).
+
+### Press kit and reveal clip
+
+`press/index.html` (`src/build/presspage.js`) is written on every build, `--no-og` or not, and
+listed in the sitemap ([decision 51](DECISIONS.md#51-launch-assets-a-press-kit-and-a-reveal-clip-built-on-every-deploy)).
+It has no script, the site CSP and `assets/site.css`, and links one folder up (`../`). Its numbers
+are the showcase's `drugFacts()` and the model's counts; its DOIs come from `CITATION.cff`
+(`citationDois()`); `renderPressPage()` throws for a showcase without a pack total, a Medicare
+figure, or a spread below the extreme threshold.
+
+The image step of `tools/site.mjs` also renders `pressMediaFiles()` into `press/`:
+
+| file | what |
+|---|---|
+| `openbill-wordmark.png`, `openbill-wordmark-on-dark.png` | the stamp, dark and light ink, transparent, 960×320 |
+| `card-360.png`, `card-360-dark.png`, `card-desktop.png` | `tools/shots.mjs` on the deployed `openbill.html` (it must open on the showcase) |
+| `openbill-reveal.gif`, `openbill-reveal.png` | the reveal clip, 1200×675, and a still of its last frame |
+| `openbill-reveal-9x16.gif` | the reveal clip, 540×960 |
+
+The reveal clip (`tools/record.mjs`) is 6.00 s at 12.5 frames a second and loops. Its frames
+are `revealTimeline()` states rendered by `renderRevealHtml()` (`src/build/reveal.js`,
+`src/site/reveal.css`) in Chromium with JavaScript off and every request refused, then encoded
+by `tools/gif.mjs` (median-cut palette, changed-rectangle frames, LZW; no dependency). The
+spread counts up from 1.0× and settles on core's value with its chip. The GIF comment names the
+figures and the sha256 of `data/drugs.json`. A clip over 3 MB stops the build. The README
+embeds the deployed `press/openbill-reveal.gif`.

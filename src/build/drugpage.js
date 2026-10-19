@@ -75,7 +75,7 @@ function part(v) {
 }
 
 /** Template tag: every interpolation is escaped with esc(), except fragments made by html`` itself. */
-function html(strings, ...values) {
+export function html(strings, ...values) {
   let out = strings[0];
   values.forEach((v, i) => {
     out += part(v) + strings[i + 1];
@@ -83,7 +83,7 @@ function html(strings, ...values) {
   return new Html(out);
 }
 
-function joinHtml(list, sep) {
+export function joinHtml(list, sep) {
   return new Html(list.map(part).join(sep));
 }
 
@@ -96,7 +96,7 @@ function checkHref(href) {
   return h;
 }
 
-function link(href, text, attrs = '') {
+export function link(href, text, attrs = '') {
   return html`<a href="${checkHref(href)}"${new Html(attrs)}>${text}</a>`;
 }
 
@@ -234,7 +234,7 @@ function shownNumber(text) {
   return /^\d+(\.\d+)?$/.test(t) ? Number(t) : String(text);
 }
 
-function chip(state) {
+export function chip(state) {
   const info = STATE_INFO[state];
   return html`<span class="chip chip-${state}">${info ? info.label : state}</span>`;
 }
@@ -243,7 +243,7 @@ function staleChip() {
   return new Html('<span class="chip chip-stale">stale</span>');
 }
 
-function honestyLine(id, { firstSentenceOnly = false } = {}) {
+export function honestyLine(id, { firstSentenceOnly = false } = {}) {
   const line = HONESTY.find((h) => h.id === id);
   if (!line) throw new Error(`HONESTY has no line ${id}`);
   const parts = firstSentenceOnly ? line.parts.filter((p) => p.strong).slice(0, 1) : line.parts;
@@ -253,7 +253,7 @@ function honestyLine(id, { firstSentenceOnly = false } = {}) {
   );
 }
 
-function honestyText(id, opts) {
+export function honestyText(id, opts) {
   const line = HONESTY.find((h) => h.id === id);
   if (!line) throw new Error(`HONESTY has no line ${id}`);
   return opts && opts.firstSentenceOnly ? line.parts.filter((p) => p.strong)[0].text : line.text;
@@ -263,7 +263,7 @@ function honestyText(id, opts) {
  * The five honesty lines, verbatim from the owner's brief, introduced as what they are: the rules
  * OpenBill holds its pages to (as methodology.html introduces them), not instructions to the reader.
  */
-function honestyList() {
+export function honestyList() {
   return html`<p>${APP_NAME} holds every page to these five rules, written by the project’s owner and quoted word for word:</p>
 <ul class="honesty">${joinHtml(
     HONESTY.map((h) => html`<li>${honestyLine(h.id)}</li>`),
@@ -295,7 +295,7 @@ function provText(rec) {
 }
 
 /** The source lines of a figure: one per distinct source file and dates; calculated records list each input's own date. */
-function provTexts(records, inputs) {
+export function provTexts(records, inputs) {
   const out = [];
   const calc = records.filter(isCalculated);
   const groups = new Map();
@@ -1101,7 +1101,7 @@ function faqItems(f) {
 
 // ---------------------------------------------------------------- shared page parts
 
-function headHtml({ title, description, canonical, ogImage, ogAlt, type = 'website' }) {
+export function headHtml({ title, description, canonical, ogImage, ogAlt, type = 'website', up = UP }) {
   return html`<!doctype html>
 <html lang="en">
 <head>
@@ -1114,7 +1114,7 @@ function headHtml({ title, description, canonical, ogImage, ogAlt, type = 'websi
 <meta name="description" content="${description}">
 <link rel="canonical" href="${canonical}">
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="${UP}assets/site.css">
+<link rel="stylesheet" href="${up}assets/site.css">
 <meta property="og:type" content="${type}">
 <meta property="og:site_name" content="${APP_NAME}">
 <meta property="og:title" content="${title}">
@@ -1138,14 +1138,14 @@ function jsonLd(graph) {
   return new Html(`<script type="application/ld+json">\n${text}\n</script>\n`);
 }
 
-function masthead(model) {
+export function masthead(model, up = UP) {
   return html`<header class="masthead">
-<a class="stamp" href="${UP}" aria-label="${APP_NAME} drug price receipt, home"><span class="stamp-name">${APP_NAME}</span><span class="stamp-sub">drug price receipt</span></a>
+<a class="stamp" href="${up}" aria-label="${APP_NAME} drug price receipt, home"><span class="stamp-name">${APP_NAME}</span><span class="stamp-sub">drug price receipt</span></a>
 <p class="mono masthead-line">NADAC week of ${model.doc.sources.nadac.as_of_date}</p>
 </header>`;
 }
 
-function crumbs(list) {
+export function crumbs(list) {
   const items = list.map((c, i) =>
     i === list.length - 1 ? html`<li aria-current="page">${c.name}</li>` : html`<li>${link(c.href, c.name)}</li>`,
   );
@@ -1159,7 +1159,7 @@ function breadcrumbLd(list) {
   };
 }
 
-function sourceList(model) {
+export function sourceList(model) {
   const order = ['nadac', 'fda_ndc', 'partd', 'asp_limits', 'asp_crosswalk'];
   const ids = [...order.filter((k) => model.doc.sources[k]), ...Object.keys(model.doc.sources).filter((k) => !order.includes(k)).sort()];
   return joinHtml(
@@ -1175,7 +1175,7 @@ function sourceList(model) {
   );
 }
 
-function footer(model) {
+export function footer(model, up = UP) {
   return html`<footer class="site-footer">
 <p class="disclaimer">${disclaimerText()}</p>
 <p>${honestyLine('range')}</p>
@@ -1184,17 +1184,18 @@ function footer(model) {
 ${sourceList(model)}
 </ul>
 <ul class="footer-links">
-<li>${link(UP, 'OpenBill: search any drug')}</li>
-<li>${link(`${UP}${letterPath(model.letterOrder.includes('a') ? 'a' : model.letterOrder[0])}`, 'Drugs A–Z')}</li>
-<li>${link(`${UP}methodology.html`, 'Methodology')}</li>
+<li>${link(up, 'OpenBill: search any drug')}</li>
+<li>${link(`${up}${letterPath(model.letterOrder.includes('a') ? 'a' : model.letterOrder[0])}`, 'Drugs A–Z')}</li>
+<li>${link(`${up}methodology.html`, 'Methodology')}</li>
+<li>${link(`${up}press/`, 'Press kit')}</li>
 <li>${link(REPO_URL, 'Source code on GitHub', ' rel="noopener"')}</li>
-<li>${link(`${UP}data/drugs.json`, 'data/drugs.json', ' rel="nofollow"')}</li>
+<li>${link(`${up}data/drugs.json`, 'data/drugs.json', ' rel="nofollow"')}</li>
 </ul>
 <p class="mono build-line">Static page, no JavaScript. Data changed ${model.dataDate}.</p>
 </footer>`;
 }
 
-function page({ head, body, ld }) {
+export function page({ head, body, ld }) {
   return `${head}${ld}</head>\n<body>\n${body}\n</body>\n</html>\n`;
 }
 

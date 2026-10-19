@@ -1300,6 +1300,8 @@ for `SL` above. None of the ten products in [HAND-CHECK.md](HAND-CHECK.md) chang
 
 ## 50. Links into OpenBill's own website are checked against this commit's build
 
+*Amended by [decision 51](#51-launch-assets-a-press-kit-and-a-reveal-clip-built-on-every-deploy): a link to one of the press kit's pictures, which a `--no-og` build does not render, is checked against the list of files the image step writes.*
+
 **Context.** [Decision 13](#13-external-link-checks-are-opt-in) checks external links over the
 network and skips links to this repository's GitHub URLs. Pages now link into the website itself
 (for example the A–Z index at `drugs/a/`), and a page added by a change does not exist on the
@@ -1315,6 +1317,67 @@ links and says so.
 **Consequences.** A link into a page the build does not produce still fails before merge, and a
 new page can be linked in the same change that adds it. The live deploy itself is checked after
 merge, by hand or by loading the site.
+
+## 51. Launch assets: a press kit and a reveal clip, built on every deploy
+
+**Context.** The launch needs what journalists and social posts use: a page with the numbers,
+pictures and a paragraph to quote, and a short clip of the card. Copy and pictures made by hand
+go stale with each weekly NADAC refresh, and no number on OpenBill may be typed by hand.
+
+**Decision.** Recorded by the launch-assets session on 2026-10-19, for the owner to confirm or
+replace.
+
+- **The press kit, `press/index.html`,** is written by `tools/site.mjs` on every build, with or
+  without `--no-og`, from `src/build/presspage.js`. It is static with no script at all (not even
+  JSON-LD), and has the site's CSP and `assets/site.css`. Every number on it comes from
+  `data/drugs.json` through the core. The showcase's figures, states and source lines come from
+  `drugFacts()`, as its drug page shows them. The counts of products, NDCs and products with a
+  Medicare figure come from the model. The DOIs are read from the `identifiers` in
+  `CITATION.cff`, and the honesty lines from `HONESTY`. The paragraph a journalist can paste is
+  generated from the same values. Contact is GitHub issues, and security reports go privately
+  as `SECURITY.md` says. The page is in the sitemap, and every static page's footer links to it.
+- **Its pictures** are rendered in the same build's image step and skipped by `--no-og`; none is
+  committed. They are the wordmark (the stamp in dark and light ink, transparent PNG, 960×320),
+  the README's three card screenshots (`tools/shots.mjs`, same clock rule) and the reveal clips.
+  The build stops if `openbill.html` does not open on the showcase, because the screenshots
+  would then show other numbers than the page.
+- **The reveal clip, `tools/record.mjs`,** runs 6.00 s at 12.5 frames a second and loops. The
+  search box types the showcase's first word, a letter a frame. The card resolves, what pharmacies
+  pay appears, the rule draws, and what Medicare paid lands. The spread counts up from 1.0× to
+  core's value, and only then do its chip, sentence and caveat show. The source lines fade in,
+  and it holds for 2 s. There is no cursor, caret or scrolling. It comes in 1200×675 (16:9) and
+  540×960 (9:16), plus a still of the last 16:9 frame, which readers who ask for reduced motion
+  see instead.
+  - It is a purpose-built scene in the card's look (`src/build/reveal.js`,
+    `src/site/reveal.css`), not a recording of `openbill.html`. The app's card is 640 px wide and
+    taller than 675 px, so a 1200×675 frame could not show it without scrolling or shrinking the
+    type. Each frame is a whole page rendered with JavaScript off and every request refused, as
+    the preview cards are, so the same data gives the same frames.
+  - The count-up's in-between values are animation, 80 ms each, formatted by
+    `formatSpreadMultiple()`. The value the clip settles and holds on is core's, and it alone
+    carries the state chip.
+  - `tools/gif.mjs` encodes it: a small GIF89a encoder in this repository, so no new dependency.
+    It makes one palette by median cut, keeping dominant colours exact; it stores only the
+    rectangle that changed in each frame, with transparency; and it uses LZW. The GIF comment
+    names the figures, the NADAC file date and the sha256 of `data/drugs.json`. A clip over 3 MB
+    stops the build; on 2026-10-19 they were about 120 KB and 100 KB.
+- **The README** embeds the clip from the live site (`press/openbill-reveal.gif`) on its second
+  line, linked to the showcase's card, so it always shows the deployed data.
+- **Link checks.** A `--no-og` build has no pictures, so the links job checks a link to one of the
+  press kit's pictures against the list the image step writes (`pressMediaFiles()`), not the
+  folder. This amends [decision 50](#50-links-into-openbills-own-website-are-checked-against-this-commits-build)
+  for those files only. The Playwright check (`tests/browser/press.spec.js`, Chromium at 360px)
+  builds the pictures and checks their sizes, the loop, the length, the 3 MB limit, the still,
+  and that the page loads every picture from the site with no error at 360px and at desktop
+  width.
+
+**Consequences.** The press kit and the clip cannot disagree with the site. If the showcase loses
+its pack total, its Medicare figure, or a spread below the extreme threshold, the press page stops
+the build until a new showcase is chosen
+([decision 45](#45-the-showcase-aripiprazole-10-mg-tablets-30)). `node --test` and the site build
+in CI catch that before merge. The README's clip is as current as the last deploy, and the
+repository does not grow by a GIF per refresh. Deploys take about 10 s longer. The README's bold
+headline and the screenshots in `docs/img/` are still remade by hand (`tools/shots.mjs`).
 
 ## 52. Drug pages link the explanations they share and add their own comparisons
 

@@ -10,6 +10,14 @@ Data refreshes are listed too, with the source dates they bring in.
 
 ### Added
 
+- A press kit on the website, `press/`, built on every deploy: the showcase's figures with
+  their states and source lines, the build's counts (5,936 products, 30,031 NDCs) and source
+  dates, a paragraph a journalist can paste, the DOIs from `CITATION.cff`, contact through
+  GitHub issues, and the honesty lines. Every number on it comes from `data/drugs.json`
+  through the core. Its pictures are rendered from the same build: the wordmark, the three card
+  screenshots, and a 6-second reveal clip of the card in 16:9 and 9:16 (`tools/record.mjs`,
+  encoded by `tools/gif.mjs` with no new dependency). The README shows the clip on its second
+  line (decision 51).
 - The Zenodo DOI in the README and `CITATION.cff`: 10.5281/zenodo.23457871 for all versions, 10.5281/zenodo.23457872
   for v0.1.0.
 - The website, `destinjones.github.io/openbill`, deployed from `main` by

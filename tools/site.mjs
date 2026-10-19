@@ -8,6 +8,9 @@
 //   class/<slug>/index.html       one page per FDA Established Pharmacologic Class
 //   drugs/<letter>/index.html     the A–Z index
 //   og/<slug>.png, og/site.png    1200×630 preview cards (PNG), rendered with Playwright's Chromium
+//   press/index.html              the press kit (src/build/presspage.js, decision 51)
+//   press/*.png, press/*.gif      its pictures: the wordmark, three screenshots of the card
+//                                 (tools/shots.mjs) and the reveal clips (tools/record.mjs)
 //   assets/site.css, assets/fonts/  shared by the static pages
 //   sitemap.xml                   every page, lastmod from git
 //
@@ -21,7 +24,8 @@
 //   --limit N          only the first N products by name (plus the showcase) get drug pages and
 //                      preview cards; class and A–Z pages are always complete. For quick looks.
 //   --only NAME        only this product (repeatable); for tests and spot checks.
-//   --no-og            skip the preview images (og:image tags still point at og/<slug>.png).
+//   --no-og            skip every rendered image: the preview cards and the press kit's pictures
+//                      and clips (og:image tags and the press page still point at them).
 //   --pages <dir>      read openbill.html and methodology.html from <dir> instead of the
 //                      repository root (for a local look before `node build.js` is run).
 //
@@ -33,10 +37,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 
 import { buildModel, renderDrugPage, renderClassPage, renderLetterPage, renderNotFoundPage, renderOgHtml, sitemapXml, linkedAnchors, ogImagePath, SHOWCASE, OG_WIDTH, OG_HEIGHT, SITEMAP_CLASS_MIN } from '../src/build/drugpage.js';
+import { renderPressPage, renderWordmarkHtml, citationDois, PRESS_PATH, PRESS_SHOTS, PRESS_WORDMARKS, WORDMARK } from '../src/build/presspage.js';
 import { slugify, siteSlugs } from '../src/core/slug.js';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -49,6 +55,9 @@ const MARKER_TEXT = 'Written by OpenBill tools/site.mjs. This folder is emptied 
 
 /** The files a static page is built from: its sitemap lastmod is the newest commit touching any. */
 export const PAGE_INPUTS = Object.freeze(['data/drugs.json', 'src/build/drugpage.js', 'src/build/methodology.js', 'src/core', 'src/site']);
+
+/** The press page also changes with its own renderers and with the DOIs in CITATION.cff. */
+export const PRESS_INPUTS = Object.freeze([...PAGE_INPUTS, 'src/build/presspage.js', 'src/build/reveal.js', 'CITATION.cff']);
 const LFS_POINTER = 'version https://git-lfs.github.com/spec/';
 
 // The latin subset's unicode-range, as build.js writes it for these files.
@@ -108,8 +117,8 @@ function fontFiles() {
     .sort();
 }
 
-/** The card's @font-face rules with the fonts as data: URIs, so rendering a card fetches nothing. */
-function ogFontCss() {
+/** The cards' @font-face rules with the fonts as data: URIs, so rendering a card, a clip frame or the wordmark fetches nothing. */
+export function inlineFontCss() {
   const faces = [
     ['IBM Plex Sans', 400, 'ibm-plex-sans-latin-400-normal.woff2'],
     ['IBM Plex Sans', 600, 'ibm-plex-sans-latin-600-normal.woff2'],
@@ -207,7 +216,7 @@ async function renderOgImages(model, jobs, out, log) {
   } catch (e) {
     throw new Error(`The preview images need Playwright (npm ci && npx playwright install chromium), or pass --no-og: ${e.message}`);
   }
-  const css = ogFontCss() + fs.readFileSync(path.join(ROOT, 'src/site/og.css'), 'utf8');
+  const css = inlineFontCss() + fs.readFileSync(path.join(ROOT, 'src/site/og.css'), 'utf8');
   const t0 = performance.now();
   const browser = await chromium.launch();
   const problems = [];
@@ -262,6 +271,55 @@ async function renderOgImages(model, jobs, out, log) {
   return { count: times.length, times, total: performance.now() - t0 };
 }
 
+// ---------------------------------------------------------------- the press kit's pictures
+
+/** The card openbill.html opens on: the press screenshots show it, so it must be the showcase. */
+export function appDefault(appHtml) {
+  const m = /<script type="application\/json" id="openbill-build">([\s\S]*?)<\/script>/.exec(String(appHtml));
+  if (!m) throw new Error('openbill.html has no openbill-build block');
+  const d = JSON.parse(m[1]).default;
+  if (!d || typeof d.drug !== 'string') throw new Error('openbill.html names no default card');
+  return d;
+}
+
+/**
+ * The press kit's pictures, into press/: the wordmark in both inks (transparent PNG), the three
+ * screenshots of the app's default card (tools/shots.mjs, clock fixed to the NADAC retrieved date)
+ * and the reveal clips (tools/record.mjs). One Chromium for all of them.
+ */
+async function renderPressMedia(model, showcase, out, { pagesDir, dataSha256, log }) {
+  const { chromium } = await import('@playwright/test');
+  const { shootCards } = await import('./shots.mjs');
+  const { recordReveal } = await import('./record.mjs');
+  const dir = path.join(out, ...PRESS_PATH.split('/').filter(Boolean));
+  const t0 = performance.now();
+  const browser = await chromium.launch();
+  try {
+    const css = inlineFontCss() + fs.readFileSync(path.join(ROOT, 'src/site/reveal.css'), 'utf8');
+    for (const w of PRESS_WORDMARKS) {
+      const context = await browser.newContext({ viewport: { width: WORDMARK.width, height: WORDMARK.height }, deviceScaleFactor: WORDMARK.scale, offline: true, javaScriptEnabled: false });
+      try {
+        await context.route('**/*', (route) => route.abort());
+        const page = await context.newPage();
+        await page.setContent(renderWordmarkHtml({ css, ink: w.ink }), { waitUntil: 'load' });
+        const ok = await page.evaluate(async () => {
+          await document.fonts.ready;
+          return document.fonts.check('600 20px "IBM Plex Sans"') && document.fonts.check('11px "IBM Plex Mono"');
+        });
+        if (!ok) throw new Error(`${w.file}: the fonts did not load`);
+        writeFile(out, `${PRESS_PATH}${w.file}`, await page.screenshot({ type: 'png', omitBackground: true, animations: 'disabled' }));
+      } finally {
+        await context.close();
+      }
+    }
+    const shots = await shootCards({ browser, page: pathToFileURL(path.join(pagesDir, 'openbill.html')).href, outDir: dir, day: model.doc.sources.nadac.retrieved_date, shots: PRESS_SHOTS });
+    const clips = await recordReveal({ model, product: showcase, out: dir, fontCss: inlineFontCss(), browser, dataSha256, log });
+    return { wordmarks: PRESS_WORDMARKS.length, shots: shots.length, clips, total: performance.now() - t0 };
+  } finally {
+    await browser.close();
+  }
+}
+
 // ---------------------------------------------------------------- the build
 
 /**
@@ -301,6 +359,7 @@ export async function buildSite(opts) {
   // A data page changes when the data or the code that renders it changes: its lastmod is the
   // newest commit touching any of PAGE_INPUTS (ISO dates compare as strings).
   const dataDate = PAGE_INPUTS.map(lastmod).sort().at(-1);
+  const pressDate = PRESS_INPUTS.map(lastmod).sort().at(-1);
   const appDate = lastmod('openbill.html');
   const methodologyDate = lastmod('methodology.html');
 
@@ -370,14 +429,24 @@ export async function buildSite(opts) {
     written.letter += 1;
   }
   writeFile(dir, '404.html', renderNotFoundPage(model).html);
+  // The press kit, after the class and A–Z pages, which have worked out every product's figures.
+  const press = renderPressPage(model, showcase, { dois: citationDois(fs.readFileSync(path.join(ROOT, 'CITATION.cff'), 'utf8')) });
+  writeFile(dir, press.file, press.html);
+  sitemap.push({ path: press.path, lastmod: pressDate });
   writeFile(dir, 'sitemap.xml', sitemapXml(sitemap));
   const tPages = performance.now();
 
   let images = null;
+  let pressMedia = null;
   if (og) {
     const jobs = chosen.map((p) => ({ product: p, file: ogImagePath(model.slugs.get(p.name)), site: false }));
     jobs.push({ product: showcase, file: ogImagePath('site'), site: true });
     images = await renderOgImages(model, jobs, dir, log);
+    const shown = appDefault(app);
+    if (shown.drug !== SHOWCASE.drug || Number(shown.qty) !== SHOWCASE.qty) {
+      throw new Error(`openbill.html opens on ${shown.drug} × ${shown.qty}, not the showcase ${SHOWCASE.drug} × ${SHOWCASE.qty}, so the press screenshots would not show the press page's numbers`);
+    }
+    pressMedia = await renderPressMedia(model, showcase, dir, { pagesDir, dataSha256: crypto.createHash('sha256').update(dataBytes).digest('hex'), log });
   }
 
   if (!fs.existsSync(path.join(dir, 'index.html'))) throw new Error('the site has no index.html');
@@ -395,11 +464,12 @@ export async function buildSite(opts) {
     slugCollisions: collisions,
     pages: written,
     images,
+    press: { file: press.file, facts: press.facts, paragraph: press.paragraph, media: pressMedia },
     files: files.length,
     bytes: files.reduce((a, f) => a + f.bytes, 0),
     sizes,
     notes,
-    dates: { data: dataDate, app: appDate, methodology: methodologyDate },
+    dates: { data: dataDate, press: pressDate, app: appDate, methodology: methodologyDate },
     anchorsMissing: missing,
     timing: { model: tModel - t0, pages: tPages - tModel, total: performance.now() - t0 },
     model,
@@ -412,15 +482,17 @@ function report(r, log) {
   const n = (x) => x.toLocaleString('en-US');
   log(`Site written to ${r.out}`);
   log(`  products in data: ${n(r.products)}`);
-  log(`  pages: ${n(r.pages.drug)} drug, ${n(r.pages.class)} class (${n(r.pages.classUnlisted)} left out of the sitemap, under ${SITEMAP_CLASS_MIN} products), ${n(r.pages.letter)} A–Z, plus index.html, openbill.html, methodology.html, 404.html`);
+  log(`  pages: ${n(r.pages.drug)} drug, ${n(r.pages.class)} class (${n(r.pages.classUnlisted)} left out of the sitemap, under ${SITEMAP_CLASS_MIN} products), ${n(r.pages.letter)} A–Z, plus index.html, openbill.html, methodology.html, 404.html, ${r.press.file}`);
   if (r.images) {
     const t = [...r.images.times].sort((a, b) => a - b);
     const mean = t.reduce((a, b) => a + b, 0) / (t.length || 1);
     log(`  images: ${n(r.images.count)} preview cards in ${(r.images.total / 1000).toFixed(1)} s; per image mean ${ms(mean)}, median ${ms(t[Math.floor(t.length / 2)] || 0)}, slowest ${ms(t[t.length - 1] || 0)}`);
   } else log('  images: skipped (--no-og)');
+  if (r.press.media) log(`  press: ${r.press.media.wordmarks} wordmarks, ${r.press.media.shots} screenshots, ${r.press.media.clips.length} clips in ${(r.press.media.total / 1000).toFixed(1)} s`);
+  else log('  press: pictures and clips skipped (--no-og)');
   log(`  files: ${n(r.files)}, ${mb(r.bytes)} in all`);
   for (const [k, v] of Object.entries(r.sizes).sort((a, b) => b[1] - a[1])) log(`    ${k.padEnd(18)} ${mb(v).padStart(9)}  (${n(v)} bytes)`);
-  log(`  sitemap lastmod: data pages ${r.dates.data} (newest of ${PAGE_INPUTS.join(', ')}), home ${r.dates.app}, methodology ${r.dates.methodology}`);
+  log(`  sitemap lastmod: data pages ${r.dates.data} (newest of ${PAGE_INPUTS.join(', ')}), press ${r.dates.press}, home ${r.dates.app}, methodology ${r.dates.methodology}`);
   for (const note of r.notes) log(`  NOTE ${note}`);
   if (r.anchorsMissing.length) log(`  WARNING methodology.html has no ${r.anchorsMissing.map((a) => `#${a}`).join(', ')} (run node build.js)`);
   log(`  time: model ${(r.timing.model / 1000).toFixed(1)} s, pages ${(r.timing.pages / 1000).toFixed(1)} s, total ${(r.timing.total / 1000).toFixed(1)} s`);
