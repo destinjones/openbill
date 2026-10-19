@@ -536,6 +536,54 @@ button.suggest {
   margin-top: 2px;
 }
 
+/* The cost-plus estimate: a model, set smaller than the two filed figures above it. */
+
+.costplus {
+  padding: 8px 0 8px;
+  border-top: 1px solid var(--rule);
+}
+
+.cp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 10px;
+}
+
+.cp-label {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.cp-value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  margin: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cp-amount {
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.unknown-sm {
+  font-weight: 600;
+}
+
+.cp-what {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
 .rule {
   height: 0;
   margin: 4px 0;
@@ -583,6 +631,93 @@ button.suggest {
   margin-top: 2px;
 }
 
+/* What were you charged? The reader's own number, never stored or sent. */
+
+.paid {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.paid-label {
+  display: block;
+  font-weight: 600;
+}
+
+.paid-hint {
+  margin: 2px 0 6px;
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+
+.paid-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.paid-cur {
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+
+.paid-input {
+  width: 9em;
+  max-width: 100%;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 1.125rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: 0;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* Told apart by the border's style as well as the text below it, never by colour alone. */
+.paid-input[aria-invalid='true'] {
+  border: 2px dashed var(--rule-strong);
+}
+
+.paid-result:empty {
+  display: none;
+}
+
+.paid-problem {
+  margin: 6px 0 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.paid-sentence {
+  margin: 6px 0 0;
+  font-weight: 600;
+}
+
+.paid-list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.paid-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 8px;
+  padding: 2px 0;
+  font-size: 0.875rem;
+}
+
+.paid-multiple {
+  font-size: 1.375rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
 /* State chips: neutral, told apart by their text and border style, never by colour. */
 
 .chip {
@@ -616,6 +751,12 @@ button.suggest {
 .chip-estimated {
   border: 2px dotted var(--chip-ink);
   padding: 0 6px;
+}
+
+/* Not a provenance state: marks a multiple worked out from the reader's own number. */
+.chip-yours {
+  border-radius: 999px;
+  padding: 1px 9px;
 }
 
 .chip-stale {
@@ -661,7 +802,8 @@ button.suggest {
   content: '\2212';
 }
 
-.report {
+.report,
+.share {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -674,7 +816,8 @@ button.suggest {
   text-decoration: none;
 }
 
-.report:hover {
+.report:hover,
+.share:hover {
   text-decoration: underline;
 }
 
@@ -1016,6 +1159,8 @@ button.suggest {
   .search,
   .try,
   .report,
+  .share,
+  .paid,
   .skip {
     display: none;
   }
@@ -1025,8 +1170,55 @@ button.suggest {
   }
 }
 
-/* Phones: the masthead stays one line, so the card starts higher. */
+/* Phones: the masthead stays one line and the spacing is tighter, so the card starts higher and
+   both prices, the cost-plus line and the spread fit the first screen at 360×780. */
 @media (max-width: 399px) {
+  .masthead {
+    padding: 4px 0;
+  }
+
+  .search {
+    padding-top: 4px;
+  }
+
+  .search-label {
+    margin-bottom: 2px;
+  }
+
+  .search-input {
+    min-height: 44px;
+  }
+
+  .card {
+    margin-top: 8px;
+    padding-top: 10px;
+  }
+
+  .card-kicker {
+    margin-bottom: 2px;
+  }
+
+  .fig,
+  .spread {
+    padding: 8px 0 6px;
+  }
+
+  .costplus {
+    padding: 6px 0;
+  }
+
+  .amount {
+    font-size: 2.125rem;
+  }
+
+  .arith {
+    font-size: 0.8125rem;
+  }
+
+  .rule {
+    margin: 2px 0;
+  }
+
   .stamp {
     padding: 3px 8px 4px;
   }

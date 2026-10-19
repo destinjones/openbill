@@ -14,3 +14,6 @@ Thumbs.db
 # Playwright output (npx playwright test)
 test-results/
 playwright-report/
+
+# The website, built by tools/site.mjs on deploy and never committed
+_site/

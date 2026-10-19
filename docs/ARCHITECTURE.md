@@ -259,7 +259,7 @@ ES modules. Conventions (the bundler in `build.js` relies on them):
 | `ndc.js` | `isNdc11`, `normalizeNdc(input) → ndc11 \| null`, `ndcCandidates(input) → ndc11[]`, `formatNdc(ndc11)` → `00378-7185-05`, `looksLikeNdc(query)` |
 | `dates.js` | `isIsoDate`, `daysBetween(a, b)`, `isoDate(dateObj)` |
 | `sources.js` | `SOURCE_INFO` (label, cadence, `stale_after_days`, what it measures), `NADAC_EXPLANATION_CODES` |
-| `rules.js` | `RULES` (id, title, formula, description; feeds methodology.html), `HONESTY` (verbatim wording), `EXTREME_HIGH`, `EXTREME_LOW`, `EXTREME_HEADLINE`, `isExtremeSpread(rec)`, `formatSpreadMultiple(ratio)`, `inputDates(inputs)`, `labelerKey(name)`, `distinctLabelers(labelers)`, `NAME_OUTLIER_FACTOR`, `partDNameContext(rows)`, `nameOutlier(row, ctx)`, `unitTotal(record, qty)`, `partBPerNadacUnit(row)`, `partBCoinsurance(row)`, `referencePrice(row)`, `spread(nadacRec, refRec, opts)`, `describeSpread(ratio)`, `freshness(record, sourceInfo, todayIso)`, `summarizeProduct(rows, qty, { partDContext })` |
+| `rules.js` | `RULES` (id, title, formula, description; feeds methodology.html), `HONESTY` (verbatim wording), `EXTREME_HIGH`, `EXTREME_LOW`, `EXTREME_HEADLINE`, `isExtremeSpread(rec)`, `formatSpreadMultiple(ratio)`, `inputDates(inputs)`, `labelerKey(name)`, `distinctLabelers(labelers)`, `NAME_OUTLIER_FACTOR`, `partDNameContext(rows)`, `nameOutlier(row, ctx)`, `DEFAULT_EA_QUANTITY` (30), `DEFAULT_EA_OTHER_QUANTITY` (1), `QUANTITY_CHIPS`, `eaForm(rows)`, `packageAmount(description)`, `WHOLESALE_MIN_UNITS` (10), `packageStart(description)`, `defaultQuantity(product) → { qty, unit, reason, chips, form }`, `unitTotal(record, qty)`, `partBPerNadacUnit(row)`, `partBCoinsurance(row)`, `referencePrice(row)`, `spread(nadacRec, refRec, opts)`, `describeSpread(ratio)`, `freshness(record, sourceInfo, todayIso)`, `summarizeProduct(rows, qty, { partDContext })` |
 | `search.js` | `normalizeQuery`, `groupProducts(rows)`, `buildIndex(products)`, `search(index, query, { limit })` |
 | `pack.js` | `packDrugs(doc) → compact`, `unpackDrugs(compact) → doc` — lossless: `unpackDrugs(packDrugs(doc))` deep-equals `doc`; `linkRows(doc) → rows` with `part_d`/`part_b` expanded from the tables |
 | `report.js` | `issueUrl({ template, title, fields })` → prefilled GitHub issue-form URL |
@@ -304,6 +304,25 @@ ES modules. Conventions (the bundler in `build.js` relies on them):
     2024-01-01 to 2024-12-31"), never the oldest date alone.
 - **Pack totals:** quantity × unit price, rounded half-up to cents; keeps the unit price's state
   (see above). A non-zero total under half a cent shows as `<$0.01`.
+- **Starting quantity** (`defaultQuantity()`, decisions [48](DECISIONS.md#48-starting-quantity-by-dosage-form-preview-images-stay-png)
+  and [49](DECISIONS.md#49-starting-quantity-case-packs-tablets-and-films-under-the-tongue-fda-listing-outliers)):
+  priced per EA, 30 for an oral solid and 1 for anything else. An NDC the FDA NDC Directory lists
+  is an oral solid when its dosage form starts `TABLET`, `CAPSULE`, `LOZENGE` or `TROCHE` with
+  route `ORAL` alone, or starts `TABLET` or `FILM` with route `SUBLINGUAL` or `BUCCAL` (alone,
+  together or with `ORAL`). A product is an oral solid when every listed NDC is one, or when more
+  than half of them are and its NADAC name has a tablet or capsule word (the reason then names
+  each outlier listing). With no FDA listing, a NADAC description with an oral solid's word
+  (`TABLET`, `CAP`, `CAPLET`, `SOFTGEL`, `ODT` …) and no other form or route word, or whose only
+  such word is `SL`, `SUBLINGUAL` or `BUCCAL` next to a tablet or film word (`eaForm()`). When
+  neither decides, 1, and the reason says so. The card offers 30 / 60 / 90 for an oral solid and 1 / 2 / 3
+  for anything else per EA, names the unit only where FDA's form is the unit itself ("1 patch"),
+  else "1 unit (EA)", and shows the reason, which names FDA's form, under the quantity whenever it
+  is not a plain month of a swallowed oral solid (`eaForm().plain`). Priced per ML or GM: one package
+  when every FDA package description of the product gives the same amount, else 1; no buttons.
+  An NDC whose outermost package level is a `CASE`, or a `CARTON`, `BOX`, `PACKAGE` or `TRAY` of at
+  least `WHOLESALE_MIN_UNITS` identical bottles, tubes, vials, jars or ampules, counts one inner
+  unit instead (`packageStart()`: "40 CARTON in 1 CASE / 1 BOTTLE in 1 CARTON / 60 g in 1 BOTTLE"
+  is 60 g), unless that leaves the NDCs disagreeing, when the whole packages decide.
 - **Coinsurance:** payment limit × the coinsurance percentage printed in the Part B file.
 - **Freshness:** a source is stale when its age passes `SOURCE_INFO[...].stale_after_days`. Age
   is counted from the NADAC as-of date, from the start of a Part B quarter, and from the end of
@@ -371,3 +390,103 @@ data); `build.test.js` (generated files in sync); `quality.test.js` (floors: at 
 rows `filed`, no source without a URL); `docs-links.test.js` (every relative link and anchor
 resolves; external links when `OPENBILL_CHECK_EXTERNAL=1`). Browser checks live in
 `tests/browser/*.spec.js` (Playwright), not picked up by `node --test`.
+
+## Phase 2: the cost-plus estimate, "what you were charged", and the drug pages
+
+### The cost-plus estimate (`estimated`, every product)
+
+No free, reusable source of retail cash prices exists: GoodRx's API terms forbid storing its
+data, pharmacy sites forbid scraping, and Cost Plus Drugs' terms forbid copying or harvesting
+data from its site. So OpenBill shows no one's cash price. It shows what a pharmacy pricing the
+way Cost Plus Drugs publicly describes (its cost, plus a 15% markup, plus a flat pharmacy fee)
+would charge if its cost were NADAC:
+
+```
+pack               = qty × NADAC per unit, rounded half-up to the cent
+cost-plus estimate = pack + 15% of pack (rounded half-up to the cent) + $5.00 per fill
+                                                            (shipping not included)
+```
+
+Each step is rounded to the cent on its own (integer cents, as the card shows them), so the
+one-step `qty × unit × 1.15 + $5.00` differs by a cent on about 1,700 products; the two-step
+form above is what `costPlusEstimate()` computes and what the card prints.
+
+- `COST_PLUS` in `src/core/rules.js` holds the parameters (`markup_pct: 15`, `fee_usd: 5`), each
+  with the public description it comes from. No Cost Plus price is stored anywhere.
+- The record: `kind: "usd"`, `state: "estimated"`, `source_name: "OpenBill calculation"`,
+  `source_url: "methodology.html#cost-plus"`, the NADAC file as `source_file`, NADAC's dates, and
+  a reason that says plainly it is a model, not a price any pharmacy quoted.
+- The card labels it "Cost-plus estimate", never "typical cash price", and shows the formula.
+- There is no spread against it: a multiple of our own formula over NADAC would be circular
+  (for cheap generics the $5 fee alone makes it 5–10×). The headline spread stays Medicare ÷ NADAC.
+
+### "What were you charged?" (the reader's own number)
+
+An optional input on the card. The reader types what they paid for this pack; the card shows
+that as a multiple of what pharmacies pay (NADAC) and of the cost-plus estimate, labelled "your
+number". OpenBill never sends or saves it; it may ride in the URL hash (`&paid=12.00`)
+so a reader can share their own card, which also means the browser's history keeps it
+(`PAID_PRIVACY` in `src/core/rules.js` says so on the card and on methodology.html). `parsePaid()`
+refuses any text over `PAID_MAX_CHARS` (32) characters, or with more than six whole-dollar
+digits, before any arithmetic. `paidComparison()` in `src/core/rules.js` does the maths;
+input must be a positive amount up to $100,000, else the card says why.
+
+### Drug pages (built on deploy, not committed)
+
+`tools/site.mjs` (run by `.github/workflows/pages.yml`) writes the site into `_site/`:
+
+| path | what |
+|---|---|
+| `index.html`, `openbill.html`, `methodology.html`, `data/drugs.json` | as before |
+| `drug/<slug>/index.html` | one static page per product, numbers in the HTML source |
+| `class/<slug>/index.html` | one page per FDA pharmacologic class (EPC) listing its products |
+| `drugs/<letter>/index.html` | A–Z index of products |
+| `og/<slug>.png` | 1200×630 preview card per product, rendered with Playwright as a PNG (JPEG was tried and was 14.4% larger; [decision 48](DECISIONS.md#48-starting-quantity-by-dosage-form-preview-images-stay-png)) |
+| `og/site.png` | the site's preview card (the showcase product); `openbill.html` and `methodology.html` point at it |
+| `assets/site.css`, `assets/fonts/*.woff2` | shared by the static pages (same origin) |
+| `sitemap.xml` | every page; `lastmod` from git (data pages: last commit touching `data/drugs.json`) |
+
+- `slugify(name)` in `src/core/slug.js`: lowercase ASCII, `&` → `and`, any other run of
+  non-alphanumerics → `-`, trimmed. `siteSlugs(names)` gives product pages their slugs: a name
+  whose slug no other name shares keeps it; names that share one (today "MICONAZOLE 7 CREAM" /
+  "MICONAZOLE-7 CREAM" and "TIOCONAZOLE 1 6.5% OINTMENT" / "TIOCONAZOLE-1 6.5% OINTMENT") each get
+  `-` plus the first 8 hex digits of the SHA-256 of their exact name, so none is picked to keep
+  the plain URL; a clash after that fails the build. The app's "Shareable page" link uses the
+  same function. Class slugs use `uniqueSlugs()`, which fails on any collision
+  ([decision 46](DECISIONS.md#46-product-names-that-share-a-slug-each-get-a-suffix-from-their-own-name)).
+- `404.html` (absolute links, `noindex`) is written too. Class pages with fewer than 3 products
+  are published but left out of `sitemap.xml`; a data page's `lastmod` is the newest commit
+  touching `data/drugs.json`, `src/build/drugpage.js`, `src/build/methodology.js`, `src/core/` or
+  `src/site/`. `tools/site.mjs` empties a non-empty `--out` only when it holds the
+  `.openbill-site` marker it writes, and never one holding `.git`.
+- Static pages have **no JavaScript**: CSP `default-src 'none'; style-src 'self'; font-src 'self';
+  img-src 'self' data:; base-uri 'none'; form-action 'none'`. They link to the app card
+  (`../../#drug=…`) for the interactive version. The app stays one self-contained page.
+- Each drug page: unique `<title>` and meta description built from its own numbers; canonical
+  URL; `og:*` and `twitter:*` tags with its own `og/<slug>.png` (`og:image:type` `image/png`); the
+  title, description and preview alt text quote the pack total at the starting quantity; the card's figures with state
+  chips and source lines in the HTML; prose generated from its data (what it is, what pharmacies
+  pay, what Medicare paid and why the gap may exist, the cost-plus estimate, what to ask at the
+  counter, the honesty lines); links to its brand/generic siblings, its class page, and up to 5
+  related products in the same class.
+- JSON-LD (`@graph`): `BreadcrumbList`; `Drug` with `cost` as `DrugCost` entries (NADAC with
+  `costOrigin` naming the file; Medicare with its period) — not `Offer`/`PriceSpecification`,
+  which would claim something is for sale; `FAQPage` with questions answered from the page's own
+  data. Every number in JSON-LD equals the one in the HTML.
+- `identity.pharm_classes`: FDA's `PHARM_CLASSES` from `product.txt` for the row's exact package
+  match, split into entries at each `, ` that follows an entry's closing `]` (a few names contain
+  `, `, e.g. `Anti-Inflammatory Agents, Non-Steroidal [CS]`), each entry kept once in FDA's order
+  (e.g. `["Factor Xa Inhibitor [EPC]", "Factor Xa Inhibitors [MoA]"]` for ELIQUIS 0003-0894-21);
+  left out (never null or `[]`) when FDA gives none or its product records disagree; never taken
+  from another package of the product code. Classes use the `[EPC]` entries. Counts:
+  `identity_with_pharm_classes`, `epc_classes`, `identity_pharm_classes_ambiguous`.
+- A project site's `robots.txt` is the domain owner's (`destinjones.github.io/robots.txt`), so
+  none is generated here; the sitemap is submitted directly.
+
+### Showcase
+
+The default card, README, screenshots and the site's preview card use
+**ARIPIPRAZOLE 10 MG TABLET at 30**: pharmacies pay $3.35 (30 × $0.11173, NADAC eff. 2026-09-23);
+Medicare Part D paid $46.50 (30 × $1.5499353611, 2024 average for generic aripiprazole); 13.9×,
+`estimated`. Chosen as a widely used generic with a large, non-extreme gap whose Part D row
+excludes ODT and injectable forms (checked in the raw Part D file).

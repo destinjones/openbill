@@ -29,7 +29,8 @@ The contract is [ARCHITECTURE.md](ARCHITECTURE.md) (section "`data/drugs.json` â
 `openbill.drugs/3`"). In short:
 
 - **Per NDC, on the row:** the NADAC record (and the corresponding generic NADAC where the NADAC
-  row lists one), the FDA identity, and the crosswalk's package figures for that NDC
+  row lists one), the FDA identity (with `pharm_classes`, FDA's pharmacologic classes for the
+  product, where FDA gives any), and the crosswalk's package figures for that NDC
   (`part_b.bill_units_per_package`, `package_size`, `package_qty`, `package_unit`).
 - **Per Part D name, in `part_d_names`:** CMS publishes one Part D figure per brand name +
   generic name, so it is written once, keyed `"<Brnd_Name>|<Gnrc_Name>"` with CMS's exact strings
@@ -57,7 +58,8 @@ The contract is [ARCHITECTURE.md](ARCHITECTURE.md) (section "`data/drugs.json` â
   is reconciled to the NADAC unit (below); the 89 unreconciled sizes have no `per`, because the
   crosswalk does not state the unit. Every record in the file is `filed` (38,503 records: each
   shared table record counted once).
-- **Size.** 35.2 MB (35,157,249 bytes) for the 2026-10-14 build, down from 60.2 MB when every
+- **Size.** 38.0 MB (37,962,645 bytes) for the 2026-10-14 build with `identity.pharm_classes`
+  (35.2 MB, 35,157,249 bytes, without it), down from 60.2 MB when every
   row repeated its Part D and Part B figures.
 
 ---
@@ -123,7 +125,26 @@ The contract is [ARCHITECTURE.md](ARCHITECTURE.md) (section "`data/drugs.json` â
 - **Fields used.** `PRODUCTID`, `NDCPACKAGECODE`, `PACKAGEDESCRIPTION`, `PROPRIETARYNAME` +
   `PROPRIETARYNAMESUFFIX` (FDA says the suffix completes the name), `NONPROPRIETARYNAME`,
   `DOSAGEFORMNAME`, `ROUTENAME`, `ACTIVE_NUMERATOR_STRENGTH` + `ACTIVE_INGRED_UNIT`, `LABELERNAME`,
-  `PRODUCTTYPENAME`.
+  `PRODUCTTYPENAME`, `PHARM_CLASSES`.
+- **`PHARM_CLASSES` â†’ `identity.pharm_classes`.** The pharmacologic classes FDA's product file
+  reports for the product's active substances, each entry a name and its class type in brackets:
+  `[EPC]` (Established Pharmacologic Class; the drug site's class pages use these), `[MoA]`
+  (mechanism of action), `[PE]` (physiologic effect), `[CS]` (chemical structure), plus `[EXT]`
+  and an older `[Chemical/Ingredient]` on a few products, kept as FDA writes them. The cell joins
+  entries with `, `, but some class names hold `, ` themselves (`Anti-Inflammatory Agents,
+  Non-Steroidal [CS]`, `Vaccines, Live, Unattenuated [CS]`: 29 such names in the file of 2026-10-16),
+  so the builder splits only at a `, ` that follows an entry's closing `]`, and refuses to build if
+  any piece is not `name [TYPE]`. FDA repeats an entry once per active ingredient that carries it
+  (mixed amphetamine salts list `Central Nervous System Stimulant [EPC]` four times); each entry is
+  kept once, at its first place, otherwise in FDA's order. The field is left out (never `null` or
+  `[]`) when the cell is blank (42,278 of 116,607 products). It comes from the product record of the
+  row's exact package match; if FDA ever listed one package under product records whose
+  `PHARM_CLASSES` differ, none would be written (`counts.identity_pharm_classes_ambiguous`, 0
+  today). Build of 2026-10-18: 24,902 of the 27,083 identity rows carry classes, 329 distinct
+  `[EPC]` classes (`counts.identity_with_pharm_classes`, `counts.epc_classes`); 816 rows carry
+  classes but no `[EPC]` entry. A plain split on `, ` would have given a different list on 1,688
+  rows. Rows with no identity carry no classes: a class is never borrowed from another package of
+  the product code.
 - **How it is joined.** Exact NDC-11. FDA writes package NDCs hyphenated 4-4-2, 5-3-2 or 5-4-1;
   the short segment is left-padded with a zero to get 5-4-2, then hyphens are dropped. 4 package
   codes appear twice in `package.txt`; an NDC whose rows give different identities would be left

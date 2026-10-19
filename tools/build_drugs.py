@@ -3,7 +3,8 @@
 
 Inputs (each verified against its sha256 in tools/cache/manifest.json before anything is read):
   nadac          NADAC weekly file: one row per NDC in the newest weekly file.
-  fda_ndc        FDA NDC Directory: row.identity, by exact NDC-11 join.
+  fda_ndc        FDA NDC Directory: row.identity, by exact NDC-11 join, with identity.pharm_classes
+                 from the product's PHARM_CLASSES (left out when FDA gives none).
   partd          Medicare Part D Spending by Drug: part_d_names (one entry per Part D "Overall"
                  row some NDC joined), and row.part_d = {key, basis} pointing into it, by brand /
                  generic NAME join (precision over recall: ambiguous or release-form-mismatched
@@ -317,7 +318,7 @@ def load_identities(path: Path) -> tuple[dict[str, dict], dict[str, dict], dict]
             bad += 1
             continue
         found[n].append((pk, products.get(pk["PRODUCTID"])))
-    ident, raw, ambiguous = {}, {}, set()
+    ident, raw, ambiguous, pharm_ambiguous = {}, {}, set(), set()
     for n, hits in found.items():
         cands = {}
         for pk, pr in hits:
@@ -335,9 +336,20 @@ def load_identities(path: Path) -> tuple[dict[str, dict], dict[str, dict], dict]
                 "labeler": blank_to_none(pr["LABELERNAME"]),
                 "package_description": blank_to_none(pk["PACKAGEDESCRIPTION"]),
             }
-            cands[json.dumps(idn, sort_keys=True)] = (idn, pr)
+            key = json.dumps(idn, sort_keys=True)
+            # The classes of every product record behind this identity (one, except where FDA
+            # lists the same package under two product records that describe it identically).
+            classes = cands[key][2] if key in cands else set()
+            classes.add(pharm_classes(pr))
+            cands[key] = (idn, pr, classes)
         if len(cands) == 1:
-            idn, pr = next(iter(cands.values()))
+            idn, pr, classes = next(iter(cands.values()))
+            if len(classes) == 1:
+                pc = next(iter(classes))
+                if pc:
+                    idn["pharm_classes"] = list(pc)  # left out, never [] or null, when FDA gives none
+            else:
+                pharm_ambiguous.add(n)
             ident[n], raw[n] = idn, pr
         elif len(cands) > 1:
             ambiguous.add(n)
@@ -382,8 +394,33 @@ def load_identities(path: Path) -> tuple[dict[str, dict], dict[str, dict], dict]
             if n is not None and m != own and n[:9] == code:
                 inner_of[n].add(own)
     return ident, raw, {"products": len(products), "packages": len(packages), "bad_ndc": bad,
-                        "ambiguous": ambiguous, "rx_forms": rx_forms, "rx_name_forms": rx_name_forms,
+                        "ambiguous": ambiguous, "pharm_ambiguous": pharm_ambiguous, "rx_forms": rx_forms, "rx_name_forms": rx_name_forms,
                         "by_product_code": by_code, "inner_of": inner_of}
+
+
+# PHARM_CLASSES lists a product's FDA Established Pharmacologic Classes and the other class
+# types, each entry a name and its type in brackets, joined by ", ": "Factor Xa Inhibitor [EPC],
+# Factor Xa Inhibitors [MoA]". A few names hold ", " themselves ("Anti-Inflammatory Agents,
+# Non-Steroidal [CS]", "Vaccines, Live, Unattenuated [CS]"), so the list is split only at a ", "
+# that follows an entry's closing bracket. FDA repeats an entry once per active ingredient that
+# carries it (four "Central Nervous System Stimulant [EPC]" for mixed amphetamine salts); each
+# entry is kept once, at its first place.
+PHARM_CLASS_SPLIT_RE = re.compile(r"(?<=\]), ")
+PHARM_CLASS_RE = re.compile(r"^\S(?:.*\S)? \[[^\[\]]+\]$")
+
+
+def pharm_classes(pr: dict) -> tuple:
+    """FDA's PHARM_CLASSES for a product record as a tuple of entries, in FDA's order; () when blank."""
+    s = " ".join(pr["PHARM_CLASSES"].split())
+    if not s:
+        return ()
+    out = []
+    for c in PHARM_CLASS_SPLIT_RE.split(s):
+        if not PHARM_CLASS_RE.match(c):
+            sys.exit(f"product.txt {pr['PRODUCTID']}: PHARM_CLASSES entry {c!r} is not 'name [TYPE]'; refusing to guess the split.")
+        if c not in out:
+            out.append(c)
+    return tuple(out)
 
 
 # An NDC FDA prints in parentheses inside a package description (4-4-2, 5-3-2 or 5-4-1).
@@ -1740,6 +1777,12 @@ def build() -> int:
         "distinct_names": len({r["name"] for r in out_rows}),
         "identity_matched": sum(1 for r in out_rows if r["identity"]),
         "identity_ambiguous": sum(1 for r in out_rows if r["ndc"] in fda_info["ambiguous"]),
+        # Rows whose FDA identity carries pharm_classes, and the distinct [EPC] entries among them
+        # (the class pages). Ambiguous: FDA lists the package under product records whose
+        # PHARM_CLASSES differ, so none is written.
+        "identity_with_pharm_classes": sum(1 for r in out_rows if r["identity"] and "pharm_classes" in r["identity"]),
+        "identity_pharm_classes_ambiguous": sum(1 for r in out_rows if r["ndc"] in fda_info["pharm_ambiguous"]),
+        "epc_classes": len({c for r in out_rows if r["identity"] for c in r["identity"].get("pharm_classes", ()) if c.endswith(" [EPC]")}),
         "part_d_matched": len(pd_rows),
         "part_d_by_basis": dict(sorted(Counter(r["part_d"]["basis"] for r in pd_rows).items())),
         "part_d_by_join": dict(sorted(paths.items())),
@@ -1803,6 +1846,7 @@ data/drugs.json  ({OUT.stat().st_size / 1e6:,.1f} MB, schema {SCHEMA})
   effective dates {eff[0]} .. {eff[-1]}
   rejected        {c['rejected']}   duplicates {c['duplicate_ndcs']}
   identity        {c['identity_matched']:,} of {n:,} rows ({pct(c['identity_matched'], n)}) by exact NDC in the FDA NDC Directory; {c['identity_ambiguous']} ambiguous
+  classes         {c['identity_with_pharm_classes']:,} identity rows carry FDA pharm_classes; {c['epc_classes']:,} distinct [EPC] classes; {c['identity_pharm_classes_ambiguous']} ambiguous
   Part D          {c['part_d_matched']:,} of {n:,} rows ({pct(c['part_d_matched'], n)}), data year {pd.year}; by basis {c['part_d_by_basis']}; by join {c['part_d_by_join']}
                   """ + "; ".join(f"{k} {v['matched']:,}/{v['rows']:,} ({pct(v['matched'], v['rows'])})" for k, v in c["part_d_by_rate_class"].items())
           + f"""; OTC {c['part_d_otc']['matched']}/{c['part_d_otc']['rows']}

@@ -11,17 +11,22 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { linkRows, packDrugs, unpackDrugs } from '../../src/core/pack.js';
 import { groupProducts, buildIndex, search } from '../../src/core/search.js';
-import { summarizeProduct, partDNameContext, freshness, inputDates, rangesByUnit, formatSpreadMultiple, isExtremeSpread, RULES, HONESTY, EXTREME_HEADLINE, EXTREME_LOW, EXTREME_HIGH } from '../../src/core/rules.js';
+import { summarizeProduct, partDNameContext, freshness, inputDates, rangesByUnit, formatSpreadMultiple, isExtremeSpread, paidComparison, parsePaid, COST_PLUS, RULES, HONESTY, EXTREME_HEADLINE, EXTREME_LOW, EXTREME_HIGH } from '../../src/core/rules.js';
 import { formatMoney, formatMultiple, formatUnitPrice } from '../../src/core/money.js';
 import { formatNdc } from '../../src/core/ndc.js';
 import { SOURCE_INFO } from '../../src/core/sources.js';
-import { REPO_URL } from '../../src/core/config.js';
+import { REPO_URL, SITE_URL } from '../../src/core/config.js';
+import { slugify, siteSlugs } from '../../src/core/slug.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const PAGE = pathToFileURL(path.join(ROOT, 'openbill.html')).href;
 const METHODOLOGY = pathToFileURL(path.join(ROOT, 'methodology.html')).href;
 const TODAY = '2026-10-17';
-const DEFAULT = 'METFORMIN HCL 500 MG TABLET';
+// The default card: the showcase (docs/ARCHITECTURE.md, "Showcase"; owner decision 2026-10-18).
+const DEFAULT = 'ARIPIPRAZOLE 10 MG TABLET';
+const DEFAULT_QTY = 30;
+// The first showcase, now a Try link; still covered by the search, NDC and Try-link checks.
+const METFORMIN = 'METFORMIN HCL 500 MG TABLET';
 
 const doc = JSON.parse(readFileSync(path.join(ROOT, 'data/drugs.json'), 'utf8'));
 const linked = linkRows(doc);
@@ -58,11 +63,35 @@ function expected(name, qty) {
     out.spread = a === b ? a : `${a} – ${b}`;
     out.sentence = s.spread.sentence;
   }
+  if (!s.cost_plus.missing) {
+    out.costPlus = moneyRange(s.cost_plus.min, s.cost_plus.max);
+    // The formula starts from the pack total the card prints (in cents), as costPlusEstimate() does.
+    const a = formatMoney(s.pack.min.value);
+    const b = formatMoney(s.pack.max.value);
+    out.costPlusFormula = `${a === b ? `${a} (NADAC)` : `(${a} to ${b}, NADAC)`} × ${(100 + COST_PLUS.markup_pct) / 100} + ${formatMoney(COST_PLUS.fee_usd)} fee`;
+    // Worked out by hand from what the card shows, it gives the card's estimate to the cent.
+    for (const [pack, cp] of [[s.pack.min, s.cost_plus.min], [s.pack.max, s.cost_plus.max]]) {
+      const cents = Math.round(pack.value * 100);
+      expect(Math.round((cents * (100 + COST_PLUS.markup_pct)) / 100) + COST_PLUS.fee_usd * 100, `${name} at ${qty}`).toBe(Math.round(cp.value * 100));
+    }
+  }
   return out;
 }
 
-function hashFor(name, qty) {
-  return `#drug=${encodeURIComponent(name)}${qty === undefined ? '' : `&qty=${qty}`}`;
+/** The multiples the card shows for what the reader paid: "3.6×" or "3.2× – 3.6×". */
+function multiples(vs) {
+  const a = formatMultiple(vs.min);
+  const b = formatMultiple(vs.max);
+  return a === b ? a : `${a} – ${b}`;
+}
+
+function hashFor(name, qty, paid) {
+  return `#drug=${encodeURIComponent(name)}${qty === undefined ? '' : `&qty=${qty}`}${paid === undefined ? '' : `&paid=${encodeURIComponent(paid)}`}`;
+}
+
+/** The page's own #… parameters. */
+async function hashParams(page) {
+  return new URLSearchParams(new URL(page.url()).hash.replace(/^#/, ''));
 }
 
 const summary = (p) => summarizeProduct(p.rows, undefined, { partDContext });
@@ -96,6 +125,18 @@ const nameOutlierProduct = products.find((p) => {
   return !s.spread.missing && s.spread.name_outliers.length > 0;
 });
 const withGeneric = products.find((p) => p.rows.some((r) => r.generic_nadac)).name;
+// A product whose NDCs have different NADAC prices, so the cost-plus estimate is a range.
+const costPlusRange = products.find((p) => {
+  const s = summarizeProduct(p.rows, 30, { partDContext });
+  return !s.cost_plus.missing && !s.cost_plus.same && s.nadac.units.length === 1;
+}).name;
+// Two product names that share a slug each link their own suffixed page (siteSlugs, decision 46).
+const slugGroups = new Map();
+for (const p of products) {
+  const k = slugify(p.name);
+  slugGroups.set(k, [...(slugGroups.get(k) || []), p.name]);
+}
+const sharedSlug = [...slugGroups.values()].find((names) => names.length > 1);
 
 /** Open a page with listeners for network requests, console errors and CSP violations. */
 async function open(page, url, { today = TODAY, ready = 'true' } = {}) {
@@ -196,15 +237,16 @@ test('loads offline: no network, no console errors, no CSP violations; reports s
   expect(startup.timings.first_card_since_navigation_ms).toBeLessThanOrEqual(startup.timings.since_navigation_ms);
 });
 
-test('the default card is METFORMIN HCL 500 MG TABLET at 60 with the real values', async ({ page }) => {
+test('the default card is ARIPIPRAZOLE 10 MG TABLET at 30 with the real values', async ({ page }) => {
   const seen = await open(page, PAGE);
-  const e = expected(DEFAULT, 60);
+  const e = expected(DEFAULT, DEFAULT_QTY);
   const card = page.locator('#card');
   await expect(card.locator('#card-title')).toHaveText(DEFAULT);
-  await expect(card.locator('#qty')).toHaveValue('60');
-  await expect(card.locator('.qty-chip[data-qty="60"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(card.locator('#qty')).toHaveValue(String(DEFAULT_QTY));
+  await expect(card.locator(`.qty-chip[data-qty="${DEFAULT_QTY}"]`)).toHaveAttribute('aria-pressed', 'true');
   await expect(card.locator('[data-figure="pharmacy"]')).toHaveText(e.pharmacy);
-  await expect(card.locator('.fig-pharmacy .arith')).toContainText(`60 × `);
+  await expect(card.locator('.fig-pharmacy .arith')).toContainText(`${DEFAULT_QTY} × `);
+  await expect(card.locator('[data-figure="cost-plus"]')).toHaveText(e.costPlus);
   await expect(card.locator('.fig-medicare .fig-label')).toHaveText(e.medicareLabel);
   await expect(card.locator('[data-figure="medicare"]')).toHaveText(e.medicare);
   await expect(card.locator('[data-figure="spread"]')).toHaveText(e.spread);
@@ -213,6 +255,10 @@ test('the default card is METFORMIN HCL 500 MG TABLET at 60 with the real values
   await expect(card.locator('.honesty')).toContainText(range);
   // "Medicare's price is not your price." sits with the Medicare figure itself.
   await expect(card.locator('.fig-medicare .not-yours')).toHaveText(NOT_YOURS);
+  // The build block names the same default, and the page opened it without a #drug= in the URL.
+  const build = JSON.parse(await page.locator('#openbill-build').textContent());
+  expect(build.default).toEqual({ drug: DEFAULT, qty: DEFAULT_QTY });
+  expect(new URL(page.url()).hash).toBe('');
   await seen.check();
 });
 
@@ -234,11 +280,14 @@ test('the hero: both prices, the spread and their chips are visible without scro
     return {
       h: window.innerHeight,
       scrollY: window.scrollY,
-      figures: ['[data-figure="pharmacy"]', '.fig-pharmacy .fig-value .chip', '[data-figure="medicare"]', '.fig-medicare .fig-value .chip', '[data-figure="spread"]', '.spread .fig-value .chip'].map((s) => [s, bottom(s)]),
+      figures: ['[data-figure="pharmacy"]', '.fig-pharmacy .fig-value .chip', '[data-figure="medicare"]', '.fig-medicare .fig-value .chip', '[data-figure="cost-plus"]', '.costplus .chip', '[data-figure="spread"]', '.spread .fig-value .chip'].map((s) => [s, bottom(s)]),
       order,
+      // The cost-plus line sits under the two figures and before the spread.
+      sections: [...document.querySelectorAll('#figures > section')].map((x) => x.className.split(' ')[0]),
     };
   });
   expect(box.scrollY).toBe(0);
+  expect(box.sections).toEqual(['fig', 'fig', 'costplus', 'spread']);
   for (const [sel, b] of box.figures) {
     expect(b, `${sel} exists`).not.toBeNull();
     expect(b, `${sel} bottom ${b} within the ${vp.width}×${vp.height} first screen (${info.project.name})`).toBeLessThanOrEqual(box.h);
@@ -247,12 +296,12 @@ test('the hero: both prices, the spread and their chips are visible without scro
     expect(o.value).toBeGreaterThanOrEqual(0);
     expect(o.prov, 'each figure has its own provenance line after it').toBeGreaterThan(o.value);
   }
-  for (const sel of ['[data-figure="pharmacy"]', '[data-figure="medicare"]', '[data-figure="spread"]', '.fig-pharmacy .fig-value .chip', '.spread .fig-value .chip']) await expect(page.locator(sel)).toBeInViewport({ ratio: 1 });
+  for (const sel of ['[data-figure="pharmacy"]', '[data-figure="medicare"]', '[data-figure="cost-plus"]', '[data-figure="spread"]', '.fig-pharmacy .fig-value .chip', '.costplus .chip', '.spread .fig-value .chip']) await expect(page.locator(sel)).toBeInViewport({ ratio: 1 });
 });
 
 test('the state chips are on the card as visible text', async ({ page }) => {
   await open(page, PAGE);
-  const e = expected(DEFAULT, 60);
+  const e = expected(DEFAULT, DEFAULT_QTY);
   const ph = page.locator('.fig-pharmacy .fig-value .chip').first();
   await expect(ph).toBeVisible();
   await expect(ph).toHaveText(e.s.pack.min.state);
@@ -264,7 +313,7 @@ test('the state chips are on the card as visible text', async ({ page }) => {
 
 test('the provenance lines show the file, effective date and retrieved date, always visible', async ({ page }) => {
   await open(page, PAGE);
-  const e = expected(DEFAULT, 60);
+  const e = expected(DEFAULT, DEFAULT_QTY);
   const prov = page.locator('.fig-pharmacy .prov').first();
   await expect(prov).toBeVisible();
   const n = e.s.nadac.min;
@@ -281,7 +330,7 @@ test('the provenance lines show the file, effective date and retrieved date, alw
 // the oldest date alone (review NUM-3, CORE-2, DOC-3, UI-6).
 test('the spread and a Part B conversion show each input’s own date or period', async ({ page }) => {
   await open(page, PAGE);
-  const e = expected(DEFAULT, 60);
+  const e = expected(DEFAULT, DEFAULT_QTY);
   const line = page.locator('.spread .prov');
   await expect(line).toHaveCount(1);
   const n = e.s.nadac.min;
@@ -308,7 +357,7 @@ test('the spread and a Part B conversion show each input’s own date or period'
 
 test('opening Sources and method shows every reason and every NDC', async ({ page }) => {
   await open(page, PAGE);
-  const e = expected(DEFAULT, 60);
+  const e = expected(DEFAULT, DEFAULT_QTY);
   const summaryEl = page.locator('#panel summary');
   await expect(summaryEl).toHaveText('Sources and method');
   await openPanel(page);
@@ -320,7 +369,7 @@ test('opening Sources and method shows every reason and every NDC', async ({ pag
   await expect(body.locator('li.ndc')).toHaveCount(e.s.ndcs.length);
   for (const ndc of [e.s.ndcs[0], e.s.ndcs[e.s.ndcs.length - 1]]) await expect(body).toContainText(`NDC ${formatNdc(ndc)}`);
   await expect(body).toContainText('calculated from the most recently completed pharmacy survey');
-  for (const id of ['unit-total', 'reference-price', 'spread', 'freshness']) {
+  for (const id of ['unit-total', 'reference-price', 'spread', 'cost-plus', 'what-you-paid', 'freshness']) {
     await expect(body.locator(`ul.rules a[href="methodology.html#${id}"]`), `rules list links #${id}`).toHaveCount(1);
   }
   await expect(body.locator('.not-yours').first()).toHaveText(NOT_YOURS);
@@ -337,7 +386,8 @@ test('"Wrong? Tell us" opens a prefilled wrong-price issue in a new tab, before 
   const params = new URL(href).searchParams;
   expect(params.get('product')).toBe(DEFAULT);
   expect(params.get('ndc')).toContain(formatNdc(byName.get(DEFAULT).ndcs[0]));
-  expect(params.get('shown_value')).toContain(expected(DEFAULT, 60).pharmacy);
+  expect(params.get('shown_value')).toContain(expected(DEFAULT, DEFAULT_QTY).pharmacy);
+  expect(params.get('shown_value')).toContain(`cost-plus estimate ${expected(DEFAULT, DEFAULT_QTY).costPlus} (estimated)`);
   expect(params.get('source_file')).toContain(doc.sources.nadac.source_file);
   const build = JSON.parse(await page.locator('#openbill-build').textContent());
   expect(params.get('build_id')).toBe(build.build_id);
@@ -361,13 +411,30 @@ test('search "metformin" lists results and opens a card', async ({ page }) => {
   await expect(results.first().locator('.chip')).toBeVisible();
   const target = results.filter({ has: page.locator('.result-name', { hasText: /^METFORMIN HCL 500 MG TABLET$/ }) });
   await target.click();
-  await expect(page.locator('#card-title')).toHaveText(DEFAULT);
-  const q = summary(byName.get(DEFAULT)).default_quantity.qty;
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+  const q = summary(byName.get(METFORMIN)).default_quantity.qty;
   await expect(page.locator('#qty')).toHaveValue(String(q));
-  await expect(page.locator('[data-figure="pharmacy"]')).toHaveText(expected(DEFAULT, q).pharmacy);
+  const e = expected(METFORMIN, q);
+  await expect(page.locator('[data-figure="pharmacy"]')).toHaveText(e.pharmacy);
+  await expect(page.locator('[data-figure="medicare"]')).toHaveText(e.medicare);
+  await expect(page.locator('[data-figure="spread"]')).toHaveText(e.spread);
+  await expect(page.locator('[data-figure="cost-plus"]')).toHaveText(e.costPlus);
   await expect(page.locator('#results button')).toHaveCount(0);
-  expect(decodeURIComponent(new URL(page.url()).hash)).toBe(`#drug=${DEFAULT}&qty=${q}`);
+  expect(decodeURIComponent(new URL(page.url()).hash)).toBe(`#drug=${METFORMIN}&qty=${q}`);
   await seen.check();
+});
+
+test('the Try links are real products; metformin, the first showcase, opens from there', async ({ page }) => {
+  await open(page, PAGE);
+  const build = JSON.parse(await page.locator('#openbill-build').textContent());
+  const links = page.locator('.try-list a');
+  await expect(links).toHaveCount(build.try.length);
+  expect(build.try).toContain(METFORMIN);
+  for (const n of build.try) expect(byName.has(n), n).toBe(true);
+  await page.locator('.try-list a', { hasText: METFORMIN }).click();
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+  const q = summary(byName.get(METFORMIN)).default_quantity.qty;
+  await expect(page.locator('[data-figure="pharmacy"]')).toHaveText(expected(METFORMIN, q).pharmacy);
 });
 
 // Review DES-3: a result whose own name contains the query does not repeat 'matched "…"'.
@@ -403,18 +470,18 @@ test('Enter opens the first result; no match shows a suggestion and a hint, and 
 
 test('NDC search works in three formats', async ({ page }) => {
   await open(page, PAGE);
-  const row = byName.get(DEFAULT).rows.find((r) => r.identity && r.identity.package_ndc.replace(/-/g, '').length === 10);
+  const row = byName.get(METFORMIN).rows.find((r) => r.identity && r.identity.package_ndc.replace(/-/g, '').length === 10);
   const formats = [row.ndc, formatNdc(row.ndc), row.identity.package_ndc];
   expect(new Set(formats).size).toBe(3);
   for (const q of formats) {
     await page.locator('#q').fill(q);
     const results = page.locator('#results button.result');
     await expect(results).toHaveCount(1);
-    await expect(results.first().locator('.result-name')).toHaveText(DEFAULT);
+    await expect(results.first().locator('.result-name')).toHaveText(METFORMIN);
     await expect(results.first().locator('.result-ndc')).toHaveText(`NDC ${formatNdc(row.ndc)}`);
   }
   await page.locator('#q').press('Enter');
-  await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
 });
 
 test('a product with no Medicare figure says "we don\'t know yet", never a zero', async ({ page }) => {
@@ -631,6 +698,58 @@ test('a #drug=…&qty=90 deep link opens that card at 90; quantity changes updat
   await expect(page.locator('.fig-pharmacy .why')).toHaveText('No quantity entered.');
 });
 
+// Decision 48: a kit priced per EA used to open at "Pharmacies pay $263,287.57 for 30 kits". It
+// opens at 1 now, offers 1 / 2 / 3, and the card says why, naming FDA's form.
+test('a kit priced per EA opens at 1 with 1, 2 and 3 to choose from, and says why', async ({ page }) => {
+  const KIT = 'AVONEX 30 MCG/0.5 ML SYRINGE KIT (4 PACK)';
+  const dq = summary(byName.get(KIT)).default_quantity;
+  expect([dq.qty, dq.form.oral_solid]).toEqual([1, false]);
+  const seen = await open(page, PAGE);
+  await page.locator('#q').fill('avonex');
+  await page.locator('#results button.result').filter({ has: page.locator('.result-name', { hasText: KIT }) }).click();
+  await expect(page.locator('#card-title')).toHaveText(KIT);
+  await expect(page.locator('#qty')).toHaveValue('1');
+  expect(decodeURIComponent(new URL(page.url()).hash)).toBe(`#drug=${KIT}&qty=1`);
+  await expect(page.locator('.qty-chip')).toHaveText(['1', '2', '3']);
+  await expect(page.locator('.qty-chip[data-qty="1"]')).toHaveAttribute('aria-pressed', 'true');
+  const e1 = expected(KIT, 1);
+  await expect(page.locator('[data-figure="pharmacy"]')).toHaveText(e1.pharmacy);
+  await expect(page.locator('[data-figure="cost-plus"]')).toHaveText(e1.costPlus);
+  await expect(page.locator('.qty-note')).toHaveText(dq.reason);
+  await expect(page.locator('.qty-note')).toContainText('dosage form “KIT”');
+  await page.locator('.qty-chip[data-qty="2"]').click();
+  await expect(page.locator('[data-figure="pharmacy"]')).toHaveText(expected(KIT, 2).pharmacy);
+  await expect(page.locator('.qty-chip[data-qty="2"]')).toHaveAttribute('aria-pressed', 'true');
+  expect(new URL(page.url()).hash).toBe(hashFor(KIT, 2));
+  // An oral tablet keeps 30 / 60 / 90 and no starting-quantity note on the card.
+  await page.goto(PAGE + hashFor(DEFAULT));
+  await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  await expect(page.locator('.qty-chip')).toHaveText(['30', '60', '90']);
+  await expect(page.locator('.qty-note')).toHaveCount(0);
+  await seen.check();
+});
+
+// Decision 49: a sublingual tablet and a tablet with an outlier FDA listing open at 30 like any
+// oral tablet, and the card says why under the quantity.
+test('a sublingual tablet and a tablet with an outlier FDA listing open at 30, with the reason under the quantity', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  for (const [name, words] of [
+    ['BUPRENORPHINE 8 MG TABLET SL', 'taken under the tongue'],
+    ['FEBUXOSTAT 40 MG TABLET', 'looks like an error in the listing'],
+  ]) {
+    const dq = summary(byName.get(name)).default_quantity;
+    expect([dq.qty, dq.form.oral_solid, dq.form.plain]).toEqual([30, true, false]);
+    await page.goto(PAGE + hashFor(name));
+    await expect(page.locator('#card-title')).toHaveText(name);
+    await expect(page.locator('#qty')).toHaveValue('30');
+    await expect(page.locator('.qty-chip')).toHaveText(['30', '60', '90']);
+    await expect(page.locator('[data-figure="pharmacy"]')).toHaveText(expected(name, 30).pharmacy);
+    await expect(page.locator('.qty-note')).toHaveText(dq.reason);
+    await expect(page.locator('.qty-note')).toContainText(words);
+  }
+  await seen.check();
+});
+
 test('an unknown drug in the link shows a clear message, not a crash', async ({ page }) => {
   const seen = await open(page, `${PAGE}#drug=NOT%20A%20DRUG&qty=30`);
   await expect(page.locator('#card-title')).toHaveText('No drug by that name');
@@ -729,9 +848,10 @@ test('no horizontal scroll, with the panel open, with search results and at 200%
   await page.locator('#q').fill('insulin');
   await expect(page.locator('#results button.result').first()).toBeVisible();
   await noScroll('search results');
-  await page.goto(PAGE + hashFor(DEFAULT, 60));
+  await page.goto(PAGE + hashFor(DEFAULT, DEFAULT_QTY, '12.00'));
+  await expect(page.locator('.paid-sentence')).toBeVisible();
   await openPanel(page);
-  await noScroll('default card, panel open');
+  await noScroll('default card with what you paid, panel open');
   // Review A11Y-3: at 200% text the state chip wraps below the multiple instead of overflowing.
   await page.evaluate(() => {
     document.documentElement.style.fontSize = '200%';
@@ -784,7 +904,7 @@ test('in the panel, each record’s Source link is level with its label', async 
 
 test('inputs use at least 16px text', async ({ page }) => {
   await open(page, PAGE);
-  for (const sel of ['#q', '#qty']) {
+  for (const sel of ['#q', '#qty', '#paid']) {
     const px = await page.locator(sel).evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     expect(px, sel).toBeGreaterThanOrEqual(16);
   }
@@ -838,5 +958,203 @@ test('methodology.html loads offline with an anchor for every rule', async ({ pa
   expect(small.out).toEqual([]);
   const [sw, cw] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
   expect(sw).toBeLessThanOrEqual(cw);
+  await seen.check();
+});
+
+// ---------------------------------------------------------------------------------------------
+// Phase 2 (docs/ARCHITECTURE.md): the cost-plus estimate, "What were you charged?" and the page link.
+
+test('the cost-plus line shows the core’s estimate, its chip, formula, explanation and source line; its record is in the panel', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const e = expected(DEFAULT, DEFAULT_QTY);
+  const cp = e.s.cost_plus;
+  const n = e.s.nadac.min;
+  const block = page.locator('.costplus');
+  await expect(block.locator('.cp-label')).toHaveText('Cost-plus estimate');
+  await expect(block.locator('[data-figure="cost-plus"]')).toHaveText(e.costPlus);
+  expect(cp.min.state).toBe('estimated');
+  await expect(block.locator('.chip')).toHaveText('estimated');
+  await expect(block.locator('.cp-formula')).toHaveText(e.costPlusFormula);
+  expect(e.costPlusFormula).toBe(`${e.pharmacy} (NADAC) × 1.15 + $5.00 fee`);
+  await expect(page.locator('.fig-pharmacy .arith')).toContainText(`${DEFAULT_QTY} × ${formatUnitPrice(n.value)}`);
+  await expect(block.locator('.cp-what')).toHaveText('What a pharmacy that paid NADAC and charged cost + 15% + a $5.00 fee would charge; not a price anyone quoted.');
+  await expect(block.locator('.prov')).toHaveText(`OpenBill calculation from NADAC eff. ${n.effective_date} (file of ${n.as_of_date})`);
+  // Owner decision 2026-10-18: never a "cash price", and no spread against the estimate.
+  await expect(page.locator('#card')).not.toContainText(/cash price/i);
+  await expect(page.locator('.spread')).not.toContainText(/cost-plus/i);
+  await openPanel(page);
+  const body = page.locator('#panel-body');
+  await expect(body.locator('.rec-title', { hasText: 'Cost-plus estimate: pack total' })).toHaveCount(1);
+  await expect(body).toContainText(cp.min.reason);
+  await expect(body.locator('ul.rules a[href="methodology.html#cost-plus"]')).toHaveCount(1);
+  await expect(body.locator('a[href="methodology.html#cost-plus"]').first()).toBeVisible();
+  // The quantity changes the estimate with the pack.
+  await page.locator('.qty-chip[data-qty="90"]').click();
+  await expect(page.locator('[data-figure="cost-plus"]')).toHaveText(expected(DEFAULT, 90).costPlus);
+  await expect(page.locator('.cp-formula')).toHaveText(expected(DEFAULT, 90).costPlusFormula);
+  await seen.check();
+});
+
+test('the cost-plus estimate is a range when NADAC varies, and "we don’t know yet" without a quantity', async ({ page }) => {
+  await open(page, PAGE + hashFor(costPlusRange, 30));
+  const e = expected(costPlusRange, 30);
+  expect(e.costPlus).toContain(' – ');
+  await expect(page.locator('[data-figure="cost-plus"]')).toHaveText(e.costPlus);
+  await expect(page.locator('.cp-formula')).toHaveText(e.costPlusFormula);
+  await expect(page.locator('.cp-formula')).toContainText(' to ');
+  await page.locator('#qty').fill('');
+  await expect(page.locator('.costplus')).toContainText(/we don.t know yet/i);
+  await expect(page.locator('.costplus .why')).toHaveText('No quantity entered.');
+  await expect(page.locator('[data-figure="cost-plus"]')).toHaveCount(0);
+});
+
+test('What were you charged?: a valid amount shows the core’s sentence and multiples as "your number", mirrored in the address, never sent', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const input = page.getByRole('textbox', { name: 'What were you charged?' });
+  await expect(input).toHaveAttribute('id', 'paid');
+  await expect(input).toHaveAttribute('autocomplete', 'off');
+  await expect(input).toHaveValue('');
+  await expect(page.locator('#paid-result')).toHaveAttribute('aria-live', 'polite');
+  await expect(page.locator('.paid-hint')).toContainText('OpenBill never sends or saves it');
+  await expect(page.locator('.paid-hint')).toContainText('your browser’s history keeps it');
+  const s = expected(DEFAULT, DEFAULT_QTY).s;
+  await input.fill('12');
+  const r = paidComparison('12', s.pack, s.cost_plus);
+  expect(r.valid).toBe(true);
+  await expect(page.locator('.paid-sentence')).toHaveText(r.sentence);
+  await expect(page.locator('[data-figure="paid-pharmacy"]')).toHaveText(multiples(r.vs_pharmacy));
+  await expect(page.locator('[data-figure="paid-cost-plus"]')).toHaveText(multiples(r.vs_cost_plus));
+  await expect(page.locator('.paid-list .chip-yours')).toHaveText(['your number', 'your number']);
+  await expect(input).toHaveAttribute('aria-invalid', 'false');
+  await expect.poll(async () => (await hashParams(page)).get('paid')).toBe('12.00');
+  expect((await hashParams(page)).get('drug')).toBe(DEFAULT);
+  // A new quantity is a new pack: the comparison follows it and the address keeps both.
+  await page.locator('.qty-chip[data-qty="60"]').click();
+  const s60 = expected(DEFAULT, 60).s;
+  await expect(page.locator('.paid-sentence')).toHaveText(paidComparison('12', s60.pack, s60.cost_plus).sentence);
+  const params = await hashParams(page);
+  expect([params.get('qty'), params.get('paid')]).toEqual(['60', '12.00']);
+  // The reader's number goes nowhere else: not into the report link or the page link, not into storage.
+  const report = new URL(await page.locator('#report').getAttribute('href'));
+  expect([...report.searchParams.keys()]).not.toContain('paid');
+  for (const v of report.searchParams.values()) expect(v).not.toMatch(/12\.00|your number/);
+  if (await page.locator('#share').count()) expect(await page.locator('#share').getAttribute('href')).not.toMatch(/paid|#|\?/);
+  const stored = await page.evaluate(() => {
+    try {
+      return [localStorage.length, sessionStorage.length, document.cookie];
+    } catch {
+      return [0, 0, ''];
+    }
+  });
+  expect(stored).toEqual([0, 0, '']);
+  // Clearing the box clears the result and the address.
+  await input.fill('');
+  await expect(page.locator('#paid-result')).toBeEmpty();
+  await expect.poll(async () => (await hashParams(page)).has('paid')).toBe(false);
+  await seen.check();
+});
+
+test('What were you charged?: an unusable amount says why, without repeating it, and shows no multiple', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const input = page.locator('#paid');
+  const cases = ['abc', '0', '-5', '12.345', '100000.01', '<img src=x id=xss>'];
+  for (const v of cases) {
+    const p = parsePaid(v);
+    expect(p.valid, v).toBe(false);
+    await input.fill(v);
+    await expect(page.locator('.paid-problem'), v).toHaveText(p.problem);
+    await expect(input).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.locator('.paid-sentence')).toHaveCount(0);
+    await expect(page.locator('[data-figure^="paid-"]')).toHaveCount(0);
+    await expect.poll(async () => (await hashParams(page)).has('paid'), v).toBe(false);
+  }
+  await expect(page.locator('#xss')).toHaveCount(0);
+  await expect(page.locator('#paid-result')).not.toContainText('<img');
+  // "$1,234.50" is a usable amount.
+  await input.fill('$1,234.50');
+  await expect(page.locator('.paid-problem')).toHaveCount(0);
+  await expect(page.locator('.paid-sentence')).toBeVisible();
+  await expect.poll(async () => (await hashParams(page)).get('paid')).toBe('1234.50');
+  await seen.check();
+});
+
+test('What were you charged?: &paid= in the address is checked on load and round-trips', async ({ page }) => {
+  const seen = await open(page, PAGE + hashFor(DEFAULT, DEFAULT_QTY, '12.5'));
+  const s = expected(DEFAULT, DEFAULT_QTY).s;
+  await expect(page.locator('#paid')).toHaveValue('12.50');
+  await expect(page.locator('.paid-sentence')).toHaveText(paidComparison('12.5', s.pack, s.cost_plus).sentence);
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-ready', 'true');
+  await expect(page.locator('#paid')).toHaveValue('12.50');
+  await expect(page.locator('.paid-sentence')).toBeVisible();
+  // A changed address updates the box.
+  await page.evaluate((h) => {
+    location.hash = h;
+  }, hashFor(DEFAULT, DEFAULT_QTY, '20'));
+  await expect(page.locator('#paid')).toHaveValue('20.00');
+  await expect(page.locator('.paid-sentence')).toHaveText(paidComparison('20', s.pack, s.cost_plus).sentence);
+  // An unusable value in a link is not used: the box stays empty, the card says why, the address drops it.
+  for (const bad of ['-5', '<script>window.__xss=1</script>', '1e9', 'abc']) {
+    await page.goto(PAGE + hashFor(DEFAULT, DEFAULT_QTY, bad));
+    await expect(page.locator('html')).toHaveAttribute('data-ready', 'true');
+    await expect(page.locator('#paid')).toHaveValue('');
+    await expect(page.locator('.paid-problem')).toHaveText(`The amount in this link was not used. ${parsePaid(bad).problem}`);
+    await expect(page.locator('.paid-sentence')).toHaveCount(0);
+    expect((await hashParams(page)).has('paid'), bad).toBe(false);
+    expect((await hashParams(page)).get('qty')).toBe(String(DEFAULT_QTY));
+  }
+  expect(await page.evaluate(() => window.__xss)).toBeUndefined();
+  // Another drug starts without the reader's number.
+  await page.goto(PAGE + hashFor(DEFAULT, DEFAULT_QTY, '12'));
+  await expect(page.locator('#paid')).toHaveValue('12.00');
+  await page.locator('#q').fill('eliquis 5');
+  await page.locator('#q').press('Enter');
+  await expect(page.locator('#card-title')).not.toHaveText(DEFAULT);
+  await expect(page.locator('#paid')).toHaveValue('');
+  expect((await hashParams(page)).has('paid')).toBe(false);
+  await seen.check();
+});
+
+test('What were you charged?: a crafted, very long &paid= in a link is refused; the card and search still work', async ({ page }) => {
+  // Regression: 400,000 nines used to throw a BigInt RangeError in WebKit and Firefox, and the
+  // whole card said "The data did not load" with the search box never enabled.
+  const seen = await open(page, PAGE + hashFor(DEFAULT, DEFAULT_QTY, '9'.repeat(400000)));
+  await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  await expect(page.locator('#paid')).toHaveValue('');
+  await expect(page.locator('.paid-problem')).toHaveText(`The amount in this link was not used. ${parsePaid('9'.repeat(400000)).problem}`);
+  await expect(page.locator('#q')).toBeEnabled();
+  expect((await hashParams(page)).has('paid')).toBe(false);
+  await seen.check();
+});
+
+test('"Shareable page" links to the product’s page on the website; it loads nothing by itself', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const link = page.locator('#share');
+  await expect(link).toHaveText('Shareable page');
+  await expect(link).toHaveAttribute('href', `${SITE_URL}drug/${slugify(DEFAULT)}/`);
+  expect(`${SITE_URL}drug/${slugify(DEFAULT)}/`).toBe('https://destinjones.github.io/openbill/drug/aripiprazole-10-mg-tablet/');
+  await expect(link).toHaveAttribute('target', '_blank');
+  await expect(link).toHaveAttribute('rel', /noopener/);
+  // It follows the card to another product.
+  await page.goto(PAGE + hashFor(METFORMIN, 60));
+  await expect(page.locator('#share')).toHaveAttribute('href', `${SITE_URL}drug/${slugify(METFORMIN)}/`);
+  await seen.check();
+});
+
+test('products whose names share a slug each link their own page, with the site build’s suffix', async ({ page }) => {
+  test.skip(!sharedSlug, 'no two product names share a slug in this build');
+  const slugs = siteSlugs(products.map((p) => p.name));
+  const hrefs = [];
+  const seen = await open(page, PAGE + hashFor(sharedSlug[0]));
+  for (const name of sharedSlug) {
+    await page.goto(PAGE + hashFor(name));
+    await expect(page.locator('#card-title')).toHaveText(name);
+    const want = `${SITE_URL}drug/${slugs.get(name)}/`;
+    expect(want).toMatch(new RegExp(`/drug/${slugify(name)}-[0-9a-f]{8}/$`));
+    await expect(page.locator('#share')).toHaveAttribute('href', want);
+    hrefs.push(want);
+  }
+  expect(new Set(hrefs).size).toBe(sharedSlug.length);
+  await expect(page.locator('#report')).toBeVisible();
   await seen.check();
 });

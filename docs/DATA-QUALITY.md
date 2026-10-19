@@ -37,6 +37,7 @@ These figures match `counts` in `data/drugs.json`.
 | join | rows | share of all rows | notes |
 | --- | --- | --- | --- |
 | FDA NDC Directory identity (exact NDC) | 27,083 | 90.2% | 0 NDCs had conflicting FDA entries and were left without an identity |
+| FDA pharmacologic classes (`identity.pharm_classes`) | 24,902 | 82.9% | 91.9% of the rows with an identity; the others have none, because FDA’s `PHARM_CLASSES` cell is blank or its product records disagree. 24,086 rows have an established pharmacologic class (`[EPC]`), 329 classes in all; 4,797 of 5,936 products have one and get a class page; 0 NDCs had FDA product records whose classes disagree |
 | Medicare Part D (by name) | 19,277 | 64.2% | pointing at 1,458 Part D names; 17,111 to a name CMS writes as the generic name, 2,166 to a name CMS writes as a trade name; 17,978 matched by exact product name, 1,299 matched by generic name; 2,035 rows with no FDA identity were matched using FDA’s record for their product code, and 1,385 of them joined; for a name CMS marks with `*`, 263 of those rows took their route from that record, and 146 of them kept the Part D figure because of it (`part_d.route_from`) |
 | Medicare Part B (exact NDC on the crosswalk) | 1,427 | 4.8% | pointing at 138 HCPCS codes |
 | Part B with the package unit reconciled to the NADAC unit | 1,338 | 4.5% | 93.8% of the Part B rows; only these can be converted to a price per NADAC unit. Reconciled by: 1,289 because FDA’s package description gives the same total as the crosswalk; 32 because the NDC is a kit NADAC prices per EA, so the count is of whole kits; 17 because the crosswalk’s billing-unit columns disagree and FDA’s strength × amount ÷ the HCPCS dosage settles them exactly. The other 89 keep the crosswalk’s package size as a quantity with no unit |
@@ -71,6 +72,14 @@ Spreads (reference per unit ÷ NADAC per unit) by state, one per row with a refe
 | Medicare Part B | 0 | 0 | 25 | 742 | 46 |
 
 Part B figures shown next to a Part D reference in the provenance panel: filed 0, published 0, derived 29, estimated 542.
+
+Cost-plus estimates ([the rule](../methodology.html#cost-plus)), at each product’s starting quantity: 5,924 of 5,936 products have one, always `estimated`. The other 12 show “We don’t know yet”, with the reason:
+
+| reason the card gives | products |
+| --- | --- |
+| These NDCs are priced per different units (EA, ML), so there is no single pack total for a quantity of 1; see the price for each NDC. | 5 |
+| These NDCs are priced per different units (GM, ML), so there is no single pack total for a quantity of 1; see the price for each NDC. | 4 |
+| These NDCs are priced per different units (EA, GM), so there is no single pack total for a quantity of 1; see the price for each NDC. | 3 |
 
 Rows with no reference, by why each Medicare figure is not usable:
 

@@ -8,7 +8,8 @@
 
 import { PRICE_STATES, validateRecord } from '../core/provenance.js';
 import { SOURCE_INFO, NADAC_EXPLANATION_CODES, NADAC_CARRIED_FORWARD_CODES } from '../core/sources.js';
-import { summarizeProduct, freshness, distinctLabelers, EXTREME_HIGH, EXTREME_LOW, EXTREME_HEADLINE, isExtremeSpread } from '../core/rules.js';
+import { summarizeProduct, defaultQuantity, freshness, distinctLabelers, EXTREME_HIGH, EXTREME_LOW, EXTREME_HEADLINE, isExtremeSpread } from '../core/rules.js';
+import { epcClasses } from '../core/related.js';
 import { linkRows } from '../core/pack.js';
 import { groupProducts } from '../core/search.js';
 import { formatCount, formatMultiple, formatUnitPrice, divideMoney, multiplyDecimal, decimalString } from '../core/money.js';
@@ -296,8 +297,16 @@ export function analyzeDoc(doc) {
   const partBFallback = {}; // Part B is the reference although the row has a Part D match
   let alternates = 0;
   const extremes = [];
+  // The cost-plus estimate at each product's starting quantity, as a card first shows it.
+  const costPlus = { products: 0, missing: {} };
   for (const p of products) {
-    const s = summarizeProduct(p.rows);
+    // A pack total needs valid NADAC records; a doc that breaks that is reported by the floors
+    // below, so it is summarized without a quantity rather than stopping the report.
+    const nadacValid = p.rows.every((r) => r && r.nadac && validateRecord(r.nadac).length === 0);
+    const s = nadacValid ? summarizeProduct(p.rows, defaultQuantity(p.rows).qty) : summarizeProduct(p.rows);
+    if (!nadacValid) bump(costPlus.missing, 'A NADAC record of this product is not valid, so there is no pack total to estimate from.');
+    else if (s.cost_plus.missing) bump(costPlus.missing, s.cost_plus.reason);
+    else costPlus.products += 1;
     bump(refProducts, s.reference.missing ? 'none' : s.reference.kind);
     let hi = null;
     let lo = null;
@@ -397,6 +406,17 @@ export function analyzeDoc(doc) {
   });
 
   const identity = linked.filter((r) => r.identity).length;
+
+  // FDA pharmacologic classes (identity.pharm_classes): the [EPC] entries feed the class pages.
+  const isEpc = (e) => typeof e === 'string' && /\s\[EPC\]$/.test(e);
+  const classRows = linked.filter((r) => r.identity && Array.isArray(r.identity.pharm_classes));
+  const epcKeys = new Set(classRows.flatMap((r) => r.identity.pharm_classes.filter(isEpc)));
+  const pharmClasses = Object.freeze({
+    rows: classRows.length,
+    epcRows: classRows.filter((r) => r.identity.pharm_classes.some(isEpc)).length,
+    epcClasses: epcKeys.size,
+    productsWithEpc: products.filter((p) => epcClasses(p).length > 0).length,
+  });
   const partD = linked.filter((r) => r.part_d).length;
   const partB = linked.filter((r) => r.part_b).length;
   const partBReconciled = linked.filter((r) => r.part_b && r.part_b.package_unit !== null && r.part_b.package_unit !== undefined).length;
@@ -426,6 +446,13 @@ export function analyzeDoc(doc) {
     const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
     return [...keys].every((k) => ((a || {})[k] || 0) === ((b || {})[k] || 0));
   };
+  // Counts the builder added with identity.pharm_classes; older docs (and the fixture) may lack them.
+  for (const [k, v] of [
+    ['identity_with_pharm_classes', pharmClasses.rows],
+    ['epc_classes', pharmClasses.epcClasses],
+  ]) {
+    if (hasOwn(counts, k) && counts[k] !== v) mismatches.push({ key: k, builder: counts[k], recomputed: v });
+  }
   if (!sameMap(counts.rows_by_state, rowState)) mismatches.push({ key: 'rows_by_state', builder: counts.rows_by_state, recomputed: rowState });
   if (!sameMap(counts.records_by_state, recordsByState)) {
     mismatches.push({ key: 'records_by_state', builder: counts.records_by_state, recomputed: recordsByState });
@@ -448,6 +475,8 @@ export function analyzeDoc(doc) {
     withoutUrl,
     repeatedNdcs,
     identity,
+    pharmClasses,
+    costPlus,
     partD,
     partB,
     partBReconciled,
@@ -702,6 +731,15 @@ export function renderDataQuality(doc) {
           `${countText(c.identity_ambiguous)} NDCs had conflicting FDA entries and were left without an identity`,
         ],
         [
+          'FDA pharmacologic classes (`identity.pharm_classes`)',
+          formatCount(a.pharmClasses.rows),
+          pct(a.pharmClasses.rows, n),
+          `${pct(a.pharmClasses.rows, a.identity)} of the rows with an identity; the others have none, because FDA’s \`PHARM_CLASSES\` cell is blank or its product records disagree. ` +
+            `${formatCount(a.pharmClasses.epcRows)} rows have an established pharmacologic class (\`[EPC]\`), ${plural(a.pharmClasses.epcClasses, 'class', 'classes')} in all; ` +
+            `${formatCount(a.pharmClasses.productsWithEpc)} of ${plural(a.products, 'product')} have one and get a class page` +
+            (hasOwn(c, 'identity_pharm_classes_ambiguous') ? `; ${countText(c.identity_pharm_classes_ambiguous)} NDCs had FDA product records whose classes disagree` : ''),
+        ],
+        [
           'Medicare Part D (by name)',
           formatCount(a.partD),
           pct(a.partD, n),
@@ -791,6 +829,13 @@ export function renderDataQuality(doc) {
     '',
     `Part B figures shown next to a Part D reference in the provenance panel: ${stateCounts(a.altSpreads)}.`,
     '',
+    `Cost-plus estimates ([the rule](../methodology.html#cost-plus)), at each product’s starting quantity: ${formatCount(a.costPlus.products)} of ` +
+      `${plural(a.products, 'product')} have one, always \`estimated\`.` +
+      (sortedReasons(a.costPlus.missing).length ? ` The other ${formatCount(sumValues(a.costPlus.missing))} show “We don’t know yet”, with the reason:` : ''),
+    '',
+    ...(sortedReasons(a.costPlus.missing).length
+      ? [table(['reason the card gives', 'products'], sortedReasons(a.costPlus.missing).map(([k, v]) => [md(k), formatCount(v)])), '']
+      : []),
     'Rows with no reference, by why each Medicare figure is not usable:',
     '',
     sortedReasons(a.noneWhy).length

@@ -20,13 +20,23 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, resolve, relative, sep, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { REPO_URL } from '../src/core/config.js';
+import { REPO_URL, SITE_URL } from '../src/core/config.js';
 import { RULES } from '../src/core/rules.js';
 import { BROWSER_FLOOR } from '../src/build/methodology.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const HTML_PAGES = ['openbill.html', 'methodology.html'];
 const CHECK_EXTERNAL = process.env.OPENBILL_CHECK_EXTERNAL === '1';
+// Links into OpenBill's own website (SITE_URL) are checked against a local build of it, made
+// with `node tools/site.mjs --out <dir> --no-og`, never against the live deploy, which lags a
+// change by one merge (decision 50). Without OPENBILL_SITE_DIR they are skipped and the test says so.
+const SITE_DIR = process.env.OPENBILL_SITE_DIR || '';
+
+/** The local file a SITE_URL link points at in a built site: '' or a trailing / means index.html. */
+export function sitePath(url) {
+  const rest = url.slice(SITE_URL.length).replace(/[?#].*$/, '');
+  return !rest || rest.endsWith('/') ? `${rest}index.html` : rest;
+}
 const EXTERNAL_TIMEOUT_MS = 15000;
 const EXTERNAL_CONCURRENCY = 6;
 const USER_AGENT = `OpenBill docs link check (+${REPO_URL})`;
@@ -594,8 +604,26 @@ test(
         where.get(url).push(`${rel(abs)}:${l.line}`);
       }
     }
-    const urls = [...where.keys()].sort();
     const failures = [];
+    const own = [...where.keys()].filter((u) => u.startsWith(SITE_URL));
+    for (const u of own) {
+      if (!SITE_DIR) continue;
+      // GitHub Pages serves paths case-sensitively, so compare each segment exactly.
+      let cur = SITE_DIR;
+      let found = true;
+      for (const seg of sitePath(u).split('/')) {
+        let names = [];
+        try { names = readdirSync(cur); } catch { found = false; break; }
+        if (!names.includes(seg)) { found = false; break; }
+        cur = join(cur, seg);
+      }
+      if (found) { try { found = statSync(cur).isFile(); } catch { found = false; } }
+      if (!found) failures.push(`${u} (not in the site built at ${SITE_DIR}: ${sitePath(u)}) in ${where.get(u).join(', ')}`);
+    }
+    t.diagnostic(SITE_DIR
+      ? `checked ${own.length} links into ${SITE_URL} against the local build in ${SITE_DIR}`
+      : `skipped ${own.length} links into ${SITE_URL}: set OPENBILL_SITE_DIR to a site built with tools/site.mjs to check them (decision 50)`);
+    const urls = [...where.keys()].filter((u) => !u.startsWith(SITE_URL)).sort();
     let next = 0;
     const worker = async () => {
       while (next < urls.length) {

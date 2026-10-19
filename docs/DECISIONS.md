@@ -4,8 +4,10 @@ A numbered log of the choices behind OpenBill: context, decision, consequences. 
 not rewritten; a later entry supersedes or amends an earlier one by number, and the earlier
 entry carries a one-line note pointing at it. Entries 1 to 23 were recorded on 2026-10-17,
 during phase 1; entries 24 to 32 were recorded later the same day, after a review and a
-rebuild of `data/drugs.json`, and entries 33 to 38 on 2026-10-18. The contract they produce is
-[ARCHITECTURE.md](ARCHITECTURE.md).
+rebuild of `data/drugs.json`, entries 33 to 48 on 2026-10-18, and entries 49 and 50 on 2026-10-19.
+Entries 39 to 49 are phase 2: the cost-plus estimate, "what you were charged" and the drug
+pages. The contract
+they produce is [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## 1. NADAC from the yearly cumulative CSV, newest As of Date only
 
@@ -23,6 +25,8 @@ the cache and are not used. If CMS changes the columns, the fetcher stops instea
 guessing.
 
 ## 2. One row per NDC-11; products grouped by NADAC description
+
+*Amended by [decision 43](#43-fda-pharmacologic-classes-for-class-pages-and-related-drugs): a brand and its generic are still separate products, but each drug page links its brand and generic siblings, found through FDA's nonproprietary names.*
 
 **Context.** NADAC prices each NDC separately, and many NDCs share a description: 57 NDCs
 are "METFORMIN HCL 500 MG TABLET". The 2026-10-14 week has 30,031 NDCs under 5,936
@@ -70,6 +74,8 @@ and the tests run the same code, so the methodology can't describe a formula the
 doesn't use.
 
 ## 5. Deterministic builds: no timestamps, LF line endings
+
+*Amended by [decision 41](#41-static-drug-pages-built-on-deploy-and-not-committed): the sitemap's `lastmod` dates come from git commit dates, which are inputs, not the clock.*
 
 **Context.** Generated files are committed and a test checks they match their inputs. A
 build time, an unsorted key or a CRLF would make every build a diff.
@@ -159,6 +165,8 @@ the start of its quarter and a Part D figure's from the end of its data year.
 
 ## 10. Strict CSP from hashes; everything inlined; IBM Plex self-hosted
 
+*Amended by [decision 41](#41-static-drug-pages-built-on-deploy-and-not-committed): the static drug pages have no script and load one shared stylesheet and the fonts from the same origin, under their own CSP. The app page is unchanged.*
+
 **Context.** The page must work from `file://`, offline, with no third-party requests, while
 rendering strings from files nobody here controls.
 
@@ -201,6 +209,8 @@ file stops counting toward the ten instead of passing quietly.
 
 ## 13. External link checks are opt-in
 
+*Amended by [decision 50](#50-links-into-openbills-own-website-are-checked-against-this-commits-build): links into OpenBill's own website are checked against a local build, not the network.*
+
 **Context.** The docs link to the project's own GitHub pages (the CI badge, the issue forms,
 security advisories), which can't resolve before the first push. Some government sites also
 refuse scripted requests: on 2026-10-17 www.medicaid.gov answered 403 to a request sent
@@ -215,6 +225,8 @@ with `continue-on-error: true`.
 
 ## 14. RxNorm is deferred; identity is the FDA NDC Directory for now
 
+*Amended by [decision 43](#43-fda-pharmacologic-classes-for-class-pages-and-related-drugs): the FDA identity now carries FDA's pharmacologic classes; RxNorm is still not built.*
+
 **Context.** The brief's Tier 2 join keys are the FDA NDC Directory, RxNorm (one identity for
 brand, generic and dose) and openFDA (labels, shortages), to be built before anything joins.
 
@@ -227,6 +239,8 @@ generic stay separate products (decision 2). RxNorm and FDA drug shortages are g
 issues in [CONTRIBUTING.md](../CONTRIBUTING.md#good-first-issues).
 
 ## 15. The brief's mock card numbers were illustrative
+
+*Amended by [decision 39](#39-no-cash-prices-a-cost-plus-estimate-from-nadac-instead): there is still no cash price source; the card adds a cost-plus estimate, labelled `estimated`, and the headline multiple stays Medicare ÷ NADAC.*
 
 **Context.** The brief's card mock shows metformin HCl 500 mg, 60 count: "Pharmacy pays
 $4.12", "Cash list price $47.30", "11.5× the spread", and says its numbers are illustrative.
@@ -428,6 +442,10 @@ were correct. Identity stays the FDA NDC Directory alone (decision 14). The meas
 [DATA_SOURCES.md](DATA_SOURCES.md).
 
 ## 23. Starting quantity: 30 per EA, one package per ML or GM when FDA agrees, else 1
+
+*Amended by [decision 48](#48-starting-quantity-by-dosage-form-preview-images-stay-png): only an oral tablet or capsule (or lozenge or troche) priced per EA starts at 30; every other product priced per EA starts at 1, with 1 / 2 / 3 buttons.*
+
+*Amended by [decision 49](#49-starting-quantity-case-packs-tablets-and-films-under-the-tongue-fda-listing-outliers): an NDC whose FDA package is a shipping case, or a carton of at least 10 identical bottles, tubes, vials, jars or ampules, counts one inner unit instead of the whole package.*
 
 **Context.** A pack total needs a quantity before the reader types one. NADAC prices a drug per
 EA (a tablet, capsule or other single unit), per ML or per GM. For a liquid, a cream or a pen,
@@ -838,6 +856,8 @@ found no false match.
 
 ## 38. The website is GitHub Pages, deployed by a workflow
 
+*Amended by [decision 41](#41-static-drug-pages-built-on-deploy-and-not-committed): the workflow now also builds the drug, class and index pages, the preview images and the sitemap into the deployed site.*
+
 **Context.** OpenBill was a file to download and open. The owner's other projects are websites
 on GitHub Pages, deployed by a GitHub Actions workflow, and people expect to open a link.
 
@@ -853,3 +873,441 @@ deploying, so the site is always the committed, tested build.
 `file://`, with the same CSP and no third-party requests. Reading `data/drugs.json` from the site
 uses Pages bandwidth, not LFS bandwidth; a deploy uses LFS bandwidth only when the data changed.
 Pages' source must stay set to "GitHub Actions".
+
+## 39. No cash prices; a cost-plus estimate from NADAC instead
+
+*Amended by [decision 47](#47-corrections-from-the-phase-2-review): the KFF Health News article reports a lower ($3, 2023) labor fee, so it is cited for the method only; the $5.00 fee rests on the company's site on 2026-10-18.*
+
+**Context.** The brief's card mock pairs what pharmacies pay with a "cash list price", and
+phase 1 had no source for one ([decision 15](#15-the-briefs-mock-card-numbers-were-illustrative)).
+No free source of retail cash prices can be reused. These terms were read on 2026-10-18.
+GoodRx's API terms forbid storing its data, and pharmacy websites' terms forbid scraping them.
+Cost Plus Drugs' Terms of Service say users will not "copy, modify or harvest data, Content, or
+materials from the Online Services". They grant only a "personal, noncommercial" licence.
+
+**Decision.** On 2026-10-18 the owner decided that OpenBill shows no one's cash price. It shows
+a **cost-plus estimate**: what a pharmacy would charge if it priced the way Cost Plus Drugs
+publicly describes (its cost, plus a 15% markup, plus a pharmacy fee) and paid what NADAC says
+pharmacies pay.
+
+```
+cost-plus estimate = qty × NADAC per unit, rounded half-up to the cent
+                   + 15% of that, rounded half-up to the cent
+                   + $5.00 per fill                     (shipping not included)
+```
+
+- The parameters live in `COST_PLUS` in `src/core/rules.js`: `markup_pct: 15` and
+  `fee_usd: 5`. Each one cites where it comes from: KFF Health News's coverage of the company
+  for the method, and the company's own website, which showed a $5.00 pharmacy labor fee on
+  2026-10-18. Those two parameters are all OpenBill takes from Cost Plus Drugs. No Cost Plus
+  price, and no "retail price at other pharmacies" figure from its site, is copied, stored or
+  shown anywhere; a unit test checks that `COST_PLUS` holds no dollar figure but the fee.
+- `costPlusEstimate()` works in integer cents, so a reader can check each step on the card.
+  The record is `estimated`: `source_name` "OpenBill calculation", `source_url`
+  `methodology.html#cost-plus`, NADAC's file and dates. Its reason gives the formula with the
+  numbers and says it is a model, not a price any pharmacy quoted. It also says that Cost Plus
+  Drugs' own costs differ from NADAC and that shipping is not included.
+- The card labels it "Cost-plus estimate", never "typical cash price".
+- **No spread against it.** A multiple of our own formula over NADAC would be circular: it is
+  NADAC × 1.15 plus a fee, so it only measures the fee. For cheap generics the fee dominates:
+  for 30 metformin 500 mg tablets the estimate is $5.51 against $0.44 at NADAC, and for 30
+  lisinopril 10 mg tablets $5.62 against $0.54. The headline multiple stays Medicare ÷ NADAC.
+
+**Consequences.** Every product with a pack total gets an estimate: 5,924 of 5,936 in the
+2026-10-14 build. The other 12 show "We don't know yet" for the same reason as their pack total
+(their NDCs are priced per different units). The estimate is a reasonable expectation for a
+cash buyer to compare with, and the card does not present it as more than that. If Cost Plus
+Drugs changes its fee or markup, `COST_PLUS` and its cited date must change together, and the
+methodology page follows from it.
+
+## 40. What you were charged: the reader's own number, never stored or sent
+
+*Amended by [decision 47](#47-corrections-from-the-phase-2-review): the amount rides in the address, so the browser's history keeps it; the card now says so, and over-long input is refused before any arithmetic.*
+
+**Context.** A reader's real question is often "was I overcharged?". The card can answer that
+only with a number the reader supplies.
+
+**Decision.** The card has an optional "What were you charged?" input for the pack it shows.
+`paidComparison()` in `src/core/rules.js` turns it into a multiple of what pharmacies pay for
+that pack (NADAC) and of the cost-plus estimate. The card labels both "your number", for
+example "You paid 3.6× what pharmacies pay for this pack, and 1.4× the cost-plus estimate." for
+$12.00 on the showcase card.
+
+- Input is checked by `parsePaid()`: more than $0, at most $100,000.00 (`PAID_MAX_USD`), at
+  most two decimals; "$", ".50" and "1,234.50" are accepted. Anything else gets a sentence
+  saying why, which never repeats what was typed, and no multiple.
+- The amount is never stored, logged or sent anywhere. The only place it may live is the URL
+  hash (`&paid=12.00`). Browsers do not send the hash to the server, and it is there so that a reader
+  can share their own card if they choose.
+- A range of NDC prices gives a range of multiples ("between A and B …, depending on the NDC").
+
+**Consequences.** OpenBill never sees what anyone paid, so it cannot publish or aggregate
+reader prices. A link a reader shares does carry their amount, and the methodology page says
+so. Insurance, coupons and deductibles change what people pay, so the page presents the
+multiple as a question to ask the pharmacy, not proof of a mistake. Static drug pages have no
+script, so the input lives only on the app card.
+
+## 41. Static drug pages, built on deploy and not committed
+
+*Amended by [decision 46](#46-product-names-that-share-a-slug-each-get-a-suffix-from-their-own-name): product names that share a slug each get a suffix from their own name, so the build no longer stops on them.*
+
+*See [decision 48](#48-starting-quantity-by-dosage-form-preview-images-stay-png): JPEG preview images were tried, measured larger and reverted, so the preview images stay PNG files, `og/<slug>.png` and `og/site.png`.*
+
+**Context.** The app is one page whose data is unpacked in the browser. Search engines and link
+previews see none of its numbers, and a person searching "aripiprazole price" never reaches it.
+
+**Decision.** On 2026-10-18 the owner decided that `tools/site.mjs`, run by
+`.github/workflows/pages.yml`, writes the site into `_site/` on every deploy. The site has one
+static page per product (`drug/<slug>/`), one per FDA pharmacologic class (`class/<slug>/`),
+an A–Z index (`drugs/<letter>/`), a 1200×630 preview image per product (`og/<slug>.png`,
+rendered with Playwright) and `sitemap.xml`. None of it is committed
+([ARCHITECTURE.md](ARCHITECTURE.md#drug-pages-built-on-deploy-not-committed)).
+
+- **The app stays one self-contained page.** `openbill.html` is unchanged in kind. It works from
+  `file://` and offline, and it carries its data inline. Each static page links to its
+  interactive card (`../../#drug=…`).
+- **Static pages have no JavaScript.** Their numbers are in the HTML source, built by the same
+  core rules, with the state chips and source lines a card shows. Their CSP is
+  `default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'`.
+  They share one stylesheet (`assets/site.css`) and the IBM Plex fonts (`assets/fonts/`) from
+  the same origin: still no third-party request.
+- **Slugs:** `slugify()` in `src/core/slug.js`. The build fails on a collision rather than
+  guessing.
+- **`lastmod`** in the sitemap comes from git: for data pages, the last commit that touched
+  `data/drugs.json`. The build reads no clock.
+
+**Consequences.** The repository does not grow by thousands of pages per refresh, and the
+committed files stay the reviewed source of truth. The deployed pages are not in the
+repository, but anyone can regenerate them from a commit with `tools/site.mjs`. Deploys take
+longer, mostly for the preview images. The 2026-10-14 data
+has two pairs of product names that differ only in punctuation and share a slug ("MICONAZOLE 7
+CREAM" and "MICONAZOLE-7 CREAM"; "TIOCONAZOLE 1 6.5% OINTMENT" and "TIOCONAZOLE-1 6.5%
+OINTMENT"), so `uniqueSlugs()` refuses the data until a rule for such pairs is chosen and
+recorded here.
+
+## 42. JSON-LD uses DrugCost, not Offer or PriceSpecification
+
+**Context.** Structured data on the drug pages helps search engines read the numbers.
+schema.org's `Offer` and `PriceSpecification` describe something for sale at a price.
+
+**Decision.** Each drug page carries one JSON-LD `@graph`. It holds a `BreadcrumbList`, a `Drug`
+whose `cost` is a list of `DrugCost` entries, and a `FAQPage` whose answers come from the
+page's own data. The NADAC entry's `costOrigin` names the NADAC file; the Medicare entry
+carries its period. No `Offer`, `PriceSpecification` or `AggregateOffer` is used.
+Every number in the JSON-LD equals the one in the HTML.
+
+**Consequences.** OpenBill never tells a search engine that a drug is for sale at a price,
+which would be a quote, and the brief forbids claiming one. Only the NADAC and Medicare figures
+are `DrugCost` entries. The cost-plus estimate is not a cost anyone paid or charged, so it is
+not one. Rich results for `DrugCost` are not guaranteed; correctness comes first.
+
+## 43. FDA pharmacologic classes for class pages and related drugs
+
+**Context.** Drug pages need "related drugs" and class pages. RxNorm is not built
+([decision 14](#14-rxnorm-is-deferred-identity-is-the-fda-ndc-directory-for-now)). The FDA NDC
+Directory already in the build lists each product's pharmacologic classes (`PHARM_CLASSES`).
+
+**Decision.** `identity.pharm_classes` holds FDA's `PHARM_CLASSES` for the row's exact package
+match. FDA's text is split into entries at each `, ` that follows an entry's closing `]`,
+because some class names contain `, ` (such as `Anti-Inflammatory Agents, Non-Steroidal [CS]`).
+Each entry is kept once, in FDA's order. The field is left out (never `null` or `[]`) when FDA
+gives no classes, and it is never borrowed from another package of the product code. Classes
+use the `[EPC]` (Established Pharmacologic Class) entries. `src/core/related.js` gives:
+
+- `epcClasses(product)`: a product's EPC classes, from its rows that have an identity
+  (some NDCs of a product have none);
+- `siblings(product, products)`: the brand and generic versions, which share at least one
+  nonproprietary name with it. A shared name is enough, not the full set of names, because
+  labelers spell one ingredient several ways;
+- `related(product, products, index, 5)`: up to five other drugs in the same classes, siblings
+  left out, each drug once, ranked by classes shared, then Part D claims, then name.
+
+**Consequences.** In the 2026-10-14 build, 24,902 of the 27,083 rows with an FDA identity carry
+classes. They span 329 EPC classes. 2,181 identity rows have none, because FDA's cell is
+blank (over-the-counter loratadine, for one). Those products get no class page link, and the page
+says nothing rather than guessing. Brand and generic stay separate products, now linked to each
+other. Classes are FDA's labels for what a drug does. They are not advice about substituting
+one drug for another, and no page may present them that way.
+
+## 44. No robots.txt for a project site; the sitemap is submitted instead
+
+**Context.** The site is a GitHub Pages project site at `destinjones.github.io/openbill/`.
+Crawlers read `robots.txt` only at the root of a host, here `destinjones.github.io/robots.txt`,
+which belongs to the account's user site, not to this repository.
+
+**Decision.** The generator writes no `robots.txt`. `sitemap.xml` is published at
+`/openbill/sitemap.xml` and submitted to search engines directly, for example through Google
+Search Console.
+
+**Consequences.** A `robots.txt` inside `_site/` would never be read, so it would only mislead.
+If the account later gets a user site, its `robots.txt` may list this sitemap. If OpenBill moves to its own
+domain, it should add a `robots.txt` then.
+
+## 45. The showcase: aripiprazole 10 mg tablets, 30
+
+**Context.** The default card, the README, the screenshots and the site's preview image need one
+product. It should be a real, widely used drug with a gap that is large enough to matter, and
+it must not be an extreme case where the two figures may not measure the same thing
+([decision 25](#25-an-extreme-estimated-spread-leads-with-a-warning-not-a-sentence)).
+
+**Decision.** On 2026-10-18 the owner chose **ARIPIPRAZOLE 10 MG TABLET at 30**:
+
+- Pharmacies pay **$3.35**: 30 × $0.11173 per EA, the NADAC for all 31 NDCs, effective
+  2026-09-23 in the file as of 2026-10-14 (`filed`).
+- Medicare Part D paid **$46.50**: 30 × $1.5499353611, the 2024 average spending per dosage
+  unit of the generic `Aripiprazole` / `Aripiprazole` row, all 24 manufacturers, 3,844,727
+  claims, outlier flag 0. This is an average for one data year. It covers all strengths
+  together, and it is gross of rebates.
+- **13.9×**, `estimated`, under the 20× warning threshold. Cost-plus estimate $8.85.
+
+Checked in the raw Part D file: the generic row leaves out the orally disintegrating tablets
+(`Aripiprazole ODT`, $15.551425783 per unit) and the injectables (`Abilify Maintena`,
+`Abilify Asimtufii`, `Aristada`), which CMS reports on their own rows. One form it may include
+is the oral solution. NADAC prices 7 of the 184 NDCs that join the name per ML, and the card's
+reason says so.
+
+**Consequences.** One product's numbers appear in the README and in the preview images, so
+each data refresh must recheck them. `docs/HAND-CHECK.md` lists it first. If the gap moves past
+a threshold or the join changes, the showcase is chosen again and recorded here.
+
+## 46. Product names that share a slug each get a suffix from their own name
+
+**Context.** [Decision 41](#41-static-drug-pages-built-on-deploy-and-not-committed) made the site
+build stop when two product names share a slug, until a rule was chosen. The 2026-10-14 data has
+two such pairs, which differ only in punctuation: "MICONAZOLE 7 CREAM" and "MICONAZOLE-7 CREAM",
+and "TIOCONAZOLE 1 6.5% OINTMENT" and "TIOCONAZOLE-1 6.5% OINTMENT". The deploy failed on them, and
+the required CI checks did not build the site, so nothing caught it before merge.
+
+**Decision.** Recorded by the phase 2 fixer on 2026-10-18, for the owner to confirm or replace.
+`siteSlugs(names)` in `src/core/slug.js` gives every product its slug. A name whose `slugify()`
+slug no other name shares keeps it. Names that do share one each get `-` and the first 8 hex
+digits of the SHA-256 of their exact UTF-8 name appended (for example
+`miconazole-7-cream-` plus 8 hex digits). Neither name is picked to keep the plain URL, and each
+suffix depends only on that name, not on the order of the data or on which other names exist.
+If two final slugs still matched, the build stops. The app's "Shareable page" link and
+`tools/site.mjs` both call `siteSlugs()`, so they always agree. Class slugs keep
+`uniqueSlugs()`, which stops on any collision. CI now builds the site (without preview images)
+in the required `test` job, so a name the rules cannot place fails before merge, not at deploy.
+
+**Consequences.** Four products have suffixed URLs today. A suffixed URL changes back to the
+plain slug if its twin leaves the NADAC file; a re-submitted sitemap carries the new URL. NADAC
+names are not merged: the two spellings may be different products, and NADAC prices them
+separately.
+
+## 47. Corrections from the phase 2 review
+
+*Amended by [decision 48](#48-starting-quantity-by-dosage-form-preview-images-stay-png): kits and the other products priced per EA that are not oral tablets or capsules start at 1, so titles, descriptions and preview alt text quote the card's own 1-unit pack total instead of the unit price, and the starting-quantity question this entry left open is settled.*
+
+**Context.** The honesty, SEO and security reviews of phase 2 found statements that were not
+true in every case, and a few hardening gaps. Recorded on 2026-10-18 by the phase 2 fixer.
+
+**Decision.**
+
+- **Part D unmatched.** Rows without a Part D join said "No Medicare Part D spending row matched
+  this drug by brand or generic name". That is false where Part D has a row with the name that the
+  builder refused (amoxicillin 500 mg capsules: Part D row 700 exists, refused for mixed units).
+  Rows do not record the builder's reason, so the card now says only what is always true
+  (`PART_D_UNMATCHED_REASON`): OpenBill did not match the NDC to a usable Part D row; either Part D
+  has none, or the rows that share its name could not safely be tied to it. Storing the builder's
+  per-row reason in `data/drugs.json` is left for a later schema change.
+- **The cost-plus fee's source.** KFF Health News (17 February 2023) describes the method but
+  reports a $3 labor fee. `COST_PLUS` and methodology.html now cite it for the method only and
+  say the $5.00 fee is what Cost Plus Drugs' website showed on 2026-10-18. No archived copy of
+  that page could be retrieved; the owner should record one.
+- **What you were charged.** The amount is written into the address with
+  `history.replaceState`, so the browser's history keeps it. The card, the rule and
+  methodology.html now say so in one sentence (`PAID_PRIVACY`). `parsePaid()` refuses text longer
+  than 32 characters, or with more than six whole-dollar digits, before any arithmetic: a crafted
+  `&paid=` of 400,000 digits used to crash the card in WebKit and Firefox.
+- **Drug pages.** A counter question names a generic only when FDA lists it with the same
+  dosage forms, routes and strengths (Ambien CR is no longer offered immediate-release
+  zolpidem). Titles, descriptions and preview alt text give the per-unit price where 30 units is
+  not a plain supply (kits, pens, syringes, vials, patches; anything not an oral tablet or
+  capsule), state the Part D figure as a yearly average over all strengths and forms, and repeat
+  "Medicare's price is not your price." The five honesty lines are introduced as the rules
+  OpenBill holds its pages to; the brief's wording stays verbatim. Pages no longer say "this
+  week's" NADAC file; they name its date.
+- **Site build.** The preview-card renderer runs with JavaScript off and every request aborted,
+  and fails on a dialog or a card whose content overflows. `--out` is emptied only when it holds the
+  `.openbill-site` marker and no `.git`. The Pages workflow's build job has read-only
+  permissions and a started deploy is never cancelled. The site has a `404.html`; class pages of
+  one or two products stay out of the sitemap; a page's `lastmod` follows its code as well as its
+  data.
+
+**Consequences.** A unit, site or browser test covers each change above except the workflow permissions and the sitemap's `lastmod` inputs, and the preview-card fit, which `tools/site.mjs` checks on every card it renders. Two owner decisions remain open:
+the starting quantity for kits and injectables
+([decision 23](#23-starting-quantity-30-per-ea-one-package-per-ml-or-gm-when-fda-agrees-else-1)),
+which the page bodies and preview cards still use, and whether reader-facing pages should show
+the brief's house-rule sentences at all.
+
+## 48. Starting quantity by dosage form; preview images stay PNG
+
+*Amended by [decision 49](#49-starting-quantity-case-packs-tablets-and-films-under-the-tongue-fda-listing-outliers): tablets and films taken under the tongue or against the cheek start at 30, a product whose NDCs are mostly oral tablets or capsules (and whose NADAC name says so) starts at 30 despite an outlier FDA listing, and a wholesale case or multi-pack priced per ML or GM starts at one inner unit.*
+
+**Context.** [Decision 23](#23-starting-quantity-30-per-ea-one-package-per-ml-or-gm-when-fda-agrees-else-1)
+started every product priced per EA at 30, a month of a once-a-day tablet. NADAC prices kits,
+pens, syringes, vials, patches, inhalers and suppositories per EA too, so a kit opened at
+"Pharmacies pay $263,287.57 for 30 kits" (AVONEX 30 MCG/0.5 ML SYRINGE KIT (4 PACK), 30 ×
+$8,776.25195). [Decision 47](#47-corrections-from-the-phase-2-review) worked around it on the
+drug pages by putting the unit price in titles, and left the starting quantity to the owner.
+Separately, the preview images of [decision 41](#41-static-drug-pages-built-on-deploy-and-not-committed)
+were PNG files, and the owner asked for JPEG to make them smaller.
+
+**Decision.** On 2026-10-18 the owner decided the starting quantity and asked for JPEG preview
+images; on 2026-10-19, after the measurement below, the owner reverted the images to PNG.
+Recorded by the phase 2 fixer.
+
+- **Oral solids start at 30; everything else priced per EA starts at 1.** `eaForm()` and
+  `defaultQuantity()` in `src/core/rules.js` decide from the FDA identity when any NDC of the
+  product has one: an oral solid is a dosage form starting `TABLET`, `CAPSULE`, `LOZENGE` or
+  `TROCHE` (so film coated, extended and delayed release, orally disintegrating and chewable
+  tablets all count) with FDA's route `ORAL` and nothing else, on every listed NDC. Such a
+  product starts at 30 (`DEFAULT_EA_QUANTITY`) with buttons 30, 60 and 90. Any other product
+  priced per EA starts at 1 (`DEFAULT_EA_OTHER_QUANTITY`) with buttons 1, 2 and 3. A product FDA
+  does not list is decided from its NADAC description: an oral solid's word (`TABLET`, `TAB`,
+  `TB`, `CAPSULE`, `CAP`, `CAPLET`, `CPLT`, `SOFTGEL`, `GELCAP`, `ODT`, `LOZENGE`, `TROCHE`) and no
+  word for another form or route (`KIT`, `SYRINGE`, `PEN`, `VIAL`, `VL`, `PATCH`, `SUPP`, `SPRAY`,
+  `SL`, `VAGINAL` …). When neither says, it starts at 1 and the reason says so: a smaller start
+  is the honest failure. ML and GM are unchanged.
+- **The reason names the form.** For example, "the FDA NDC Directory lists its NDC as dosage form
+  “KIT” with route “INTRAMUSCULAR”. Only a tablet, capsule, lozenge or troche with route “ORAL”
+  starts at 30, and this is not one." The card shows it under the quantity for every product that
+  is not an oral solid, as it already did for ML and GM.
+- **What one EA is, only where it is plain.** The quantity reads "1 patch", "1 suppository",
+  "1 ring", "1 film" where FDA's dosage form is itself the unit. For kits and for forms of a
+  substance (injections, powders, solutions, sprays) it reads "1 unit (EA)", and the reason says
+  NADAC's EA may be the whole package or one dose in it. The owner's example wording was
+  "1 kit — priced per kit"; it is not used, because the data contradict it for some kits and
+  devices. The three AFREZZA kits, each 180 cartridges by FDA's package description, are priced
+  at $7.78053 to $13.03769 per EA, in line with one cartridge (the cartridge cartons are $5.20552
+  to $15.65297 per EA), not with a kit. ADVAIR 100-50 DISKUS, one inhaler of 60 doses by FDA, is
+  $2.48669 per EA.
+- **Sublingual and buccal tablets start at 1.** The rule follows FDA's route literally, so a
+  `TABLET` with route `SUBLINGUAL`, `BUCCAL` or `VAGINAL` starts at 1 tablet, and so does a name
+  with `SL`. Pastilles, gums and gummies are not on the list of oral solids either. The owner
+  may widen the list; it is one regular expression.
+- **Titles quote the card's own total again.** With kits and the like at 1, decision 47's
+  workaround (the unit price in titles, descriptions and preview alt text for anything not an
+  oral tablet or capsule) is gone: every title quotes the pack total for the quantity the card
+  starts at ("pharmacies pay $8,776.25 for 1 unit (EA)"), and every description carries the
+  cost-plus estimate.
+- **Preview images: JPEG was tried, measured larger, and reverted to PNG.** On 2026-10-18
+  `tools/site.mjs` was switched to write `og/<slug>.jpg` and `og/site.jpg` with Playwright's
+  `type: 'jpeg'` at quality 80, with `og:image:type` `image/jpeg` on every page. Quality 80 was
+  chosen on six cards rendered at 70, 80, 85 and 90 and compared with the PNG at full size and at
+  400px wide: all four kept the text crisp to the eye, 70 left a few pixels more than 48 levels
+  off the PNG, and 80 left none. A full build then showed JPEG larger, not smaller (below),
+  because the cards are flat colour and text, which PNG compresses well and JPEG does not. On
+  2026-10-19 the owner reverted it: `tools/site.mjs` writes `og/<slug>.png` and `og/site.png`
+  with Playwright's `type: 'png'` (`OG_IMAGE_EXT` and `OG_IMAGE_TYPE` in
+  `src/build/drugpage.js`), and every page's `og:image` and `twitter:image` point at them, with
+  `og:image:type` `image/png`.
+
+**Consequences.** In the 2026-10-14 build, of the 4,221 products priced per EA, 3,520 start at
+30 (3,460 by FDA's listing, 60 by their NADAC name) and 701 start at 1 (672 by FDA's listing,
+20 by a name word, 9 because nothing says). Of those 701, 475 read "1 unit (EA)", 115 "1 patch",
+35 "1 suppository", 29 "1 tablet" (28 sublingual or vaginal; SEVELAMER HCL 800 MG TABLET because
+FDA lists two of its NDCs with route PARENTERAL), 26 "1 film", 8 "1 piece of gum", 5 "1 ring",
+5 "1 insert", 2 "1 capsule" and 1 "1 lozenge". FEBUXOSTAT 40 MG and 80 MG TABLET also start at 1
+unit (EA), because FDA lists one NDC of each as dosage form FILM. The 1,703 products priced per ML
+or GM and the 12 priced in mixed units are unchanged. The five largest pack totals on a card as
+it first opens were all kits, pens or vials at 30, from $202,362.84 to $263,287.57; now they are
+$22,774.36 to $49,672.20, and the largest is a GM product whose one FDA package is a case of 40
+bottles (TACLONEX 0.005%-0.064% SUSPENSION, 2,400 g), which decision 23's package rule allows.
+The JPEG measurement: the site's 5,937 preview images went from 439,920,693 bytes (419.5 MiB) as
+PNG to 503,425,099 bytes (480.1 MiB) as JPEG at quality 80, 14.4% more, and the whole site from
+629,519,151 bytes (600.4 MiB) to 693,558,780 bytes (661.4 MiB). So the preview images are PNG
+again, as decision 41 first had them.
+
+## 49. Starting quantity: case packs, tablets and films under the tongue, FDA listing outliers
+
+**Context.** Three cases in [decision 48](#48-starting-quantity-by-dosage-form-preview-images-stay-png)'s
+starting quantities, in the 2026-10-14 build, went back to the owner:
+
+- A product priced per ML or GM started at the amount in one FDA package
+  ([decision 23](#23-starting-quantity-30-per-ea-one-package-per-ml-or-gm-when-fda-agrees-else-1)),
+  even when that package is a shipping case. TACLONEX 0.005%-0.064% SUSPENSION, whose one FDA
+  package is "40 CARTON in 1 CASE (50222-501-06) / 1 BOTTLE in 1 CARTON / 60 g in 1 BOTTLE",
+  opened at 2,400 g and $49,672.20, the largest pack total on any card as it first opens.
+  Injectables sold to clinics in trays of 25 vials opened at the whole tray.
+- Tablets and films taken under the tongue or against the cheek started at 1, because the rule
+  followed FDA's route `ORAL` literally: buprenorphine, buprenorphine/naloxone, Zubsolv,
+  asenapine, zolpidem SL.
+- FEBUXOSTAT 40 MG and 80 MG TABLET started at 1 because FDA lists one NDC of each as dosage form
+  `FILM`, and SEVELAMER HCL 800 MG TABLET because FDA lists two of its NDCs with route
+  `PARENTERAL`. Febuxostat's reason then said NADAC's EA "may be a whole package (such as a kit,
+  pen, syringe, vial or inhaler)", and both reasons said "the 13 of its 14 NDCs it has".
+
+**Decision.** On 2026-10-19 the owner decided all three. Recorded the same day by the phase 2
+fixer.
+
+- **A wholesale case or multi-pack starts at one inner unit.** `packageStart()` in
+  `src/core/rules.js` reads each NDC's FDA package description. When its outermost level is a
+  `CASE` of 2 or more inner units, or a `CARTON`, `BOX`, `PACKAGE` or `TRAY` of at least 10
+  (`WHOLESALE_MIN_UNITS`) identical `BOTTLE`s, `TUBE`s, `VIAL`s, `JAR`s or `AMPULE`s whose amount
+  is printed on the next level, that NDC counts the amount in one inner unit ("40 CARTON in 1
+  CASE / 1 BOTTLE in 1 CARTON / 60 g in 1 BOTTLE" is 60 g) instead of the whole package. Decision
+  23's rule then applies unchanged: every listed NDC must give the same usable amount. The inner
+  unit's amount must read on its own in NADAC's unit, and when counting inner units leaves the
+  NDCs disagreeing, the whole packages decide exactly as before. The reason names the NDC, what
+  the pack is and how many units it holds. Smaller cartons, and cartons of pens, syringes,
+  cartridges, packets, cups or pouches, stay whole: in this data they are packs a pharmacy hands
+  over as they are (a two-bottle bowel prep, four weekly alendronate bottles, seven nightly
+  enemas, twin-pack eye drops, five insulin pens).
+- **Tablets and films under the tongue or against the cheek are oral solids.** An NDC whose FDA
+  dosage form starts with `TABLET` or `FILM` and whose route is `SUBLINGUAL` or `BUCCAL` (alone,
+  together, or with `ORAL`) counts like a swallowed tablet: the product starts at 30 with buttons
+  30, 60 and 90. Vaginal tablets, capsules and gums with these routes, oral films, and every
+  other route still start at 1. For a product FDA does not list, a NADAC name whose only word for
+  another route is `SL`, `SUBLINGUAL` or `BUCCAL`, next to a tablet or film word, counts the same
+  way. The owner's decision named FDA's route; the name rule follows it so that no card says only
+  swallowed tablets start at 30 while FDA-listed sublingual ones do (it moves GRASTEK and
+  RAGWITEK), and the owner may narrow it. The reason says how the product is taken and that
+  OpenBill counts it as an oral solid, and the card shows it under the quantity.
+- **An outlier FDA listing does not decide.** When the NADAC name has a tablet or capsule word
+  (`TABLET`, `TAB`, `TB`, `ODT`, `CAPSULE`, `CAP`, `CAPLET`, `CPLT`, `SOFTGEL`, `GELCAP`) and more than
+  half of the product's FDA-listed NDCs, by count, are oral solids by the rules above, it starts
+  at 30. The reason names each other NDC with FDA's form and route, says it matches neither the
+  NADAC name nor the product's other NDCs and looks like an error in the listing, and the card
+  shows it under the quantity. Exactly half, or a name without such a word, still starts at 1,
+  and the reason says which.
+- **Reason wording.** "13 of its 14 NDCs (it does not list the other one)" replaces "the 13 of
+  its 14 NDCs it has". A product whose NDCs are partly tablets and still starts at 1 says its
+  NDCs are listed as different dosage forms, not that its EA may be a kit, pen or vial.
+
+**Consequences.** In the 2026-10-14 build, 132 products start at a different quantity; a test
+in `tests/rules.test.js` lists each one, before and after. 45 priced per EA go from 1 to 30: 42
+tablets and films under the tongue or against the cheek (40 by FDA's route, GRASTEK and RAGWITEK
+by their NADAC names), and FEBUXOSTAT 40 MG TABLET, FEBUXOSTAT 80 MG TABLET and SEVELAMER HCL
+800 MG TABLET by the majority of their listings. 87 priced per ML or GM change, 81 per ML and 6
+per GM: 78 go down to one inner unit (TACLONEX from 2,400 g to 60 g, $1,241.81; heparin trays
+from 25 mL to 1 mL; CALCIUM CARB 1,250 MG/5 ML SUS from a case of 12 to one 473 mL bottle), and
+9 go up from 1 to one inner unit, because counting one unit made their NDCs agree (DESOXIMETASONE
+0.05% CREAM 60 g, VALPROIC ACID 250 MG/5 ML SOLN 473 mL). Four more start at one inner unit whose
+amount is the 1 they started at before. Of the 4,221 products priced per EA, 3,565 start at
+30 (3,503 by FDA's listing, 62 by their NADAC name) and 656 start at 1. Of the 1,703 products
+priced per ML or GM, 1,117 start at one package (890 per ML, 227 per GM), 91 at one inner unit
+of a wholesale pack (85 per ML, 6 per GM) and 495 at 1 (281 per ML, 214 per GM); the 12 priced in
+mixed units are unchanged. The largest pack total on a card as it first opens is now STELARA 90
+MG/ML SYRINGE at 1 mL, $29,792.79. Two judgement calls are flagged for the owner: TESTIM 1% (50
+MG) GEL and TESTOSTERONE 50 MG/5 GRAM GEL now start at one 5 g tube of a carton of 30 (it was
+150 g), though such a carton may be a month's supply handed over whole; and the NADAC-name rule
+for `SL` above. None of the ten products in [HAND-CHECK.md](HAND-CHECK.md) changes.
+
+## 50. Links into OpenBill's own website are checked against this commit's build
+
+**Context.** [Decision 13](#13-external-link-checks-are-opt-in) checks external links over the
+network and skips links to this repository's GitHub URLs. Pages now link into the website itself
+(for example the A–Z index at `drugs/a/`), and a page added by a change does not exist on the
+live site until that change is merged and deployed, so the required `links` check would fail on
+every pull request that adds one.
+
+**Decision.** Links that start with `SITE_URL` are checked against a local build of the site made
+from the same commit (`node tools/site.mjs --out <dir> --no-og`), compared path segment by path
+segment with exact case, as GitHub Pages serves them. The CI `links` job builds the pages first
+and passes the folder as `OPENBILL_SITE_DIR`; without it, `tests/docs-links.test.js` skips those
+links and says so.
+
+**Consequences.** A link into a page the build does not produce still fails before merge, and a
+new page can be linked in the same change that adds it. The live deploy itself is checked after
+merge, by hand or by loading the site.

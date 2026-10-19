@@ -13,13 +13,15 @@ import crypto from 'node:crypto';
 import vm from 'node:vm';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { packDrugs } from './src/core/pack.js';
+import { packDrugs, linkRows } from './src/core/pack.js';
 import { esc, safeHref } from './src/core/esc.js';
-import { REPO_URL, APP_NAME } from './src/core/config.js';
+import { REPO_URL, APP_NAME, SITE_URL } from './src/core/config.js';
 import { STATE_INFO, PRICE_STATES } from './src/core/provenance.js';
-import { HONESTY, RULES } from './src/core/rules.js';
+import { HONESTY, RULES, summarizeProduct, partDNameContext } from './src/core/rules.js';
+import { formatMoney, formatCount } from './src/core/money.js';
 import { SOURCE_INFO } from './src/core/sources.js';
 import { renderMethodology } from './src/build/methodology.js';
+import { ogImagePath, OG_IMAGE_TYPE, OG_WIDTH, OG_HEIGHT } from './src/build/drugpage.js';
 import { renderDataQuality } from './src/build/quality.js';
 
 export const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -27,16 +29,28 @@ export const ROOT = path.dirname(fileURLToPath(import.meta.url));
 /** The bundle's entry module, repo-relative. */
 export const ENTRY = 'src/app/app.js';
 
-/** The card shown when the page opens with no #drug= in the URL. */
-export const DEFAULT_PRODUCT = Object.freeze({ drug: 'METFORMIN HCL 500 MG TABLET', qty: 60 });
+/**
+ * The card shown when the page opens with no #drug= in the URL: the showcase (docs/ARCHITECTURE.md,
+ * "Showcase"), also the subject of the site's preview card and of og:description.
+ */
+export const DEFAULT_PRODUCT = Object.freeze({ drug: 'ARIPIPRAZOLE 10 MG TABLET', qty: 30 });
 
-/** The "Try:" links under the card. Each must be a product in data/drugs.json, or the build fails. */
+/**
+ * The "Try:" links under the card. Each must be a product in data/drugs.json, or the build fails.
+ * Metformin, the first showcase, stays one tap away.
+ */
 export const TRY_PRODUCTS = Object.freeze([
+  'METFORMIN HCL 500 MG TABLET',
   'ELIQUIS 5 MG TABLET',
   'ATORVASTATIN 20 MG TABLET',
-  'LISINOPRIL 10 MG TABLET',
   'HUMULIN R 100 UNIT/ML VIAL',
 ]);
+
+/** The site's preview image (1200×630 PNG, built on deploy by tools/site.mjs, not committed). */
+export const OG_IMAGE = `${SITE_URL}${ogImagePath('site')}`;
+
+/** What og/site.png shows: the showcase product's preview card (tools/site.mjs renders it). */
+export const OG_IMAGE_ALT = `${APP_NAME} preview card for the showcase product: what pharmacies pay, what Medicare paid, the spread and a cost-plus estimate, each with its state and source date.`;
 
 /** openbill.html must stay under this many bytes; the build fails above it. */
 export const SIZE_LIMIT = 5 * 1024 * 1024;
@@ -644,6 +658,7 @@ ${sourceLines(doc)}
 <li><a href="${home ? 'methodology.html' : 'openbill.html'}">${home ? 'Methodology' : 'Back to OpenBill'}</a></li>
 ${home ? '' : '<li><a href="methodology.html">Methodology</a></li>\n'}<li><a href="${esc(REPO_URL)}" rel="noopener">Source code on GitHub</a></li>
 <li><a href="data/drugs.json">data/drugs.json</a></li>
+<li><a href="${esc(`${SITE_URL}drugs/a/`)}">Browse every drug A–Z</a> <span class="mono">(on the website)</span></li>
 </ul>
 <p class="mono build-line">build ${esc(buildId)}</p>
 </footer>`;
@@ -716,7 +731,7 @@ export function encodeData(doc) {
  * Wrap body HTML in the shared shell (CSS, fonts, CSP from this page's own hashes).
  * @param {{ title: string, description: string, bodyHtml: string, css: string, scripts?: string[], tail?: string }} p
  */
-function shell({ title, description, bodyHtml, css, script, tail = '' }) {
+function shell({ title, description, bodyHtml, css, script, tail = '', social = '' }) {
   const csp = cspFor(script ? [script] : [], [css]);
   return `<!doctype html>
 <html lang="en">
@@ -728,7 +743,7 @@ function shell({ title, description, bodyHtml, css, script, tail = '' }) {
 <meta name="color-scheme" content="light dark">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
-<link rel="icon" href="data:,">
+${social ? `${social}\n` : ''}<link rel="icon" href="data:,">
 <style>${css}</style>
 </head>
 <body>
@@ -736,6 +751,72 @@ ${bodyHtml}
 ${tail}${script ? `<script>${script}</script>\n` : ''}</body>
 </html>
 `;
+}
+
+/**
+ * The canonical URL and the link-preview tags (Open Graph, and Twitter's card type) of a page on
+ * the website. Nothing here is fetched by the page itself, so the CSP is unchanged.
+ * @param {{ title: string, description: string, url: string, image?: string }} p
+ * @returns {string}
+ */
+export function socialMeta({ title, description, url, image = OG_IMAGE, imageAlt = OG_IMAGE_ALT }) {
+  for (const [k, v] of Object.entries({ url, image })) {
+    if (!/^https:\/\/[^\s"'<>]+$/.test(String(v))) throw new Error(`socialMeta: ${k} must be an absolute https:// URL, got ${JSON.stringify(v)}`);
+  }
+  if (!title || !description || !imageAlt) throw new Error('socialMeta needs a title, a description and image alt text');
+  return [
+    `<link rel="canonical" href="${esc(url)}">`,
+    '<meta property="og:type" content="website">',
+    `<meta property="og:site_name" content="${esc(APP_NAME)}">`,
+    `<meta property="og:title" content="${esc(title)}">`,
+    `<meta property="og:description" content="${esc(description)}">`,
+    `<meta property="og:url" content="${esc(url)}">`,
+    `<meta property="og:image" content="${esc(image)}">`,
+    `<meta property="og:image:type" content="${esc(OG_IMAGE_TYPE)}">`,
+    `<meta property="og:image:width" content="${OG_WIDTH}">`,
+    `<meta property="og:image:height" content="${OG_HEIGHT}">`,
+    `<meta property="og:image:alt" content="${esc(imageAlt)}">`,
+    '<meta name="twitter:card" content="summary_large_image">',
+    `<meta name="twitter:image" content="${esc(image)}">`,
+    `<meta name="twitter:image:alt" content="${esc(imageAlt)}">`,
+  ].join('\n');
+}
+
+function packText(range) {
+  const a = formatMoney(range.min.value);
+  const b = formatMoney(range.max.value);
+  return a === b ? a : `${a} to ${b}`;
+}
+
+/**
+ * The link-preview description of openbill.html, from the showcase's own figures (summarizeProduct
+ * on data/drugs.json), each with its state; never a hard-coded number. "ARIPIPRAZOLE 10 MG TABLET,
+ * quantity 30: pharmacies pay $3.35 (CMS NADAC eff. 2026-09-23, filed); Medicare Part D paid $46.50
+ * (2024-01-01 to 2024-12-31, filed); Medicare paid 13.9× what pharmacies pay (estimated); cost-plus
+ * estimate $8.85 (estimated). Source and date on every number."
+ * @param {object} doc data/drugs.json
+ * @param {{ drug: string, qty: number }} [product]
+ * @returns {string}
+ */
+export function showcaseDescription(doc, product = DEFAULT_PRODUCT) {
+  const linked = linkRows(doc);
+  const rows = linked.filter((r) => r.name === product.drug);
+  if (!rows.length) throw new Error(`the showcase ${JSON.stringify(product.drug)} is not in data/drugs.json`);
+  const s = summarizeProduct(rows, product.qty, { partDContext: partDNameContext(linked) });
+  if (s.pack.missing) throw new Error(`the showcase ${product.drug} has no pack total at ${product.qty}: ${s.pack.reason}`);
+  const state = (range) => (range.min.state === range.max.state ? range.min.state : 'estimated');
+  const bits = [`${product.drug}, quantity ${formatCount(s.pack.qty)}: pharmacies pay ${packText(s.pack)} (CMS NADAC eff. ${s.pack.min.effective_date}, ${state(s.pack)})`];
+  const ref = s.reference;
+  if (!ref.missing && !ref.pack.missing) {
+    const when = ref.range.min.period ? periodText(ref.range.min.period) : `eff. ${ref.range.min.effective_date}`;
+    // Part D is one average over every strength and form sold under the name, not this NDC's price.
+    const label = ref.kind === 'part_b' ? 'Medicare Part B pays' : 'Medicare Part D paid on average, across all strengths and forms of the name,';
+    bits.push(`${label} ${packText(ref.pack)} (${when}, ${state(ref.pack)})`);
+  }
+  if (!s.spread.missing) bits.push(`${s.spread.sentence.replace(/\.$/, '')} (${s.spread.state})`);
+  if (!s.cost_plus.missing) bits.push(`cost-plus estimate ${packText(s.cost_plus)} (${state(s.cost_plus)})`);
+  const notYours = ref.missing ? '' : ` ${HONESTY.find((h) => h.id === 'not-your-price').parts.find((p) => p.strong).text}`;
+  return `${bits.join('; ')}.${notYours} Source and date on every number.`;
 }
 
 /**
@@ -772,11 +853,14 @@ export function buildAll() {
 
   const tryLinks = TRY_PRODUCTS.map((n) => `<li><a href="${esc(hashFor(n))}">${esc(n)}</a></li>`).join('\n');
   const template = readText('src/app/index.html');
+  const pageTitle = /<title>([^<]+)<\/title>/.exec(template);
+  if (!pageTitle) throw new Error('src/app/index.html has no <title>');
   const page = fill(
     template,
     {
       CSP: esc(cspFor([code], [css])),
       STYLE: css,
+      SOCIAL: socialMeta({ title: pageTitle[1], description: showcaseDescription(doc), url: SITE_URL }),
       MASTHEAD: stampHtml(doc, buildId),
       TRY_LINKS: tryLinks,
       HOWTO: howToReadHtml(),
@@ -800,6 +884,7 @@ export function buildAll() {
   const methodology = shell({
     title: m.title,
     description: m.description || '',
+    social: socialMeta({ title: m.title, description: m.description || m.title, url: `${SITE_URL}methodology.html` }),
     css,
     bodyHtml: `${stampHtml(doc, buildId)}\n<main id="main" class="doc">\n${m.bodyHtml}\n</main>\n${footerHtml(doc, buildId, { home: false })}`,
   });

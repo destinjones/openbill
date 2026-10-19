@@ -14,6 +14,78 @@ Data refreshes are listed too, with the source dates they bring in.
   for v0.1.0.
 - The website, `destinjones.github.io/openbill`, deployed from `main` by
   `.github/workflows/pages.yml` with the real data file (decision 38).
+- A cost-plus estimate on every card that has a pack total (5,924 of 5,936 products): the pack
+  at NADAC, plus 15% rounded to the cent, plus $5.00 per fill, shipping not included. It is
+  always `estimated`, and it is a model, not a price any pharmacy quoted. OpenBill copies no
+  price from Cost Plus Drugs or anyone else, and no spread is computed against the estimate.
+  `COST_PLUS`, `costPlusEstimate()` and the `cost-plus` rule are in `src/core/rules.js`
+  (decision 39).
+- "What were you charged?": an optional amount on the card, shown as a multiple of what
+  pharmacies pay and of the cost-plus estimate and labelled as the reader's own number. It is
+  never sent or saved by OpenBill; it rides in the URL hash (`&paid=`), so the browser's history
+  keeps it, and the card says so. `parsePaid()`,
+  `paidComparison()` and the `what-you-paid` rule are in `src/core/rules.js` (decision 40).
+- Static drug pages on the website, built on deploy by `tools/site.mjs` and not committed: one
+  per product with its numbers in the HTML, one per FDA pharmacologic class, an A–Z index, a
+  preview image per product, and `sitemap.xml`. They run no script and use the same core rules
+  as the card (decisions 41 to 44). `src/core/slug.js` and `src/core/related.js` (classes, brand
+  and generic siblings, related drugs) are new and unit-tested.
+- `identity.pharm_classes` in `data/drugs.json`: FDA's `PHARM_CLASSES` for the row's exact
+  package. Present on 24,902 of the 27,083 rows with an FDA identity, 329 established classes,
+  with the new counts `identity_with_pharm_classes`, `identity_pharm_classes_ambiguous` and
+  `epc_classes` (decision 43).
+- methodology.html: the cost-plus parameters, their sources and what the estimate is not;
+  what happens to the amount a reader types; a section on the drug pages; a limitation on the
+  cost-plus model. `docs/DATA-QUALITY.md`: pharmacologic class coverage and cost-plus coverage.
+- `docs/HAND-CHECK.md`: a worksheet for checking ten products by hand against the raw
+  government files, with where each figure is and the value to expect.
+- Product names that share a slug each get a suffix from their own name (`siteSlugs()`,
+  decision 46); CI builds the site's pages in the required `test` job. The site has a
+  `404.html`.
+
+### Changed
+
+- Links into the website itself are checked against this commit's build of it, not the live
+  deploy; the CI `links` job builds the pages first (decision 50).
+- The default card, the README and its screenshots show the showcase, ARIPIPRAZOLE 10 MG
+  TABLET at 30: pharmacies pay $3.35, Medicare Part D paid $46.50 (2024 average), 13.9×,
+  `estimated` (decision 45). They used to show metformin.
+- `data/drugs.json` is about 38 MB (was about 35 MB) with the pharmacologic classes. Every
+  other byte is unchanged.
+- Starting quantity by dosage form: a product priced per EA starts at 30 only when it is an oral
+  tablet or capsule (or lozenge or troche) by FDA's dosage form and route, or by its NADAC
+  description when FDA does not list it; kits, pens, syringes, vials, patches, inhalers,
+  suppositories and anything undecided start at 1, with 1 / 2 / 3 buttons and a reason that
+  names the form. Drug-page titles, descriptions and preview cards quote the card's own pack
+  total again (decision 48).
+- Starting quantity, refined (decision 49): tablets and films taken under the tongue or against
+  the cheek (FDA route `SUBLINGUAL` or `BUCCAL`) start at 30 like swallowed ones; a product whose
+  NADAC name says tablet or capsule and most of whose FDA-listed NDCs are oral tablets or
+  capsules starts at 30, and the reason names the outlier listing (febuxostat 40 and 80 mg,
+  sevelamer 800 mg); a product priced per ML or GM whose FDA package is a shipping case, or a
+  carton of 10 or more identical bottles, tubes, vials, jars or ampules, starts at one inner unit
+  (TACLONEX: 60 g, not a case of 2,400 g). 132 products change; 3,565 products start at 30 and
+  656 at 1 per EA, and 91 priced per ML or GM start at one inner unit.
+- The preview images stay PNG (`og/<slug>.png`, `og/site.png`, `og:image:type` `image/png`).
+  JPEG at quality 80 was tried and made them 14.4% larger (480.1 MiB against 419.5 MiB), so it
+  was reverted (decision 48).
+
+### Fixed
+
+- A row with no Part D join no longer says "No Medicare Part D spending row matched this drug by
+  brand or generic name", which was false where Part D has a row with the name that the builder
+  refused (decision 47).
+- A very long `&paid=` in a link no longer stops the card in WebKit and Firefox: `parsePaid()`
+  refuses over-long text before any arithmetic.
+- The cost-plus fee cites the company's site for the $5.00 and KFF Health News (2023, $3 fee) for
+  the method only.
+- Drug pages: a counter question names a generic only when FDA lists the same form, route and
+  strength; kit and injectable titles give the unit price; the Part D figure is described as an
+  all-strength average with "Medicare's price is not your price."; the preview cards' quantity,
+  state chips and dates are legible at link-preview size.
+- The Pages build job has read-only permissions and a started deploy is never cancelled; the
+  preview renderer runs with JavaScript off; `--out` is emptied only when it holds the
+  `.openbill-site` marker.
 
 ## [0.1.0] - 2026-10-18
 
