@@ -11,13 +11,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { buildSite, readData, slugCollisions, missingAnchors, parseArgs, prepareOut, ROOT, MARKER } from '../tools/site.mjs';
-import { SITE_CSP, SHOWCASE, METHODOLOGY_ANCHORS, SITEMAP_CLASS_MIN, TITLE_TARGET, TITLE_GENERIC_MAX, OG_IMAGE_TYPE, sitemapXml, letterOf, renderOgHtml, ogImagePath } from '../src/build/drugpage.js';
+import { SITE_CSP, SHOWCASE, METHODOLOGY_ANCHORS, SITEMAP_CLASS_MIN, TITLE_TARGET, TITLE_GENERIC_MAX, OG_IMAGE_TYPE, NDC_OPEN_LIMIT, sitemapXml, letterOf, renderOgHtml, renderDrugPage, ogImagePath, linkedAnchors } from '../src/build/drugpage.js';
+import { pageShingles, measure, summarize } from '../src/build/uniqueness.js';
 import { siteSlugs, slugify } from '../src/core/slug.js';
 import { linkRows } from '../src/core/pack.js';
 import { groupProducts } from '../src/core/search.js';
 import { summarizeProduct, defaultQuantity, partDNameContext, formatSpreadMultiple, HONESTY, EXTREME_HEADLINE } from '../src/core/rules.js';
 import { formatMoney, formatUnitPrice } from '../src/core/money.js';
-import { siblings } from '../src/core/related.js';
+import { siblings, classStanding, SIBLING_LIMIT } from '../src/core/related.js';
 import { esc } from '../src/core/esc.js';
 import { SITE_URL } from '../src/core/config.js';
 
@@ -196,6 +197,9 @@ function hrefs(html) {
   return [...html.matchAll(/<(?:a|link)\s[^>]*href="([^"]*)"/g)].map((m) => unesc(m[1]));
 }
 
+// The ids of the committed methodology.html, which `node build.js --check` keeps current in CI.
+const METHODOLOGY_IDS = new Set([...fs.readFileSync(path.join(ROOT, 'methodology.html'), 'utf8').matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]));
+
 const knownDrugSlugs = () => new Set(site.model.slugs.values());
 const knownClassSlugs = () => new Set(site.model.classSlugs.values());
 
@@ -211,7 +215,7 @@ function checkLink(fromRel, href) {
   const target = path.posix.normalize(path.posix.join(path.posix.dirname(fromRel), pathPart));
   assert.ok(!target.startsWith('..'), `${fromRel}: ${href} leaves the site`);
   const file = target.endsWith('/') || target === '.' ? `${target === '.' ? '' : target}index.html` : target;
-  if (frag !== undefined && file === 'methodology.html') assert.ok(METHODOLOGY_ANCHORS.includes(frag), `${fromRel}: methodology.html has no #${frag}`);
+  if (frag !== undefined && file === 'methodology.html') assert.ok(METHODOLOGY_ANCHORS.includes(frag) || METHODOLOGY_IDS.has(frag), `${fromRel}: methodology.html has no #${frag}`);
   if (frag !== undefined && file === 'index.html') assert.match(frag, /^drug=[^&]+&qty=\d+(\.\d+)?$/, `${fromRel}: app link ${href}`);
   if (fs.existsSync(path.join(site.out, file))) return;
   const m = /^(drug|class)\/([a-z0-9-]+)\/index\.html$/.exec(file);
@@ -349,41 +353,184 @@ test('every figure: the number core computes, its state chip, and a source line 
   }
 });
 
-test('every drug page: prose generated from its data, several sentences per section, the honesty lines verbatim', () => {
+test('every drug page: prose generated from its data; shared explanations are links, not paragraphs (decision 52)', () => {
   const openings = new Set();
+  const honesty = (id) => HONESTY.find((h) => h.id === id).text;
   for (const [name, { rel, html }] of pages) {
     const s = sum(site.model.byName.get(name));
     const what = sectionText(html, 'h-what');
     const pharmacy = sectionText(html, 'h-pharmacy');
     const medicare = sectionText(html, 'h-medicare');
-    const costPlus = sectionText(html, 'h-costplus');
     const ask = sectionText(html, 'h-ask');
+    const text = textOf(html);
     assert.ok(sentences(what) >= 3, `${rel}: what it is (${what})`);
-    assert.ok(sentences(pharmacy) >= 4, `${rel}: what pharmacies pay`);
-    assert.ok(sentences(medicare) >= 2, `${rel}: what Medicare paid`);
-    assert.ok(sentences(costPlus) >= 2, `${rel}: cost-plus`);
+    assert.ok(sentences(pharmacy) >= 2, `${rel}: what pharmacies pay`);
+    assert.ok(sentences(medicare) >= 1, `${rel}: what Medicare paid`);
     assert.ok(sentences(ask) >= 2, `${rel}: what to ask`);
-    assert.ok(sentences(what + pharmacy + medicare + costPlus + ask) >= 15, `${rel}: prose`);
     assert.ok(what.includes(name), `${rel}: what it is names the product`);
     assert.ok(ask.includes('not medical advice'), `${rel}: the counter questions say they are not medical advice`);
+    assert.ok(ask.includes('None of these figures is your price'), `${rel}: the counter section says no figure is your price`);
     if (s.counts.carried_forward) assert.match(pharmacy, /carried forward from an earlier file/, `${rel}: carried-forward note`);
     if (!miss(s.pack)) assert.ok(pharmacy.includes(rangeText(s.pack.min, s.pack.max, s.pack.same, formatMoney)), `${rel}: the pack total in prose`);
-    if (miss(s.reference)) assert.match(medicare, /We don’t know yet/, `${rel}: unknown Medicare in prose`);
-    else if (s.spread.state === 'estimated') assert.ok(medicare.includes('OpenBill labels this comparison estimated because:'), `${rel}: the record's own caveats`);
-    for (const h of HONESTY) assert.ok(textOf(html).includes(h.text), `${rel}: honesty line ${h.id}`);
-    assert.doesNotMatch(textOf(html), /typical cash price/i, `${rel}: never "typical cash price"`);
+    assert.ok(pharmacy.includes('not what they charge you'), `${rel}: NADAC is not what you are charged`);
+    if (miss(s.reference)) assert.match(medicare, /^What Medicare paid We don’t know yet; the card above says why\./, `${rel}: unknown Medicare in prose, its reason only on the card`);
+    else assert.ok(!medicare.includes(s.reference.range.min.reason), `${rel}: no record reason repeated in prose`);
+    // The explanations every page shares are links into methodology.html, not repeated paragraphs.
+    assert.ok(!text.includes('The national average price retail pharmacies pay to buy a drug'), `${rel}: NADAC's definition is a link`);
+    assert.ok(!text.includes('The two figures measure different things'), `${rel}: what each figure measures is a link`);
+    assert.ok(!text.includes('OpenBill copies no price from Cost Plus Drugs'), `${rel}: the cost-plus method is a link`);
+    assert.ok(!text.includes('NADAC is published every week, so a newer price may exist'), `${rel}: no build boilerplate`);
+    assert.ok(html.includes('<a href="../../methodology.html#source-nadac">What NADAC measures</a>'), `${rel}: links what NADAC measures`);
+    if (!miss(s.cost_plus)) assert.ok(html.includes('href="../../methodology.html#cost-plus"'), `${rel}: links the cost-plus rule`);
+    if (!miss(s.reference)) assert.ok(html.includes(`href="../../methodology.html#${s.reference.kind === 'part_d' ? 'source-partd' : 'source-asp_limits'}"`), `${rel}: links what the Medicare figure is`);
+    // The honesty rules: the reader-facing ones stay where they apply (next to the Medicare figure,
+    // in the footer); the list of rules, an instruction to the site, is a link (decision 52).
+    if (!miss(s.reference)) assert.ok(text.includes('Medicare\'s price is not your price.'), `${rel}: not your price`);
+    assert.ok(text.includes(honesty('range')), `${rel}: a price is a range`);
+    assert.ok(text.includes('Disclaimer: not medical advice, no warranty'), `${rel}: the disclaimer`);
+    assert.ok(html.includes('<a href="../../methodology.html#honesty">'), `${rel}: links the rules`);
+    assert.ok(!text.includes('holds every page to these five rules'), `${rel}: the rules are not listed on the page`);
+    assert.doesNotMatch(text, /typical cash price/i, `${rel}: never "typical cash price"`);
+    for (const id of ['h-costplus', 'h-honesty']) assert.ok(!html.includes(`id="${id}"`), `${rel}: no ${id} section`);
     openings.add(`${what.slice(0, 200)}|${pharmacy.slice(0, 120)}`);
   }
   assert.equal(openings.size, pages.size, 'no two pages open with the same words');
+  // Every methodology.html anchor a drug page may link to is one the committed page has.
+  assert.deepEqual(missingAnchors(fs.readFileSync(path.join(ROOT, 'methodology.html'), 'utf8')), [], 'methodology.html has every linked anchor (run node build.js)');
+  assert.ok(linkedAnchors().length >= 10);
 });
 
-test('every drug page: JSON-LD parses; BreadcrumbList, Drug with DrugCost, FAQPage; its numbers equal the page’s', () => {
+test('every drug page: the FAQ answers only what the rest of the page does not say (decision 52)', () => {
+  let withFaq = 0;
+  for (const [name, { rel, html }] of pages) {
+    const f = site.model.facts.get(name);
+    const main = html.slice(html.indexOf('<main'), html.indexOf('</main>'));
+    const at = main.indexOf('id="h-faq"');
+    const faqs = [...html.matchAll(/<dt>([^<]*)<\/dt><dd>([^<]*)<\/dd>/g)].map((m) => [unesc(m[1]), unesc(m[2])]);
+    if (at < 0) {
+      assert.equal(faqs.length, 0, rel);
+      continue;
+    }
+    withFaq += 1;
+    const sectionStart = main.lastIndexOf('<section', at);
+    const rest = textOf(main.slice(0, sectionStart) + main.slice(main.indexOf('</section>', at)));
+    for (const [q, a] of faqs) {
+      // No sentence of an answer (beyond its lead-in) is said elsewhere on the page.
+      for (const sentence of a.split(/(?<=[.!?])\s+(?=[A-Z“"])/)) {
+        if (sentence.length >= 40 && !/^Beyond what the card shows/.test(sentence)) assert.ok(!rest.includes(sentence), `${rel}: "${q}" repeats "${sentence}"`);
+      }
+    }
+    if (!f.spread.missing && f.spread.state === 'estimated') {
+      const q = faqs.find(([x]) => x.startsWith('Why is the comparison with Medicare'));
+      if (q) assert.ok(!q[1].includes(f.spread.caveats.first), `${rel}: the card's caveat is not repeated`);
+    }
+    if (f.pharmacy.kind === 'pack' && !f.plainStart) assert.ok(faqs.some(([x, a]) => x === `Why does this page start at ${f.qtyText}?` && a === f.s.default_quantity.reason), `${rel}: the starting quantity's own reason`);
+    for (const [q] of faqs) assert.ok(!/^What (do pharmacies pay|did Medicare pay|would a cost-plus)/.test(q), `${rel}: no question the card answers`);
+  }
+  assert.ok(withFaq >= 10 && withFaq < pages.size, `some pages have questions and some none (${withFaq})`);
+});
+
+test('the other strengths and forms: every row is core’s own figures, with state and source (decision 52)', () => {
+  let tables = 0;
+  for (const [name, { rel, html }] of pages) {
+    const product = site.model.byName.get(name);
+    const sibs = siblings(product, products);
+    if (!sibs.length) {
+      assert.ok(!html.includes('id="h-siblings"'), `${rel}: no table without siblings`);
+      continue;
+    }
+    tables += 1;
+    const at = html.indexOf('id="h-siblings"');
+    assert.ok(at > 0, `${rel}: a table of siblings`);
+    const section = html.slice(at, html.indexOf('</section>', at));
+    const rows = [...section.matchAll(/<tr( class="self")?><th scope="row">([\s\S]*?)<\/tr>/g)];
+    assert.equal(rows.length, Math.min(sibs.length + 1, SIBLING_LIMIT), `${rel}: rows`);
+    assert.equal(rows.filter((r) => r[1]).length, 1, `${rel}: one row is this page`);
+    assert.ok(rows.find((r) => r[1])[2].includes(`<strong>${esc(name)}</strong> <span class="item-flag">this page</span>`), `${rel}: this page is marked`);
+    const shown = new Set([product, ...sibs.slice(0, SIBLING_LIMIT - 1)]);
+    for (const p of shown) {
+      const row = rows.find((r) => r[2].includes(`>${esc(p.name)}</`));
+      assert.ok(row, `${rel}: a row for ${p.name}`);
+      const ps = sum(p);
+      const cells = row[2].split('</td>');
+      assert.ok(cells[0].includes(esc(formatUnitPrice(ps.nadac_by_unit[0].range.min.value))), `${rel}: ${p.name} NADAC per unit`);
+      assert.equal(chipAfter(cells[0].slice(cells[0].indexOf('<td>'))), ps.nadac.state, `${rel}: ${p.name} NADAC chip`);
+      if (miss(ps.reference)) assert.ok(cells[1].includes('We don’t know yet'), `${rel}: ${p.name} Medicare unknown`);
+      else {
+        assert.ok(cells[1].includes(esc(formatUnitPrice(ps.reference.range.min.value))), `${rel}: ${p.name} Medicare per unit`);
+        assert.equal(chipAfter(cells[1]), ps.reference.range.state, `${rel}: ${p.name} Medicare chip`);
+      }
+    }
+    assert.match(section, /data-prov="siblings">CMS NADAC · nadac-/, `${rel}: the table's source line`);
+    if (rows.some((r) => /Part D \d{4} average|Part D average/.test(r[2]))) assert.match(section, /data-prov="siblings">Medicare Part D · /, `${rel}: the Part D source line`);
+    if (sibs.length + 1 > SIBLING_LIMIT) assert.ok(section.includes('search <a href="../../">OpenBill</a> for the rest'), `${rel}: says some are left out`);
+  }
+  assert.ok(tables >= 20, `${tables} sampled pages have a sibling table`);
+});
+
+test('compared with its class: core’s classStanding(), the middle product’s filed price, state and source (decision 52)', () => {
+  let compared = 0;
+  for (const [name, { rel, html }] of pages) {
+    const f = site.model.facts.get(name);
+    const items = f.classes.map((c) => ({ c, st: classStanding(f.product, site.model.classes.get(c.key)) })).filter((x) => x.st);
+    const at = html.indexOf('id="h-class"');
+    if (!items.length) {
+      assert.equal(at, -1, `${rel}: no comparison`);
+      continue;
+    }
+    compared += 1;
+    const section = html.slice(at, html.indexOf('</section>', at));
+    const text = textOf(section);
+    for (const { c, st } of items) {
+      assert.equal(st.lower + st.higher + st.same, st.others);
+      assert.ok(text.includes(`Of the ${st.others.toLocaleString('en-US')} other products in FDA’s ${c.name} class priced per ${st.unit}, ${st.higher.toLocaleString('en-US')} `), `${rel}: ${c.name} counts`);
+      assert.ok(text.includes(`The one in the middle is ${st.middleName}, at ${formatUnitPrice(st.middle.value)} per ${st.unit} ${st.middle.state} (eff. ${st.middle.effective_date})`), `${rel}: ${c.name} middle`);
+    }
+    assert.ok(text.includes(formatUnitPrice(items[0].st.mine.value)), `${rel}: its own middle price`);
+    assert.match(section, /data-prov="class">CMS NADAC · nadac-/, `${rel}: source line`);
+    assert.ok(text.includes('a class is not a list of substitutes'), `${rel}: not substitutes`);
+  }
+  assert.ok(compared >= 15, `${compared} sampled pages compare with a class`);
+});
+
+test('a product with many NDCs: its labelers in a table, the NDCs behind a closed list', () => {
+  let n = 0;
+  for (const [name, { rel, html }] of pages) {
+    const s = sum(site.model.byName.get(name));
+    const many = s.counts.rows > NDC_OPEN_LIMIT;
+    assert.equal(html.includes('<th scope="col">Labeler</th>'), many, rel);
+    assert.equal(html.includes('<details class="ndcs">'), many, rel);
+    if (!many) continue;
+    n += 1;
+    const at = html.indexOf('<th scope="col">Labeler</th>');
+    const table = html.slice(at, html.indexOf('</table>', at));
+    const counts = [...table.matchAll(/<td class="num">([\d,]+)<\/td>/g)].map((m) => Number(m[1].replace(/,/g, '')));
+    assert.equal(counts.reduce((a, b) => a + b, 0), s.counts.rows, `${rel}: every NDC is under one labeler`);
+  }
+  assert.ok(n >= 3, `${n} sampled pages have more than ${NDC_OPEN_LIMIT} NDCs`);
+});
+
+test('unique prose: every drug page, rendered from the real data, clears the floor (decision 52)', () => {
+  // The measure tools/uniqueness.mjs prints: a page's words not covered by a five-word shingle
+  // that is on at least 1% of the pages. Before decision 52 the median page was 10.2% its own
+  // (10th percentile 7.2%) with 137 such words; the floors leave room for weekly data changes.
+  const all = site.model.products.map((p) => ({ name: p.name, shingles: pageShingles(renderDrugPage(site.model, p).html) }));
+  const r = summarize(measure(all));
+  assert.equal(r.pages, site.model.products.length);
+  assert.ok(r.share.median >= 0.17, `median unique share ${r.share.median}`);
+  assert.ok(r.share.p10 >= 0.11, `10th percentile unique share ${r.share.p10}`);
+  assert.ok(r.specific.median >= 180, `median page-specific words ${r.specific.median}`);
+  assert.ok(r.specific.p10 >= 95, `10th percentile page-specific words ${r.specific.p10}`);
+});
+
+test('every drug page: JSON-LD parses; BreadcrumbList, Drug with DrugCost, FAQPage when it has questions; its numbers equal the page’s', () => {
   for (const [name, { rel, html }] of pages) {
     const ld = JSON.parse(jsonLd(html)[0][2]);
     assert.equal(ld['@context'], 'https://schema.org');
     const types = ld['@graph'].map((x) => x['@type']);
-    assert.deepEqual(types, ['BreadcrumbList', 'Drug', 'FAQPage'], rel);
-    const [crumbs, drug, faq] = ld['@graph'];
+    const hasFaq = html.includes('id="h-faq"');
+    assert.deepEqual(types, hasFaq ? ['BreadcrumbList', 'Drug', 'FAQPage'] : ['BreadcrumbList', 'Drug'], rel);
+    const [crumbs, drug, faq = { mainEntity: [] }] = ld['@graph'];
     const slug = site.model.slugs.get(name);
     assert.equal(crumbs.itemListElement.at(-1).item, `${SITE_URL}drug/${slug}/`);
     assert.equal(crumbs.itemListElement[1].item, `${SITE_URL}drugs/${letterOf(name)}/`);
@@ -409,7 +556,7 @@ test('every drug page: JSON-LD parses; BreadcrumbList, Drug with DrugCost, FAQPa
       assert.ok(c, `${rel}: Medicare cost`);
       if (s.reference.range.min.period) assert.ok(c.costOrigin.includes(s.reference.range.min.period.replace('/', ' to ')), `${rel}: Medicare cost carries its period`);
     } else assert.ok(!drug.cost.some((c) => /Medicare/.test(c.costOrigin)), `${rel}: no Medicare cost when unknown`);
-    assert.ok(faq.mainEntity.length >= 3, `${rel}: FAQ`);
+    assert.equal(faq.mainEntity.length > 0, hasFaq, `${rel}: FAQ`);
     const dds = [...html.matchAll(/<dt>([^<]*)<\/dt><dd>([^<]*)<\/dd>/g)].map((m) => [unesc(m[1]), unesc(m[2])]);
     assert.deepEqual(
       faq.mainEntity.map((q) => [q.name, q.acceptedAnswer.text]),
@@ -528,8 +675,9 @@ test('names that share a slug each get their own suffixed page (decision 46); an
   fs.writeFileSync(pointer, 'version https://git-lfs.github.com/spec/v1\noid sha256:0\nsize 1\n');
   assert.throws(() => readData(pointer), /Git LFS pointer/);
 
-  assert.deepEqual(missingAnchors('<section id="cost-plus">'), []);
-  assert.deepEqual(missingAnchors('<section id="spread">'), ['cost-plus']);
+  assert.deepEqual(missingAnchors(linkedAnchors().map((a) => `<section id="${a}">`).join('')), []);
+  assert.ok(missingAnchors('<section id="spread">').includes('cost-plus'));
+  assert.ok(!missingAnchors('<section id="spread">').includes('spread'));
   assert.ok(METHODOLOGY_ANCHORS.includes('cost-plus'), 'the rule the pages link to is one methodology.html is generated from');
 
   assert.throws(() => prepareOut(ROOT), /repository/);
@@ -575,17 +723,16 @@ test('phase 2 review regressions: honest counter questions, Part D wording, quan
     const text = textOf(html);
     // H9: a static page names its NADAC file's date, never "this week's".
     assert.doesNotMatch(text, /this week’s NADAC/i, rel);
-    // H3: the brief's sentence "Say so on every screen that shows it." appears only in the framed list of rules.
-    const said = text.split('Say so on every screen that shows it.').length - 1;
-    assert.equal(said, 1, `${rel}: the instruction sentence once, in the rules list`);
-    assert.ok(text.includes('holds every page to these five rules, written by the project’s owner and quoted word for word:'), `${rel}: the rules are introduced`);
+    // H3: the brief's sentence "Say so on every screen that shows it." is an instruction to the
+    // site, not to the reader: drug pages link to the rules instead (decision 52).
+    assert.ok(!text.includes('Say so on every screen that shows it.'), `${rel}: no instruction sentence`);
     const f = site.model.facts.get(name);
     // H8: "once-a-day medicine" only for oral tablets and capsules.
-    if (/one-month supply of a once-a-day medicine/.test(sectionText(html, 'h-pharmacy'))) assert.ok(f.oralSolid, `${rel}: once-a-day for a non-oral-solid`);
+    if (/once-a-day medicine/.test(text)) assert.ok(f.oralSolid, `${rel}: once-a-day for a non-oral-solid`);
     // SEO-10, SEO-12
     assert.match(html, /<a href="https:\/\/github\.com\/[^"]+issues\/new[^"]*" rel="nofollow noopener">Wrong\? Tell us<\/a>/, rel);
     assert.ok(html.includes('<a href="../../data/drugs.json" rel="nofollow">'), rel);
-    assert.ok(html.includes('<p class="more-link"><a href="../../methodology.html#cost-plus">'), rel);
+    if (!f.costPlus.missing) assert.ok(html.includes('<a href="../../methodology.html#cost-plus">How it is worked out</a>'), rel);
   }
   // H8 / SEO-4, decision 48: a kit starts at 1, and its title, card and preview say so; its page
   // names FDA's form and does not say what one EA of a kit is.
@@ -599,8 +746,8 @@ test('phase 2 review regressions: honest counter questions, Part D wording, quan
   assert.ok(avonexTitle.startsWith(avonexName) && avonexTitle.includes(`: pharmacies pay ${avonexPack} for 1 unit (EA)`), `the title quotes the 1-unit total: ${avonexTitle}`);
   assert.ok(avonex.html.includes('<p class="card-kicker">For 1 unit (EA)</p>'));
   assert.doesNotMatch(avonex.html, /for 30 |30 units/);
-  assert.match(sectionText(avonex.html, 'h-pharmacy'), /lists its NDC as dosage form “KIT” with route “INTRAMUSCULAR”\..+NADAC’s EA for it may be the whole kit or one item in it, and the files do not say which\. So the card starts at 1 unit \(EA\)/);
-  assert.doesNotMatch(sectionText(avonex.html, 'h-pharmacy'), /once-a-day/);
+  assert.match(sectionText(avonex.html, 'h-faq'), /Why does this page start at 1 unit \(EA\)\?.+lists its NDC as dosage form “KIT” with route “INTRAMUSCULAR”\..+NADAC’s EA for it may be the whole kit or one item in it, and the files do not say which\. So the card starts at 1 unit \(EA\)/);
+  assert.doesNotMatch(textOf(avonex.html), /once-a-day/);
   const og = renderOgHtml(site.model, site.model.byName.get(avonexName), { css: '.og{}' });
   assert.ok(og.includes('<p class="qty">For 1 unit (EA)</p>'), 'the preview card shows the 1-unit pack');
   // Decision 48: JPEG made these flat-colour cards 14.4% larger, so they are PNG again.
@@ -628,12 +775,12 @@ test('phase 2 review regressions: honest counter questions, Part D wording, quan
 test('decision 49: a sublingual tablet starts at 30 and its page gives the reason; a shipping case starts at one inner unit', () => {
   const bup = pages.get('BUPRENORPHINE 8 MG TABLET SL').html;
   assert.match(unesc(/<title>([^<]*)<\/title>/.exec(bup)[1]), /: pharmacies pay \$[0-9.,]+ for 30 tablets/);
-  const why = sectionText(bup, 'h-pharmacy');
+  const why = sectionText(bup, 'h-faq');
   assert.match(why, /as a tablet taken under the tongue \(dosage form “TABLET”, route “SUBLINGUAL”\)/);
   assert.match(why, /OpenBill counts a tablet or film taken under the tongue or against the cheek as an oral solid/);
   const tac = pages.get('TACLONEX 0.005%-0.064% SUSPENSION').html;
   assert.match(unesc(/<title>([^<]*)<\/title>/.exec(tac)[1]), /: pharmacies pay \$1,241\.81 for 60 g/);
-  assert.match(sectionText(tac, 'h-pharmacy'), /is a shipping case of 40 cartons, 2,400 g in all: a wholesale pack of identical units, so OpenBill counts one carton of it\. So the card starts at one carton: 60 GM\./);
+  assert.match(sectionText(tac, 'h-faq'), /is a shipping case of 40 cartons, 2,400 g in all: a wholesale pack of identical units, so OpenBill counts one carton of it\. So the card starts at one carton: 60 GM\./);
 });
 
 test('every sampled page: its preview card opens with the same quantity line as the page’s card', () => {

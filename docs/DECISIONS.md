@@ -4,7 +4,7 @@ A numbered log of the choices behind OpenBill: context, decision, consequences. 
 not rewritten; a later entry supersedes or amends an earlier one by number, and the earlier
 entry carries a one-line note pointing at it. Entries 1 to 23 were recorded on 2026-10-17,
 during phase 1; entries 24 to 32 were recorded later the same day, after a review and a
-rebuild of `data/drugs.json`, entries 33 to 48 on 2026-10-18, and entries 49 and 50 on 2026-10-19.
+rebuild of `data/drugs.json`, entries 33 to 48 on 2026-10-18, and entries 49 onward on 2026-10-19.
 Entries 39 to 49 are phase 2: the cost-plus estimate, "what you were charged" and the drug
 pages. The contract
 they produce is [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -987,6 +987,8 @@ recorded here.
 
 ## 42. JSON-LD uses DrugCost, not Offer or PriceSpecification
 
+*Amended by [decision 52](#52-drug-pages-link-the-explanations-they-share-and-add-their-own-comparisons): a drug page carries a `FAQPage` only when it has questions the rest of the page does not already answer.*
+
 **Context.** Structured data on the drug pages helps search engines read the numbers.
 schema.org's `Offer` and `PriceSpecification` describe something for sale at a price.
 
@@ -1095,6 +1097,8 @@ names are not merged: the two spellings may be different products, and NADAC pri
 separately.
 
 ## 47. Corrections from the phase 2 review
+
+*See [decision 52](#52-drug-pages-link-the-explanations-they-share-and-add-their-own-comparisons): drug pages no longer quote the five honesty lines; they link to them on methodology.html, which settles for drug pages the question left open below.*
 
 *Amended by [decision 48](#48-starting-quantity-by-dosage-form-preview-images-stay-png): kits and the other products priced per EA that are not oral tablets or capsules start at 1, so titles, descriptions and preview alt text quote the card's own 1-unit pack total instead of the unit price, and the starting-quantity question this entry left open is settled.*
 
@@ -1374,3 +1378,73 @@ the build until a new showcase is chosen
 in CI catch that before merge. The README's clip is as current as the last deploy, and the
 repository does not grow by a GIF per refresh. Deploys take about 10 s longer. The README's bold
 headline and the screenshots in `docs/img/` are still remade by hand (`tools/shots.mjs`).
+
+## 52. Drug pages link the explanations they share and add their own comparisons
+
+**Context.** A review of the 5,936 drug pages found about 96.7% of a typical page's prose
+identical or templated across pages, and the questions at the end restated the body. Search
+engines can judge pages like that thin or mass-produced. Recorded on 2026-10-19.
+
+**Decision.**
+
+- **A measure, so the change can be checked.** `src/build/uniqueness.js` takes the visible
+  text of a page's `<main>` (headings, paragraphs, lists, tables and the figure card; not the
+  masthead, breadcrumbs or footer), splits it into blocks and lower-case words, and counts a
+  word as page-specific when no five-word shingle that appears on at least 1% of the drug pages
+  (60 of 5,936) covers it, and a shingle covering it is new on the page, so text a page repeats
+  counts once. The unique share is page-specific words ÷ all words. `node tools/uniqueness.mjs`
+  prints the median and 10th percentile over every page, and the same at other thresholds;
+  `--site <dir>` measures a site built from another commit.
+- **Shared explanations become links into methodology.html.** What NADAC measures, why a plain
+  tablet or capsule starts at 30, the explanation codes, carried-forward prices, what Part D and
+  the Part B limit measure, which Medicare figure is compared, how the spread and the cost-plus
+  estimate are worked out, and the five honesty rules are now links (`LINKED_ANCHORS` in
+  `src/build/drugpage.js`; `tools/site.mjs` stops the build if methodology.html lacks one).
+  Gone from every page: the lede, the paragraph defining NADAC, "This page was built from the
+  NADAC file of …", "The two figures measure different things …", the cost-plus prose section,
+  and the list of the five rules. Kept where they apply: every figure's state chip and source
+  line, "Medicare's price is not your price." beside every Medicare figure, the range line and
+  the disclaimer in the footer, "not what they charge you" after the pharmacy price, and "not
+  medical advice" with the counter questions, which now open by saying none of the figures is
+  the reader's price. A missing Medicare figure's reason is stated once, on the card.
+- **What is particular to the product, from data/drugs.json.** (1) A table of its other
+  strengths, forms and brands: the products that share an FDA nonproprietary name
+  (`siblings()`), up to `SIBLING_LIMIT` (24) rows with the product itself, each with its FDA
+  dosage form, brand or generic, what pharmacies pay per unit and its Medicare figure per unit,
+  each with its state, and source lines under the table. It replaces the list of links to them.
+  (2) Where its NADAC price sits in each of its FDA classes (`classStanding()` in
+  `src/core/related.js`): how many of the class's other products priced per the same unit pay
+  more or less, and which is in the middle. Each product is represented by the lower middle of
+  its NDCs' prices and the class by the lower middle of those, so the price shown is one real
+  filed NADAC record with its own state and source line, never an average OpenBill made; a
+  product needs at least 3 others in its unit. (3) For a product with more than 6 NDCs, a table
+  of its labelers with their NDC counts and prices, and, when its prices took effect on more
+  than one date, a list of the dates with how many NDCs were carried forward. No new figure is
+  calculated: every price is a core record, and the rest are counts.
+- **The questions answer only what the page does not already say.** "Why is the comparison
+  with Medicare labelled estimated?" gives the spread record's reasons other than the one the
+  card shows, and "Why does this page start at …?" gives the starting quantity's reason when it
+  is not a plain tablet or capsule supply. The questions that restated the card are gone, and a
+  page with neither question has no FAQ section and no `FAQPage` in its JSON-LD.
+
+Measured on every page of the 2026-10-14 data:
+
+| | before | after |
+|---|---|---|
+| unique share, median | 10.2% | 20.9% |
+| unique share, 10th percentile | 7.2% | 13.6% |
+| page-specific words, median | 137 | 218 |
+| page-specific words, 10th percentile | 91 | 107 |
+| words of prose, median | 1,339 | 1,049 |
+
+At the strictest threshold, where text on any two pages counts as shared, the median share
+rises from 3.0% to 4.0% (10th percentile 0.7% to 1.0%). It moves little because the new tables
+are shared by design: the products in one table each show it. `tests/site.test.js` renders
+every page and holds the median share to at least 17%, the 10th percentile to 11%, and the
+page-specific words to a median of 180 and a 10th percentile of 95.
+
+**Consequences.** A page shows more about its own product in fewer words, and links to the
+explanations it shares. The five honesty lines are no longer quoted on drug pages; class pages
+still list them. The drug pages' HTML is about the same size (134.8 MB against 134.3 MB), and
+`node --test` renders every drug page once more for the floor, about 10 seconds. A data refresh
+that pulls the share below a floor fails the tests rather than shipping thinner pages.

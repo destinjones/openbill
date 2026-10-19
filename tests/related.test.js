@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { epcName, epcClasses, classIndex, nonproprietaryNames, siblings, partDClaims, related } from '../src/core/related.js';
+import { epcName, epcClasses, classIndex, nonproprietaryNames, siblings, partDClaims, related, classStanding, CLASS_STANDING_MIN, SIBLING_LIMIT } from '../src/core/related.js';
 import { linkRows } from '../src/core/pack.js';
 import { groupProducts } from '../src/core/search.js';
 
@@ -201,6 +201,52 @@ test('related: candidates that share a nonproprietary name through another are o
 test('related: on the fixture, products in classes of their own have nothing related', () => {
   const idx = classIndex(PRODUCTS);
   for (const p of PRODUCTS) assert.deepEqual(related(p, PRODUCTS, idx), [], p.name);
+});
+
+// Made-up NADAC records for classStanding (fixture values, not real prices): only what it reads.
+function priced(name, values, per = 'EA') {
+  return {
+    name,
+    rows: values.map((value, i) => ({ ndc: `9009900000${i}`, name, nadac: { value, kind: 'usd', state: 'filed', per, effective_date: '2026-09-23', source_file: 'fixture-nadac.csv' } })),
+  };
+}
+
+test('classStanding: the product’s middle NADAC among the class’s others, by real filed records', () => {
+  const me = priced('MINE 10 MG TABLET', [0.3, 0.1, 0.2, 0.4]); // lower middle of four: 0.2
+  const others = [priced('A', [0.05]), priced('B', [0.2]), priced('C', [0.5, 0.9]), priced('D', [1.5]), priced('E', [3]), priced('F', [0.01], 'ML')];
+  const cls = [me, ...others];
+  const st = classStanding(me, cls);
+  assert.equal(st.unit, 'EA');
+  assert.equal(st.mine.value, 0.2, 'the lower middle of its own NDCs, never an average of two');
+  assert.equal(st.mineNdcs, 4);
+  assert.equal(st.others, 5, 'only products priced per the same unit');
+  assert.deepEqual([st.lower, st.same, st.higher], [1, 1, 3]);
+  // Others' middles sorted: 0.05 (A), 0.2 (B), 0.5 (C, lower middle of 0.5 and 0.9), 1.5, 3: the middle is C's 0.5.
+  assert.equal(st.middle.value, 0.5);
+  assert.equal(st.middleName, 'C');
+  assert.equal(st.middle, others[2].rows[0].nadac, 'the record itself, with its state and source');
+  assert.ok(Object.isFrozen(st));
+  // Too few others in the unit, or NDCs priced per different units: no comparison.
+  assert.equal(classStanding(me, [me, others[0], others[1]]), null);
+  assert.equal(CLASS_STANDING_MIN, 3);
+  const mixed = { name: 'MIXED', rows: [...priced('MIXED', [1]).rows, ...priced('MIXED', [2], 'ML').rows] };
+  assert.equal(classStanding(mixed, [mixed, ...others]), null);
+  // Input order does not matter.
+  assert.deepEqual(classStanding(me, [...cls].reverse()), st);
+  assert.throws(() => classStanding(me, new Map()), TypeError);
+  assert.ok(SIBLING_LIMIT >= 12);
+});
+
+test('classStanding: on the real class index, the counts add up and the middle is a class member’s record', () => {
+  const idx = classIndex(PRODUCTS);
+  for (const [key, list] of idx) {
+    for (const p of list) {
+      const st = classStanding(p, list);
+      if (!st) continue;
+      assert.equal(st.lower + st.same + st.higher, st.others, `${p.name} in ${key}`);
+      assert.ok(list.some((q) => q.name === st.middleName && q.rows.some((r) => r.nadac === st.middle)), `${p.name}: middle from ${st.middleName}`);
+    }
+  }
 });
 
 test('related.js is DOM-free and follows the bundler conventions', () => {

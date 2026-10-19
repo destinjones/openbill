@@ -13,6 +13,7 @@ import { RULES, HONESTY, PART_B_SETTING_NOTE, PART_D_BLANK_FLAG_NOTE, EXTREME_HI
 import { SOURCE_INFO, NADAC_EXPLANATION_CODES, NADAC_CARRIED_FORWARD_CODES } from '../core/sources.js';
 import { REPO_URL, APP_NAME, SITE_URL } from '../core/config.js';
 import { issueUrl } from '../core/report.js';
+import { SIBLING_LIMIT, CLASS_STANDING_MIN } from '../core/related.js';
 import { formatCount, formatMoney, formatUnitPrice, formatPercent } from '../core/money.js';
 import { parsePeriod } from '../core/dates.js';
 import { analyzeDoc, pct, plural, countText, SHA_PREFIX, PART_D_UNMATCHED_REASONS, PART_B_UNMATCHED_REASONS, PART_B_RECONCILED_BY } from './quality.js';
@@ -388,7 +389,13 @@ function drugPages(a) {
     'class',
     'classes',
   )}, and ${formatCount(pc.productsWithEpc)} of ${plural(a.products, 'product')} belong to at least one. Where FDA lists none, the page shows no class rather than a guess.</li>
-<li><strong>Brand and generic versions</strong> are the products that share an FDA nonproprietary name (the generic name on the label) with this one. They stay separate products, each with its own NADAC prices.</li>
+<li><strong>Other strengths, forms and brands</strong> are the products that share an FDA nonproprietary name (the generic name on the label) with this one. They stay separate products. A drug page lists up to ${formatCount(
+    SIBLING_LIMIT,
+  )} of them, itself included, in a table with each one’s FDA dosage form, whether NADAC classes it brand or generic, what pharmacies pay per unit and its Medicare figure per unit, each with its state and source line. Products under one Part D name show the same Part D average, because Part D gives one figure for all of them.</li>
+<li><strong>Compared with its class.</strong> For each of a product’s classes, its page says how many of the class’s other products priced in the same unit (EA, ML or GM) have a higher or lower NADAC price, and which product is in the middle. Each product is represented by the middle of its own NDCs’ NADAC prices, and the class by the middle of those; when there is an even number of prices, the lower of the two middle ones is taken, so the price shown is always one real filed NADAC price, never an average of two. A product whose NDCs are priced in different units, or whose class has fewer than ${formatCount(
+    CLASS_STANDING_MIN,
+  )} other products in its unit, gets no comparison. A unit is one tablet, capsule, milliliter or gram whatever its strength, so this compares prices per unit, not per dose.</li>
+<li><strong>Shared explanations live here.</strong> What NADAC and Part D measure, how the starting quantity, the spread and the cost-plus estimate are worked out, and the rules every price follows are the same for every product, so a drug page links to them on this page instead of repeating them; the page keeps what is particular to its product. Its questions answer only what the rest of the page does not already say.</li>
 <li><strong>Related drugs</strong> are up to five other drugs in the same classes, ranked by how many classes they share and then by Medicare Part D claims. A class says how a drug works. It does not mean one drug can replace another; that is a question for a doctor or pharmacist.</li>
 <li><strong>Structured data.</strong> Each page describes its figures to search engines as costs of the drug (schema.org DrugCost), never as an offer to sell it, and every number there equals the one on the page.</li>
 </ul>`;

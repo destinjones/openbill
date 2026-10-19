@@ -470,13 +470,21 @@ input must be a positive amount up to $100,000, else the card says why.
   URL; `og:*` and `twitter:*` tags with its own `og/<slug>.png` (`og:image:type` `image/png`); the
   title, description and preview alt text quote the pack total at the starting quantity; the card's figures with state
   chips and source lines in the HTML; prose generated from its data (what it is, what pharmacies
-  pay, what Medicare paid and why the gap may exist, the cost-plus estimate, what to ask at the
-  counter, the honesty lines); links to its brand/generic siblings, its class page, and up to 5
-  related products in the same class.
+  pay, what Medicare paid, what to ask at the counter); a table of its other strengths, forms and
+  brands (`siblings()`, up to `SIBLING_LIMIT` rows) with each one's NADAC and Medicare figures per
+  unit, states and source lines; where its NADAC price sits in each FDA class (`classStanding()`,
+  the middle a real filed record); for more than 6 NDCs, a labeler table and the dates its prices
+  took effect; questions only where the page does not already answer them; links to its class
+  page and up to 5 related products in the same class. What every page shares (what NADAC and
+  Medicare measure, the spread, the cost-plus method, the starting quantity, the honesty rules) is
+  a link into methodology.html (`LINKED_ANCHORS`), not a repeated paragraph
+  ([decision 52](DECISIONS.md#52-drug-pages-link-the-explanations-they-share-and-add-their-own-comparisons)).
+  `node tools/uniqueness.mjs` measures how much of each page is its own text
+  (`src/build/uniqueness.js`); `tests/site.test.js` holds every page to a floor.
 - JSON-LD (`@graph`): `BreadcrumbList`; `Drug` with `cost` as `DrugCost` entries (NADAC with
   `costOrigin` naming the file; Medicare with its period) — not `Offer`/`PriceSpecification`,
-  which would claim something is for sale; `FAQPage` with questions answered from the page's own
-  data. Every number in JSON-LD equals the one in the HTML.
+  which would claim something is for sale; `FAQPage`, when the page has questions, answered from
+  the page's own data. Every number in JSON-LD equals the one in the HTML.
 - `identity.pharm_classes`: FDA's `PHARM_CLASSES` from `product.txt` for the row's exact package
   match, split into entries at each `, ` that follows an entry's closing `]` (a few names contain
   `, `, e.g. `Anti-Inflammatory Agents, Non-Steroidal [CS]`), each entry kept once in FDA's order

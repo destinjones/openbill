@@ -53,6 +53,14 @@ Data refreshes are listed too, with the source dates they bring in.
 
 ### Changed
 
+- Drug pages say more about their own product and repeat less (decision 52): a table of the
+  product's other strengths, forms and brands with their NADAC and Medicare figures per unit;
+  where its NADAC price sits in each FDA class (`classStanding()`); for more than 6 NDCs, a
+  labeler table and the dates its prices took effect. What every page shares (what NADAC and
+  Medicare measure, the spread, the cost-plus method, the starting quantity, the five honesty
+  rules) is now a link into methodology.html, and the questions answer only what the rest of
+  the page does not. `node tools/uniqueness.mjs` measures it: the median page's own share of its
+  prose went from 10.2% to 20.9% (10th percentile 7.2% to 13.6%), and the tests hold it to a floor.
 - Links into the website itself are checked against this commit's build of it, not the live
   deploy; the CI `links` job builds the pages first (decision 50).
 - The default card, the README and its screenshots show the showcase, ARIPIPRAZOLE 10 MG
