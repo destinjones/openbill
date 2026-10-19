@@ -1,11 +1,12 @@
 # One page that tells a person what their medical care and drugs actually cost, with a source and a date on every single number.
+[![A six-second clip of the OpenBill card: the search box types aripiprazole, the card for ARIPIPRAZOLE 10 MG TABLET resolves, what pharmacies pay appears, a rule draws, what Medicare Part D paid lands, the spread between them counts up, and the source lines fade in. It is rendered from the live site's data on every deploy.](https://destinjones.github.io/openbill/press/openbill-reveal.gif)](https://destinjones.github.io/openbill/#drug=ARIPIPRAZOLE%2010%20MG%20TABLET&qty=30)
 
 **Pharmacies pay $3.35 for 30 aripiprazole 10 mg tablets. Medicare Part D paid $46.50: 13.9×.**
 Medicare's figure is its 2024 average spending per dosage unit on generic aripiprazole, all
 strengths together, so the multiple is `estimated`. What pharmacies pay is CMS's NADAC, effective
 2026-09-23. Medicare's price is not your price. [See the card](https://destinjones.github.io/openbill/#drug=ARIPIPRAZOLE%2010%20MG%20TABLET&qty=30).
 
-**Open it: [destinjones.github.io/openbill](https://destinjones.github.io/openbill/)**
+**Open it: [destinjones.github.io/openbill](https://destinjones.github.io/openbill/)** · Writing about it? The [press kit](https://destinjones.github.io/openbill/press/) has the numbers, pictures, this clip and a paragraph to paste.
 
 OpenBill is one offline page that puts what US pharmacies pay for a drug next to what Medicare pays for it. Data as of: NADAC week of 2026-10-14; Medicare Part D data year 2024; Medicare Part B October 2026 quarter.
 
@@ -58,7 +59,7 @@ tools/fetch_*.py      network -> tools/cache/ + manifest.json (sha256, ETag, dat
 tools/build_drugs.py  tools/cache/ -> data/drugs.json      (offline; filed facts only)
 build.js              src/ + data/ -> openbill.html, methodology.html, docs/DATA-QUALITY.md
 tools/site.mjs        the built pages + data/ -> _site/ (drug, class and A-Z pages, previews,
-                      sitemap; on deploy only, never committed)
+                      the press kit and its clips, sitemap; on deploy only, never committed)
 ```
 
 1. **Fetch.** Each fetcher downloads its government files into `tools/cache/`, skipping
@@ -136,7 +137,8 @@ above are when those browsers added the format the page needs to `DecompressionS
 tested result ([decision 33](docs/DECISIONS.md#33-the-page-checks-the-inline-datas-sha256-browser-checks-run-in-chromium-firefox-and-webkit)).
 
 `node tools/shots.mjs` remakes the README screenshots in `docs/img/` from `openbill.html`
-(run `node build.js` first). `node tools/site.mjs --out ../openbill-site --limit 20` builds a
+(run `node build.js` first). `node tools/record.mjs --out ../openbill-media` records the reveal clip
+at the top of this page; the deploy records it from each build, so it is never committed. `node tools/site.mjs --out ../openbill-site --limit 20` builds a
 small copy of the website, with drug pages for the first 20 products and the showcase; see
 [CONTRIBUTING.md](CONTRIBUTING.md#the-website).
 

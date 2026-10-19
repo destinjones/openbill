@@ -1,0 +1,353 @@
+/* The reveal clip (press/openbill-reveal.gif, press/openbill-reveal-9x16.gif), rendered frame by
+   frame by tools/record.mjs from the markup in renderRevealHtml() (src/build/reveal.js). The
+   receipt look of the card, laid out to fit each frame with no scrolling: `body.wide` is 1200×675
+   (pharmacy | rule | Medicare | spread), `body.tall` is 540×960 (one column). tools/record.mjs
+   prepends the IBM Plex @font-face rules as data: URIs, so rendering fetches nothing. Light paper
+   only: a GIF has no colour scheme. `body.wordmark` is the stamp alone on a transparent background,
+   for press/openbill-wordmark*.png. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: #fbfaf6;
+  color: #1b1b19;
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+body.wide {
+  width: 1200px;
+  height: 675px;
+}
+
+body.tall {
+  width: 540px;
+  height: 960px;
+}
+
+p,
+h1,
+h2 {
+  margin: 0;
+}
+
+.scene {
+  position: absolute;
+  inset: 26px 44px 18px;
+  display: flex;
+  flex-direction: column;
+}
+
+.tall .scene {
+  inset: 30px 26px 22px;
+}
+
+/* ---- Top: the stamp and the NADAC week ---- */
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stamp {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 12px 5px;
+  border: 2px solid currentColor;
+  outline: 1px solid currentColor;
+  outline-offset: 2px;
+  text-transform: uppercase;
+  line-height: 1.1;
+  transform: rotate(-1.5deg);
+}
+
+.stamp-name {
+  font-weight: 600;
+  font-size: 20px;
+  letter-spacing: 0.24em;
+  margin-right: -0.24em;
+}
+
+.stamp-sub {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  margin-right: -0.18em;
+}
+
+.week {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 15px;
+  color: #4c4a44;
+}
+
+.tall .week {
+  font-size: 13px;
+}
+
+/* ---- The search box ---- */
+
+.search {
+  margin-top: 16px;
+}
+
+.search-label {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  height: 54px;
+  padding: 0 16px;
+  background: #ffffff;
+  border: 2px solid #1b1b19;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 26px;
+}
+
+.tall .search-box {
+  height: 50px;
+  font-size: 24px;
+}
+
+/* ---- The card ---- */
+
+.card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  margin-top: 16px;
+  padding: 12px 22px 10px;
+  background: #ffffff;
+  border: 1px solid #cdc8bd;
+  border-top: 4px double #1b1b19;
+  border-bottom: 4px double #1b1b19;
+}
+
+.tall .card {
+  padding: 12px 18px 10px;
+}
+
+.kicker {
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #4c4a44;
+}
+
+.name {
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.tall .name {
+  font-size: 26px;
+}
+
+.figs {
+  display: grid;
+  /* The two prices take the width of their own lines; the spread takes the rest. A column too
+     wide for the frame shows up in tools/record.mjs's overflow check. */
+  grid-template-columns: max-content 2px max-content minmax(0, 1fr);
+  column-gap: 24px;
+  margin-top: 22px;
+}
+
+.tall .figs {
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+}
+
+.rule {
+  background: #1b1b19;
+  transform-origin: top;
+}
+
+.tall .rule {
+  height: 2px;
+  margin: 14px 0 12px;
+  transform-origin: left;
+}
+
+.fig-spread {
+  padding-left: 22px;
+  border-left: 1px solid #cdc8bd;
+}
+
+.tall .fig-spread {
+  margin-top: 16px;
+  padding: 12px 0 0;
+  border-left: 0;
+  border-top: 1px solid #cdc8bd;
+}
+
+.label {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.value-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-top: 2px;
+}
+
+.value {
+  font-size: 64px;
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+}
+
+.tall .value {
+  font-size: 48px;
+}
+
+.multiple {
+  font-size: 88px;
+  color: #b3261e;
+}
+
+.tall .multiple {
+  font-size: 64px;
+}
+
+.chip {
+  display: inline-block;
+  padding: 1px 8px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  white-space: nowrap;
+  border: 1px solid #1b1b19;
+  vertical-align: 0.2em;
+}
+
+.chip-published {
+  border: 3px double #1b1b19;
+  padding: 0 6px;
+}
+
+.chip-derived {
+  border-style: dashed;
+}
+
+.chip-estimated {
+  border: 2px dotted #1b1b19;
+  padding: 0 7px;
+}
+
+.arith {
+  margin-top: 4px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 15px;
+}
+
+.note {
+  margin-top: 2px;
+  font-size: 15px;
+  color: #4c4a44;
+}
+
+.wide .arith,
+.wide .note {
+  font-size: 14px;
+}
+
+.not-yours {
+  margin-top: 8px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.sentence {
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.caveat {
+  margin-top: 6px;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #4c4a44;
+}
+
+/* ---- The source lines and the foot ---- */
+
+.sources {
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid #cdc8bd;
+}
+
+.prov {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #4c4a44;
+  overflow-wrap: anywhere;
+}
+
+.tall .prov {
+  font-size: 12px;
+}
+
+.prov + .prov {
+  margin-top: 2px;
+}
+
+.foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 14px;
+  color: #4c4a44;
+}
+
+.tall .foot {
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+
+/* ---- The wordmark ---- */
+
+body.wordmark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 240px;
+  height: 80px;
+  background: transparent;
+}
+
+body.ink-light {
+  color: #fbfaf6;
+}

@@ -34,7 +34,8 @@ A refresh commits the rebuilt file as usual; the LFS filter in `.gitattributes` 
 | `python3 tools/build_drugs.py` | `tools/cache/` -> `data/drugs.json` |
 | `node build.js` | write `openbill.html`, `methodology.html`, `docs/DATA-QUALITY.md` |
 | `node tools/shots.mjs` | remake the README screenshots in `docs/img/` from `openbill.html` (after `node build.js`) |
-| `node tools/site.mjs --out <dir>` | build the website (drug, class and A–Z pages, preview images, sitemap) into `<dir>`; see [The website](#the-website) |
+| `node tools/site.mjs --out <dir>` | build the website (drug, class and A–Z pages, the press kit, preview images, sitemap) into `<dir>`; see [The website](#the-website) |
+| `node tools/record.mjs --out <dir>` | record the reveal clips (6-second GIFs of the card, 16:9 and 9:16) into `<dir>`, outside the repository |
 
 The other fetchers are `fetch_fda_ndc.py`, `fetch_partd.py` and `fetch_asp.py`, with the same
 flags. The builders never need the network once `tools/cache/` is filled; `tools/cache/` is
@@ -47,7 +48,8 @@ files with your change. The sync test fails otherwise.
 
 The deployed site is more than the app. `tools/site.mjs` writes one static page per product
 (`drug/<slug>/`), one per FDA pharmacologic class (`class/<slug>/`), an A–Z index
-(`drugs/<letter>/`), a preview image per product (`og/<slug>.png`) and `sitemap.xml`, next to
+(`drugs/<letter>/`), a preview image per product (`og/<slug>.png`), the press kit (`press/`,
+with its pictures and the reveal clips) and `sitemap.xml`, next to
 copies of `openbill.html`, `methodology.html` and `data/drugs.json`. The Pages workflow runs it
 on every deploy. Its output is never committed
 ([decision 41](docs/DECISIONS.md#41-static-drug-pages-built-on-deploy-and-not-committed)).
@@ -60,6 +62,11 @@ node tools/site.mjs --out ../openbill-site --limit 20 --no-og   # 20 drug pages 
 node tools/site.mjs --out ../openbill-site --only "ARIPIPRAZOLE 10 MG TABLET"
 node tools/site.mjs --out ../openbill-site                      # the whole site, as deployed
 ```
+
+The press kit's numbers, counts and paragraph come from the data on every build. Its pictures
+(the wordmark, three screenshots and the reveal clips) are rendered with the preview images, so
+`--no-og` skips them too; `node tools/record.mjs --out ../openbill-media` records just the clips
+([decision 51](docs/DECISIONS.md#51-launch-assets-a-press-kit-and-a-reveal-clip-built-on-every-deploy)).
 
 `--limit N` builds drug pages and preview images only for the first N products by name, plus
 the showcase; class and A–Z pages are always complete, so some of their links lead nowhere in a
@@ -136,7 +143,9 @@ tools/
   fetch_asp.py         Medicare Part B payment limits + NDC-HCPCS crosswalk, quarterly
   build_drugs.py       tools/cache/ -> data/drugs.json
   shots.mjs            README screenshots of openbill.html -> docs/img/ (Playwright)
-  site.mjs             the website: drug, class and A–Z pages, previews, sitemap -> --out
+  site.mjs             the website: drug, class and A–Z pages, press kit, previews, sitemap -> --out
+  record.mjs           the reveal clip, 6-second GIFs of the card (Playwright) -> --out
+  gif.mjs              the GIF encoder record.mjs uses (no dependency)
   cache/               raw downloads + manifest.json (sha256). Never committed.
 data/drugs.json        schema openbill.drugs/3: Part D and Part B tables, then one row per
                        NDC, one per line
@@ -145,8 +154,8 @@ src/core/              DOM-free ES modules, unit-tested:
                          pack, report, esc, sha256, config, slug, related
 src/app/               the page: index.html, styles.css, app.js (the only DOM code), fonts/
 src/build/             methodology.js and quality.js, used by build.js;
-                       drugpage.js, used by tools/site.mjs
-src/site/              the static pages' stylesheet and the preview card's
+                       drugpage.js, presspage.js and reveal.js, used by tools/site.mjs
+src/site/              the static pages' stylesheet, the preview card's and the reveal clip's
 build.js               bundler and generator
 openbill.html          generated page, committed
 methodology.html       generated, committed

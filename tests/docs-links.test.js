@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { REPO_URL, SITE_URL } from '../src/core/config.js';
 import { RULES } from '../src/core/rules.js';
 import { BROWSER_FLOOR } from '../src/build/methodology.js';
+import { PRESS_PATH, pressMediaFiles } from '../src/build/presspage.js';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const HTML_PAGES = ['openbill.html', 'methodology.html'];
@@ -31,6 +32,10 @@ const CHECK_EXTERNAL = process.env.OPENBILL_CHECK_EXTERNAL === '1';
 // with `node tools/site.mjs --out <dir> --no-og`, never against the live deploy, which lags a
 // change by one merge (decision 50). Without OPENBILL_SITE_DIR they are skipped and the test says so.
 const SITE_DIR = process.env.OPENBILL_SITE_DIR || '';
+// The press kit's pictures and clips are rendered only in a build made with images, and the links
+// job builds with --no-og; a link to one of them (the README's clip) is then checked against the
+// list of files the image step writes instead of the folder (decision 51).
+const RENDERED = new Set(pressMediaFiles().map((f) => `${PRESS_PATH}${f}`));
 
 /** The local file a SITE_URL link points at in a built site: '' or a trailing / means index.html. */
 export function sitePath(url) {
@@ -606,6 +611,9 @@ test(
     }
     const failures = [];
     const own = [...where.keys()].filter((u) => u.startsWith(SITE_URL));
+    let withImages = false;
+    try { withImages = SITE_DIR !== '' && statSync(join(SITE_DIR, 'og')).isDirectory(); } catch { withImages = false; }
+    let rendered = 0;
     for (const u of own) {
       if (!SITE_DIR) continue;
       // GitHub Pages serves paths case-sensitively, so compare each segment exactly.
@@ -618,10 +626,14 @@ test(
         cur = join(cur, seg);
       }
       if (found) { try { found = statSync(cur).isFile(); } catch { found = false; } }
+      if (!found && !withImages && RENDERED.has(sitePath(u))) {
+        rendered += 1;
+        continue;
+      }
       if (!found) failures.push(`${u} (not in the site built at ${SITE_DIR}: ${sitePath(u)}) in ${where.get(u).join(', ')}`);
     }
     t.diagnostic(SITE_DIR
-      ? `checked ${own.length} links into ${SITE_URL} against the local build in ${SITE_DIR}`
+      ? `checked ${own.length} links into ${SITE_URL} against the local build in ${SITE_DIR}${rendered ? ` (${rendered} to pictures that build has no images for, checked against the press kit's list instead)` : ''}`
       : `skipped ${own.length} links into ${SITE_URL}: set OPENBILL_SITE_DIR to a site built with tools/site.mjs to check them (decision 50)`);
     const urls = [...where.keys()].filter((u) => !u.startsWith(SITE_URL)).sort();
     let next = 0;

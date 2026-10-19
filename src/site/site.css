@@ -646,3 +646,91 @@ details.ndcs > summary {
     font-size: 1.875rem;
   }
 }
+
+/* ---- The press kit (press/index.html) ---- */
+
+.press-card {
+  margin-top: 12px;
+}
+
+.press-card .card-cta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.press-facts {
+  margin: 4px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.press-facts li {
+  margin: 4px 0;
+}
+
+.press-count {
+  font-family: var(--mono);
+  font-weight: 600;
+}
+
+.paste {
+  margin: 8px 0 0;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--rule-strong);
+}
+
+.paste p {
+  margin: 0;
+}
+
+.press-media {
+  margin: 12px 0 20px;
+}
+
+.press-media img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--rule);
+}
+
+.press-media figcaption {
+  margin-top: 6px;
+  font-size: 0.875rem;
+  color: var(--ink-2);
+}
+
+.press-get {
+  display: block;
+}
+
+.press-get a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+.press-tall img,
+.press-phone img {
+  max-width: min(100%, 360px);
+}
+
+.press-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+  gap: 0 20px;
+  align-items: start;
+}
+
+.press-wordmark img {
+  padding: 12px;
+  background: #fbfaf6;
+}
+
+.press-on-dark img {
+  background: #1b1b19;
+}
