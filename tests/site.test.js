@@ -5,13 +5,14 @@
 
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { buildSite, readData, slugCollisions, missingAnchors, parseArgs, prepareOut, ROOT, MARKER } from '../tools/site.mjs';
-import { SITE_CSP, SHOWCASE, METHODOLOGY_ANCHORS, SITEMAP_CLASS_MIN, TITLE_TARGET, TITLE_GENERIC_MAX, OG_IMAGE_TYPE, NDC_OPEN_LIMIT, sitemapXml, letterOf, renderOgHtml, renderDrugPage, ogImagePath, linkedAnchors } from '../src/build/drugpage.js';
+import { buildSite, readData, slugCollisions, missingAnchors, parseArgs, prepareOut, siteDates, gitLastmod, ROOT, MARKER } from '../tools/site.mjs';
+import { SITE_CSP, PAGES_REWRITTEN, SHOWCASE, METHODOLOGY_ANCHORS, SITEMAP_CLASS_MIN, TITLE_TARGET, TITLE_GENERIC_MAX, OG_IMAGE_TYPE, NDC_OPEN_LIMIT, sitemapXml, letterOf, renderOgHtml, renderDrugPage, ogImagePath, linkedAnchors } from '../src/build/drugpage.js';
 import { pageShingles, measure, summarize } from '../src/build/uniqueness.js';
 import { siteSlugs, slugify } from '../src/core/slug.js';
 import { linkRows } from '../src/core/pack.js';
@@ -69,10 +70,19 @@ const CASES = [
 ];
 
 const sample = new Map(); // name → cases
+// A product can leave NADAC in any week, and that must not turn these tests red: a named product
+// that has left is noted, and its own checks do not run (decision 55).
+const inData = new Set(products.map((p) => p.name));
 function add(name, why) {
+  if (!inData.has(name)) return;
   if (!sample.has(name)) sample.set(name, []);
   sample.get(name).push(why);
 }
+const stillHere = (t, name) => {
+  if (pages.has(name)) return true;
+  t.diagnostic(`${name} has left the data, so its check did not run`);
+  return false;
+};
 const uncovered = [];
 for (const [why, pred, n = 2] of CASES) {
   let k = 0;
@@ -105,6 +115,7 @@ const PINNED = {
 };
 for (const [n, why] of Object.entries(PINNED)) add(n, why);
 const collisions = slugCollisions(products.map((p) => p.name));
+for (const [, list] of collisions) for (const n of list) add(n, 'shares a slug with another product (decision 46)');
 
 let tmp;
 let site;
@@ -640,31 +651,91 @@ test('the rest of the site: app pages, data, assets, sitemap', () => {
   assert.ok(!fs.existsSync(path.join(site.out, 'og')), '--no-og writes no images');
 });
 
+// SITE-08 (decision 55): a commit that only changes code must move neither date.
+test('"Data changed" and lastmod follow the data and PAGES_REWRITTEN, never a code commit', () => {
+  const asked = [];
+  const code = '2099-01-01';
+  const at = { 'data/drugs.json': '2026-11-04', 'CITATION.cff': '2026-01-01' };
+  const dates = siteDates((rel) => {
+    asked.push(rel);
+    return at[rel] ?? code;
+  });
+  assert.deepEqual(asked.sort(), ['CITATION.cff', 'data/drugs.json'], 'no code path is asked for its date');
+  assert.deepEqual(dates, { data: '2026-11-04', pages: '2026-11-04', press: '2026-11-04' });
+  // A person's rewrite of the pages moves lastmod, and not "Data changed".
+  const older = siteDates((rel) => (rel === 'data/drugs.json' ? '2001-01-01' : '2001-01-02'));
+  assert.deepEqual(older, { data: '2001-01-01', pages: PAGES_REWRITTEN, press: PAGES_REWRITTEN });
+  // New DOIs move the press page alone.
+  assert.equal(siteDates((rel) => (rel === 'CITATION.cff' ? '2098-01-01' : '2001-01-01')).press, '2098-01-01');
+  assert.match(PAGES_REWRITTEN, /^\d{4}-\d{2}-\d{2}$/);
+  // This build: the footer and stale notes carry the data date, the sitemap the pages date.
+  assert.equal(site.model.dataDate, site.dates.data);
+  for (const [, { rel, html }] of pages) assert.ok(html.includes(`Data changed ${site.dates.data}.`), rel);
+  const sitemap = fs.readFileSync(path.join(site.out, 'sitemap.xml'), 'utf8');
+  const lastmods = new Set([...sitemap.matchAll(/<loc>([^<]*)<\/loc><lastmod>([^<]*)<\/lastmod>/g)].filter(([, loc]) => !loc.endsWith('/press/')).map((m) => m[2]));
+  assert.deepEqual([...lastmods], [site.dates.pages]);
+});
+
+test('a code-only commit in a real history leaves the dates where they were', (t) => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'openbill-dates-'));
+  const git = (args, date) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd: repo, env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date }, stdio: 'pipe' });
+  try {
+    try {
+      git(['init', '-q'], '2030-01-01T00:00:00Z');
+    } catch (e) {
+      t.skip(`git is not available: ${e.message}`);
+      return;
+    }
+    const commit = (file, date) => {
+      fs.mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
+      fs.writeFileSync(path.join(repo, file), date);
+      git(['add', '-A'], date);
+      git(['commit', '-q', '-m', file], date);
+    };
+    commit('data/drugs.json', '2030-01-01T12:00:00Z');
+    commit('CITATION.cff', '2030-01-01T12:00:00Z');
+    const lastmod = (rel) => gitLastmod(rel, repo).date;
+    const before = siteDates(lastmod);
+    assert.equal(before.data, '2030-01-01');
+    commit('src/site/site.css', '2030-06-01T12:00:00Z');
+    commit('src/build/drugpage.js', '2030-06-02T12:00:00Z');
+    commit('openbill.html', '2030-06-03T12:00:00Z');
+    assert.deepEqual(siteDates(lastmod), before, 'code commits did not move a date');
+    commit('data/drugs.json', '2030-07-01T12:00:00Z');
+    assert.deepEqual(siteDates(lastmod), { data: '2030-07-01', pages: '2030-07-01', press: '2030-07-01' }, 'a data commit does');
+  } finally {
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test('the build is deterministic: the same inputs give the same bytes', async () => {
-  const again = await buildSite({ out: path.join(tmp, 'again'), only: [SHOWCASE.drug, 'ELIQUIS 5 MG TABLET'], og: false, checkAnchors: false, log: () => {} });
-  for (const rel of [pages.get(SHOWCASE.drug).rel, pages.get('ELIQUIS 5 MG TABLET').rel, 'drugs/a/index.html']) {
+  const second = [...sample.keys()].find((n) => n !== SHOWCASE.drug);
+  const again = await buildSite({ out: path.join(tmp, 'again'), only: [SHOWCASE.drug, second], og: false, checkAnchors: false, log: () => {} });
+  for (const rel of [pages.get(SHOWCASE.drug).rel, pages.get(second).rel, 'drugs/a/index.html']) {
     assert.equal(fs.readFileSync(path.join(again.out, rel), 'utf8'), fs.readFileSync(path.join(site.out, rel), 'utf8'), rel);
   }
 });
 
-test('names that share a slug each get their own suffixed page (decision 46); an LFS pointer, a stale methodology.html, or an unsafe --out stop the build', async () => {
-  // Regression (SEO-1, SEC-1): the real data's two pairs used to stop the deploy.
-  assert.deepEqual(
-    collisions.map(([slug]) => slug),
-    ['miconazole-7-cream', 'tioconazole-1-6-5-ointment'],
-    'the real pairs, so a new one is noticed',
-  );
-  const a = site.model.slugs.get('MICONAZOLE 7 CREAM');
-  const b = site.model.slugs.get('MICONAZOLE-7 CREAM');
-  assert.notEqual(a, b);
-  for (const [name, slug] of [['MICONAZOLE 7 CREAM', a], ['MICONAZOLE-7 CREAM', b]]) {
-    assert.match(slug, /^miconazole-7-cream-[0-9a-f]{8}$/);
-    assert.equal(slug, siteSlugs([name, 'MICONAZOLE-7 CREAM', 'MICONAZOLE 7 CREAM']).get(name), 'the suffix depends on the name alone');
-    const html = fs.readFileSync(path.join(site.out, 'drug', slug, 'index.html'), 'utf8');
-    assert.ok(html.includes(`<h1 class="page-title">${esc(name)}</h1>`), `${slug} is ${name}'s page`);
-    assert.ok(html.includes(`<link rel="canonical" href="${SITE_URL}drug/${slug}/">`));
+test('names that share a slug each get their own suffixed page (decision 46); an LFS pointer, a stale methodology.html, or an unsafe --out stop the build', async (t) => {
+  // Regression (SEO-1, SEC-1): real pairs used to stop the deploy. A pair can leave the data and a
+  // new one can arrive in any week, so what is held is the rule, for every pair in this data.
+  t.diagnostic(`names sharing a slug in this data: ${collisions.map(([slug]) => slug).join(', ') || 'none'}`);
+  const pair = siteSlugs(['MICONAZOLE 7 CREAM', 'MICONAZOLE-7 CREAM']);
+  assert.notEqual(pair.get('MICONAZOLE 7 CREAM'), pair.get('MICONAZOLE-7 CREAM'));
+  for (const slug of pair.values()) assert.match(slug, /^miconazole-7-cream-[0-9a-f]{8}$/);
+  for (const [plain, names] of collisions) {
+    const slugs = names.map((name) => site.model.slugs.get(name));
+    assert.equal(new Set(slugs).size, names.length, `${plain}: each name has its own page`);
+    names.forEach((name, i) => {
+      const slug = slugs[i];
+      assert.ok(slug.startsWith(`${plain}-`) && /-[0-9a-f]{8}$/.test(slug), `${name}: ${slug}`);
+      assert.equal(slug, siteSlugs([...names].reverse()).get(name), 'the suffix depends on the name alone');
+      const html = fs.readFileSync(path.join(site.out, 'drug', slug, 'index.html'), 'utf8');
+      assert.ok(html.includes(`<h1 class="page-title">${esc(name)}</h1>`), `${slug} is ${name}'s page`);
+      assert.ok(html.includes(`<link rel="canonical" href="${SITE_URL}drug/${slug}/">`));
+    });
+    assert.ok(!fs.existsSync(path.join(site.out, 'drug', plain)), `${plain}: neither keeps the plain slug`);
   }
-  assert.ok(!fs.existsSync(path.join(site.out, 'drug', 'miconazole-7-cream')), 'neither keeps the plain slug');
   // Every product has a slug, all different; unshared names keep their plain slug.
   const all = siteSlugs(products.map((p) => p.name));
   assert.equal(new Set(all.values()).size, products.length);
@@ -707,18 +778,20 @@ test('names that share a slug each get their own suffixed page (decision 46); an
   assert.deepEqual(fs.readdirSync(ours), [MARKER]);
 });
 
-test('phase 2 review regressions: honest counter questions, Part D wording, quantities, dates, framing', () => {
+test('phase 2 review regressions: honest counter questions, Part D wording, quantities, dates, framing', (t) => {
   const page = (name) => pages.get(name).html;
   const ask = (name) => sectionText(page(name), 'h-ask');
   // H1: a generic is named only when FDA lists the same forms, routes and strengths and the names agree.
-  assert.doesNotMatch(ask('AMBIEN CR 12.5 MG TABLET'), /ZOLPIDEM TARTRATE 10 MG TABLET|such as/);
-  assert.match(ask('GRALISE ER 600 MG TABLET'), /same ingredient, strength and dosage form by FDA: GABAPENTIN ER 600 MG TABLET\./);
-  assert.doesNotMatch(ask('GRALISE ER 600 MG TABLET'), /GABAPENTIN 600 MG TABLET/);
-  assert.doesNotMatch(ask('BASAGLAR 100 UNIT/ML KWIKPEN'), /Is a generic version available/);
-  assert.match(ask('ABILIFY 10 MG TABLET'), /by FDA: ARIPIPRAZOLE 10 MG TABLET\./);
+  if (stillHere(t, 'AMBIEN CR 12.5 MG TABLET')) assert.doesNotMatch(ask('AMBIEN CR 12.5 MG TABLET'), /ZOLPIDEM TARTRATE 10 MG TABLET|such as/);
+  if (stillHere(t, 'GRALISE ER 600 MG TABLET')) {
+    assert.match(ask('GRALISE ER 600 MG TABLET'), /same ingredient, strength and dosage form by FDA: GABAPENTIN ER 600 MG TABLET\./);
+    assert.doesNotMatch(ask('GRALISE ER 600 MG TABLET'), /GABAPENTIN 600 MG TABLET/);
+  }
+  if (stillHere(t, 'BASAGLAR 100 UNIT/ML KWIKPEN')) assert.doesNotMatch(ask('BASAGLAR 100 UNIT/ML KWIKPEN'), /Is a generic version available/);
+  if (stillHere(t, 'ABILIFY 10 MG TABLET')) assert.match(ask('ABILIFY 10 MG TABLET'), /by FDA: ARIPIPRAZOLE 10 MG TABLET\./);
   // H2: never "no Part D row matched" (amoxicillin's Part D row exists; it was refused for mixed units).
   for (const [name, { rel, html }] of pages) assert.doesNotMatch(html, /No Medicare Part D spending row matched/, rel);
-  assert.ok(textOf(page('AMOXICILLIN 500 MG CAPSULE')).includes('OpenBill did not match this NDC to a usable Medicare Part D spending row.'));
+  if (stillHere(t, 'AMOXICILLIN 500 MG CAPSULE')) assert.ok(textOf(page('AMOXICILLIN 500 MG CAPSULE')).includes('OpenBill did not match this NDC to a usable Medicare Part D spending row.'));
   for (const [name, { rel, html }] of pages) {
     const text = textOf(html);
     // H9: a static page names its NADAC file's date, never "this week's".
@@ -737,6 +810,7 @@ test('phase 2 review regressions: honest counter questions, Part D wording, quan
   // H8 / SEO-4, decision 48: a kit starts at 1, and its title, card and preview say so; its page
   // names FDA's form and does not say what one EA of a kit is.
   const avonexName = 'AVONEX 30 MCG/0.5 ML SYRINGE KIT (4 PACK)';
+  if (stillHere(t, avonexName)) {
   const avonex = pages.get(avonexName);
   const avonexS = sum(site.model.byName.get(avonexName));
   const avonexPack = formatMoney(avonexS.pack.min.value);
@@ -750,16 +824,21 @@ test('phase 2 review regressions: honest counter questions, Part D wording, quan
   assert.doesNotMatch(textOf(avonex.html), /once-a-day/);
   const og = renderOgHtml(site.model, site.model.byName.get(avonexName), { css: '.og{}' });
   assert.ok(og.includes('<p class="qty">For 1 unit (EA)</p>'), 'the preview card shows the 1-unit pack');
+  }
   // Decision 48: JPEG made these flat-colour cards 14.4% larger, so they are PNG again.
   assert.equal(OG_IMAGE_TYPE, 'image/png');
   assert.equal(ogImagePath('site'), 'og/site.png');
   // SEO-7: the generic name the NADAC name lacks is in the title and under the heading.
-  const allDay = pages.get('ALL DAY RELIEF 220 MG CAPLET').html;
-  assert.match(allDay, /<title>ALL DAY RELIEF 220 MG CAPLET \(naproxen sodium\): /);
-  assert.ok(allDay.includes('<p class="page-generic">FDA nonproprietary name: naproxen sodium</p>'));
-  const pnv = pages.get('PNV-SELECT TABLET').html;
-  assert.match(pnv, /<title>PNV-SELECT TABLET: pharmacies pay /, 'a long multi-ingredient generic name is not in the title');
-  assert.match(pnv, /<p class="page-generic">FDA nonproprietary name: [^<]*cupric oxide<\/p>/, 'but it is under the heading');
+  if (stillHere(t, 'ALL DAY RELIEF 220 MG CAPLET')) {
+    const allDay = pages.get('ALL DAY RELIEF 220 MG CAPLET').html;
+    assert.match(allDay, /<title>ALL DAY RELIEF 220 MG CAPLET \(naproxen sodium\): /);
+    assert.ok(allDay.includes('<p class="page-generic">FDA nonproprietary name: naproxen sodium</p>'));
+  }
+  if (stillHere(t, 'PNV-SELECT TABLET')) {
+    const pnv = pages.get('PNV-SELECT TABLET').html;
+    assert.match(pnv, /<title>PNV-SELECT TABLET: pharmacies pay /, 'a long multi-ingredient generic name is not in the title');
+    assert.match(pnv, /<p class="page-generic">FDA nonproprietary name: [^<]*cupric oxide<\/p>/, 'but it is under the heading');
+  }
   for (const [name, { html }] of pages) {
     const t = unesc(/<title>([^<]*)<\/title>/.exec(html)[1]);
     const g = site.model.facts.get(name).genericName;
@@ -772,14 +851,18 @@ test('phase 2 review regressions: honest counter questions, Part D wording, quan
   for (const c of pd) assert.match(c.costOrigin, /across every strength and form sold under “Aripiprazole”, not specific to these NDCs; Medicare’s price is not your price/);
 });
 
-test('decision 49: a sublingual tablet starts at 30 and its page gives the reason; a shipping case starts at one inner unit', () => {
-  const bup = pages.get('BUPRENORPHINE 8 MG TABLET SL').html;
-  assert.match(unesc(/<title>([^<]*)<\/title>/.exec(bup)[1]), /: pharmacies pay \$[0-9.,]+ for 30 tablets/);
-  const why = sectionText(bup, 'h-faq');
-  assert.match(why, /as a tablet taken under the tongue \(dosage form “TABLET”, route “SUBLINGUAL”\)/);
-  assert.match(why, /OpenBill counts a tablet or film taken under the tongue or against the cheek as an oral solid/);
+test('decision 49: a sublingual tablet starts at 30 and its page gives the reason; a shipping case starts at one inner unit', (t) => {
+  if (stillHere(t, 'BUPRENORPHINE 8 MG TABLET SL')) {
+    const bup = pages.get('BUPRENORPHINE 8 MG TABLET SL').html;
+    assert.match(unesc(/<title>([^<]*)<\/title>/.exec(bup)[1]), /: pharmacies pay \$[0-9.,]+ for 30 tablets/);
+    const why = sectionText(bup, 'h-faq');
+    assert.match(why, /as a tablet taken under the tongue \(dosage form “TABLET”, route “SUBLINGUAL”\)/);
+    assert.match(why, /OpenBill counts a tablet or film taken under the tongue or against the cheek as an oral solid/);
+  }
+  if (!stillHere(t, 'TACLONEX 0.005%-0.064% SUSPENSION')) return;
   const tac = pages.get('TACLONEX 0.005%-0.064% SUSPENSION').html;
-  assert.match(unesc(/<title>([^<]*)<\/title>/.exec(tac)[1]), /: pharmacies pay \$1,241\.81 for 60 g/);
+  const tacPack = formatMoney(sum(site.model.byName.get('TACLONEX 0.005%-0.064% SUSPENSION')).pack.min.value);
+  assert.ok(unesc(/<title>([^<]*)<\/title>/.exec(tac)[1]).includes(`: pharmacies pay ${tacPack} for 60 g`), 'the title quotes the pack, from the core');
   assert.match(sectionText(tac, 'h-faq'), /is a shipping case of 40 cartons, 2,400 g in all: a wholesale pack of identical units, so OpenBill counts one carton of it\. So the card starts at one carton: 60 GM\./);
 });
 

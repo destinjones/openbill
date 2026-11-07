@@ -13,9 +13,14 @@ Rules every fetcher follows through this module:
   * Every run verifies the cached bytes against the recorded sha256 and refuses to go on if
     they differ.
   * --offline never touches the network; a network failure (no connection, DNS, a timeout)
-    falls back to the cache. An HTTP error status, a refused URL or file name, or a local disk
-    error is a failure, never a silent fallback.
+    falls back to the cache and says NOT REFRESHED; with --require-online that fallback also
+    exits non-zero (EXIT_NOT_REFRESHED). An HTTP error status, a refused URL or file name, or a
+    local disk error is a failure, never a silent fallback.
   * --force downloads again even if the server says nothing changed.
+  * A new download is validated while it is still a .part file. A file that fails leaves the
+    old cached copy and the manifest exactly as they were.
+  * A response of an unexpected shape (a missing field, HTML where JSON was promised) is a
+    FetchError naming what was read, not a traceback.
   * Only https:// URLs to the hosts in ALLOWED_HOSTS are fetched, redirects included, and
     every download, page and zip member has a size cap.
 
@@ -25,6 +30,7 @@ Downloaded files are untrusted data: this module only stores and hashes them.
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import email.utils
 import hashlib
@@ -90,6 +96,18 @@ ENTRY_FIELDS = (
 )
 
 
+# Exit code of a fetcher run with --require-online that could only use its cached copy.
+EXIT_NOT_REFRESHED = 5
+# Source keys that fell back to the cache in this process because the network failed.
+FELL_BACK: set[str] = set()
+
+# What a resolver or a validator raises when a response or file is not the shape it expected.
+# (json.JSONDecodeError and UnicodeDecodeError are ValueErrors; network errors are OSErrors.)
+SHAPE_ERRORS = (KeyError, AttributeError, TypeError, IndexError, ValueError, csv.Error, zipfile.BadZipFile)
+
+_last_url: str | None = None
+
+
 class FetchError(Exception):
     """The source is not what we expect. Stop rather than guess."""
 
@@ -138,7 +156,9 @@ _OPENER = _opener()
 def http(url: str, method: str = "GET", headers: dict | None = None, timeout: int = 60):
     """Open url. The URL, every redirect and the final URL must pass check_url. An HTTP error
     status raises FetchError naming it; only a failure to reach the server is a network error."""
+    global _last_url
     req = urllib.request.Request(check_url(url), method=method, headers={"User-Agent": USER_AGENT, **(headers or {})})
+    _last_url = url
     try:
         r = _OPENER.open(req, timeout=timeout)
     except urllib.error.HTTPError as e:
@@ -309,7 +329,9 @@ def http_date_to_iso(value: str | None) -> str | None:
         return None
 
 
-def _download(url: str, dest: Path, limit: int = DEFAULT_DOWNLOAD_LIMIT) -> tuple[str, int, dict]:
+def _download(url: str, dest: Path, limit: int = DEFAULT_DOWNLOAD_LIMIT, validate=None) -> tuple[str, int, dict]:
+    """Download url to dest, through dest.part. validate(part path), if given, runs on the complete
+    download before it replaces anything, so a file that fails it leaves dest as it was."""
     part = dest.with_name(dest.name + ".part")
     h = hashlib.sha256()
     size = 0
@@ -334,6 +356,8 @@ def _download(url: str, dest: Path, limit: int = DEFAULT_DOWNLOAD_LIMIT) -> tupl
             raise FetchError("server returned an empty file")
         if dest.suffix.lower() == ".zip":
             check_zip(part)
+        if validate is not None:
+            validate(part)
     except BaseException:
         part.unlink(missing_ok=True)
         raise
@@ -348,11 +372,14 @@ def _unchanged(old: dict, now_headers: dict) -> bool:
     return now_headers.get("etag") == old.get("etag") and now_headers.get("last_modified") == old.get("last_modified")
 
 
-def ensure(key: str, meta: dict, force: bool = False) -> tuple[dict, str]:
+def ensure(key: str, meta: dict, force: bool = False, validate=None) -> tuple[dict, str]:
     """Bring source `key` up to date with meta (must hold download_url and file).
 
     Returns (manifest entry, what happened). Saves the entry. Raises on network errors so the
     caller can fall back to the cache, and FetchError on a refused URL or file name.
+
+    validate(path, meta), if given, checks a new download before it is kept: if it raises, the
+    manifest and the last good cached file are untouched (nothing is saved or superseded).
     """
     for need in ("download_url", "file", "landing_url"):
         if not meta.get(need):
@@ -374,7 +401,18 @@ def ensure(key: str, meta: dict, force: bool = False) -> tuple[dict, str]:
             return entry, "unchanged on server; cached copy verified, not re-downloaded"
 
     print(f"Downloading {meta['download_url']}", flush=True)
-    digest, size, headers = _download(meta["download_url"], CACHE / meta["file"], DOWNLOAD_LIMITS.get(key, DEFAULT_DOWNLOAD_LIMIT))
+
+    def check_new_file(part: Path) -> None:
+        if validate is None:
+            return
+        try:
+            validate(part, meta)
+        except FetchError as e:
+            raise FetchError(f"{e}. The new file was not kept; the cached copy and the manifest are as they were.") from None
+        except SHAPE_ERRORS as e:
+            raise FetchError(f"{meta['file']} is not readable as expected ({type(e).__name__}: {e}). The new file was not kept; the cached copy and the manifest are as they were.") from None
+
+    digest, size, headers = _download(meta["download_url"], CACHE / meta["file"], DOWNLOAD_LIMITS.get(key, DEFAULT_DOWNLOAD_LIMIT), check_new_file)
     if old and digest == old.get("sha256"):
         happened = "re-downloaded; bytes identical to the cached copy"
         retrieved_at = old["retrieved_at"]
@@ -421,22 +459,45 @@ def update_entry(key: str, **fields) -> dict:
 
 def arg_parser(description: str) -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=description)
-    ap.add_argument("--offline", action="store_true", help="use the cache only; never touch the network")
     ap.add_argument("--force", action="store_true", help="re-download even if the server says unchanged")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--offline", action="store_true", help="use the cache only; never touch the network")
+    mode.add_argument("--require-online", action="store_true",
+                      help=f"exit {EXIT_NOT_REFRESHED} instead of 0 if the network failed and only the cached copy could be used")
     return ap
 
 
-def run_source(key: str, label: str, resolve, offline: bool, force: bool) -> tuple[dict | None, str, int]:
+def finish(code: int, args: argparse.Namespace) -> int:
+    """A fetcher's exit code: `code`, or EXIT_NOT_REFRESHED when it succeeded on a fallback to the
+    cache and --require-online was given. A fallback always says NOT REFRESHED."""
+    if code == 0 and FELL_BACK:
+        print(f"NOT REFRESHED: {', '.join(sorted(FELL_BACK))}: the network failed, so this run only verified the cached copy.", file=sys.stderr)
+        if args.require_online:
+            return EXIT_NOT_REFRESHED
+    return code
+
+
+def _resolved(resolve):
+    """resolve(), with a response of an unexpected shape turned into a FetchError."""
+    try:
+        return resolve()
+    except SHAPE_ERRORS as e:
+        raise FetchError(f"the source's response is not the shape expected ({type(e).__name__}: {e}); last URL read: {_last_url or 'none'}") from None
+
+
+def run_source(key: str, label: str, resolve, offline: bool, force: bool, validate=None) -> tuple[dict | None, str, int]:
     """Common fetch flow: resolve metadata online, ensure the file, or fall back to the cache.
 
-    resolve() -> meta dict (network). Returns (entry, happened, exit code). Exit codes:
-    0 ok, 2 nothing cached and no network, 3 hash mismatch, 4 source not as expected (an HTTP
-    error status, a refused URL, file name or size, or a local file error).
+    resolve() -> meta dict (network). validate(path, meta) checks a new download before it is
+    kept (see ensure). Returns (entry, happened, exit code). Exit codes: 0 ok, 2 nothing cached
+    and no network, 3 hash mismatch, 4 source not as expected (an HTTP error status, a refused
+    URL, file name or size, a response or new file of the wrong shape, or a local file error).
+    A fallback to the cache is exit 0 here and is recorded in FELL_BACK; see finish().
     """
     entry, happened = None, None
     if not offline:
         try:
-            entry, happened = ensure(key, resolve(), force)
+            entry, happened = ensure(key, _resolved(resolve), force, validate)
         except HashMismatch as e:
             print(f"{label}: HASH CHECK FAILED: {e}. Refusing to proceed; re-run with --force to fetch it again.", file=sys.stderr)
             return None, "", 3
@@ -444,7 +505,8 @@ def run_source(key: str, label: str, resolve, offline: bool, force: bool) -> tup
             print(f"{label}: FAILED: {e}", file=sys.stderr)
             return None, "", 4
         except NETWORK_ERRORS as e:
-            print(f"{label}: network unavailable ({e}); falling back to the cache.", file=sys.stderr)
+            print(f"{label}: network unavailable ({e}); falling back to the cache. NOT REFRESHED.", file=sys.stderr)
+            FELL_BACK.add(key)
         except OSError as e:
             print(f"{label}: FAILED: local file error: {e}", file=sys.stderr)
             return None, "", 4
@@ -453,7 +515,7 @@ def run_source(key: str, label: str, resolve, offline: bool, force: bool) -> tup
         if entry is None:
             print(f"{label}: no cached copy and no network. Run once online first.", file=sys.stderr)
             return None, "", 2
-        happened = "offline; using cached copy"
+        happened = "network failed; using cached copy (NOT REFRESHED)" if key in FELL_BACK else "offline; using cached copy"
     try:
         verify(entry)
     except HashMismatch as e:

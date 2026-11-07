@@ -1,4 +1,5 @@
-# Deploys the website, https://destinjones.github.io/openbill/, on every push to main.
+# Deploys the website, https://destinjones.github.io/openbill/, after CI has passed on main, browser
+# checks included (decision 55), or by hand from main.
 # The site is built here and never committed (docs/ARCHITECTURE.md, "Drug pages"):
 # openbill.html (also served as index.html), methodology.html, the real data/drugs.json from Git
 # LFS (never its pointer), and tools/site.mjs's static pages: one per drug, one per FDA
@@ -8,7 +9,9 @@
 name: Website
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -23,7 +26,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Only a passed CI run of a push to this repository's main deploys. A pull request from a fork's
+  # branch that happens to be called main also triggers this, so the event and the repository are
+  # checked. And only the commit main is at now: a re-run, or runs finishing out of order, must not
+  # put older code back on the site.
+  gate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      deploy: ${{ steps.newest.outputs.deploy }}
+      sha: ${{ steps.newest.outputs.sha }}
+    steps:
+      - id: newest
+        env:
+          TESTED: ${{ github.event.workflow_run.head_sha }}
+          DISPATCHED: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          sha="${TESTED:-$DISPATCHED}"
+          main=$(git ls-remote "https://github.com/${REPOSITORY}" refs/heads/main | cut -f1)
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          if [ -n "${TESTED}" ] && [ "${main}" != "${TESTED}" ]; then
+            echo "CI passed on ${TESTED}, but main is now at ${main}; that commit's run deploys." >&2
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: gate
+    if: needs.gate.outputs.deploy == 'true'
     runs-on: ubuntu-latest
     # configure-pages reads the Pages settings; nothing in this job can write to them.
     permissions:
@@ -32,8 +69,10 @@ jobs:
     # About 3× a full local build (pages, every preview image, the tests); see the build step.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The commit CI tested, not whatever main is by the time this runs.
+          ref: ${{ needs.gate.outputs.sha }}
           persist-credentials: false
           # Full history: the sitemap's lastmod is the date of the last commit touching each file.
           fetch-depth: 0
@@ -42,7 +81,7 @@ jobs:
       - name: List the LFS objects this commit needs
         run: git lfs ls-files --long | cut -d ' ' -f1 | sort > .lfs-assets-id
 
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .git/lfs
           key: lfs-${{ hashFiles('.lfs-assets-id') }}
@@ -50,12 +89,14 @@ jobs:
       - name: Fetch LFS objects
         run: git lfs pull
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      - name: Install the packages
+        timeout-minutes: 7
+        run: timeout 180 npm ci || { echo "npm ci failed or passed 3 minutes; trying once more" >&2; timeout 180 npm ci; }
 
       # The preview images are rendered with Playwright's Chromium.
       - name: Install Chromium for Playwright
@@ -98,15 +139,25 @@ jobs:
             console.log('press kit: index.html and ' + pressMediaFiles().length + ' pictures');
           "
           du -sh _site
+          # GitHub Pages' published site limit is 1 GB. Stop here with room to spare, rather than
+          # on a failed deploy (decision 55).
+          bytes=$(du -sb _site | cut -f1)
+          limit=900000000
+          echo "site size ${bytes} bytes; this step fails above ${limit}"
+          if [ "${bytes}" -gt "${limit}" ]; then
+            echo "_site is ${bytes} bytes, over the ${limit} guard; refusing to publish. See docs/DECISIONS.md, decision 55." >&2
+            exit 1
+          fi
 
-      - uses: actions/configure-pages@v6
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: _site
 
   deploy:
     needs: build
+    if: needs.build.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -117,4 +168,4 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - id: deploy
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

@@ -11,13 +11,19 @@ dataset, which has no per-dosage-unit figure), its newest temporal period, and t
 single CSV distribution. The official data dictionary and methodology PDFs are found through
 the dataset's resources API and recorded in the manifest (key "partd").
 
+Fails if the catalog has a look-alike dataset (a title with both "Part D" and "spending") for a
+newer period than the one chosen: CMS may have retitled the next year, and keeping the old year
+quietly is the failure this catches. Warns when the chosen year is older than the page's own
+stale threshold. A new file is validated before it replaces the cached one.
+
 Usage:
-  python tools/fetch_partd.py [--offline] [--force]
+  python tools/fetch_partd.py [--offline | --require-online] [--force]
 """
 
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
 import re
 import sys
@@ -34,6 +40,8 @@ TITLE_PREFIX = "Medicare Part D Spending by Drug"
 YEAR_COL = re.compile(r"^Avg_Spnd_Per_Dsg_Unt_Wghtd_(\d{4})$")
 ID_COLUMNS = ["Brnd_Name", "Gnrc_Name", "Tot_Mftr", "Mftr_Name"]
 YEAR_COLUMNS = ["Tot_Spndng_{y}", "Tot_Dsg_Unts_{y}", "Tot_Clms_{y}", "Avg_Spnd_Per_Dsg_Unt_Wghtd_{y}", "Outlier_Flag_{y}"]
+# SOURCE_INFO.partd.stale_after_days in src/core/sources.js: past this, a newer year should exist.
+STALE_AFTER_DAYS = 913
 
 
 def _pick_resource(resources: list[dict], word: str) -> str | None:
@@ -41,12 +49,26 @@ def _pick_resource(resources: list[dict], word: str) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
+def _period_end(ds: dict) -> str:
+    """The newest temporal end date anywhere on a catalog dataset ('' if none)."""
+    ends = [t.get("endDate", "") for t in (ds.get("temporal") or [])]
+    for d in ds.get("distribution", []):
+        ends += [t.get("endDate", "") for t in (d.get("temporal") or [])]
+    return max(ends, default="")
+
+
 def resolve() -> dict:
     catalog = cachelib.get_json(CATALOG, timeout=300)
     found = []
+    lookalikes = []
     for ds in catalog.get("dataset", []):
         title = ds.get("title", "")
-        if not title.startswith(TITLE_PREFIX) or "quarterly" in title.lower():
+        low = title.lower()
+        if "quarterly" in low:
+            continue
+        if not title.startswith(TITLE_PREFIX):
+            if "part d" in low and "spending" in low:
+                lookalikes.append(ds)
             continue
         for d in ds.get("distribution", []):
             if d.get("mediaType") != "text/csv" and str(d.get("format", "")).upper() != "CSV":
@@ -62,6 +84,13 @@ def resolve() -> dict:
     end, start, ds, dist = pick[0]
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", start or "") or not re.match(r"^\d{4}-\d{2}-\d{2}$", end or ""):
         raise FetchError(f"unparseable temporal period {start!r}..{end!r}")
+    newer = [ds.get("title") for ds in lookalikes if _period_end(ds) > end]
+    if newer:
+        raise FetchError(f"the newest '{TITLE_PREFIX}' period ends {end}, but the catalog has a newer dataset with a different title: {newer}. "
+                         "CMS may have retitled it; check it and update TITLE_PREFIX if so")
+    age = (cachelib.utc_now().date() - dt.date.fromisoformat(end)).days
+    if age > STALE_AFTER_DAYS:
+        print(f"WARNING: the newest '{TITLE_PREFIX}' period ended {end}, {age} days ago; a newer data year should exist.", file=sys.stderr)
 
     landing = (ds.get("landingPage") or {}).get("accessURL")
     resources = []
@@ -115,7 +144,8 @@ def summarise(path: Path, year: int) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     args = cachelib.arg_parser(__doc__.split("\n\n")[0]).parse_args(argv)
-    entry, happened, code = cachelib.run_source(KEY, "Part D", resolve, args.offline, args.force)
+    validate = lambda part, meta: summarise(part, meta["data_year"])
+    entry, happened, code = cachelib.run_source(KEY, "Part D", resolve, args.offline, args.force, validate)
     if code:
         return code
     try:
@@ -137,7 +167,7 @@ Part D  {entry['title']}
   dictionary      {entry.get('data_dictionary_url')}
   methodology     {entry.get('methodology_url')}
 """.rstrip())
-    return 0
+    return cachelib.finish(0, args)
 
 
 if __name__ == "__main__":

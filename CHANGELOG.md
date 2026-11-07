@@ -10,6 +10,10 @@ Data refreshes are listed too, with the source dates they bring in.
 
 ### Added
 
+- Tools for a data refresh: `tools/check_refresh.py` compares new data with the previous data,
+  `tools/reverify_spotchecks.py` re-checks NADAC and Part D spot checks against the government
+  APIs, `tools/showcase.mjs` prints the showcase's figures, and `--require-online` fails a fetch
+  that stayed on its cache (decision 55).
 - A press kit on the website, `press/`, built on every deploy: the showcase's figures with
   their states and source lines, the build's counts (5,936 products, 30,031 NDCs) and source
   dates, a paragraph a journalist can paste, the DOIs from `CITATION.cff`, contact through
@@ -69,7 +73,12 @@ Data refreshes are listed too, with the source dates they bring in.
   (`&ndc=`), so a reload or a shared link keeps it.
 - "Sources and method" keeps each NDC and each repeated record behind its own summary: on
   ATORVASTATIN 10 MG at 360 px wide it goes from 53,961 to 9,325 px.
-
+- Preview images are about 40% of their old size, written with a palette and still PNG (decision 55).
+- "Data changed" and the sitemap's dates move with the data, not with code changes (decision 55).
+- The website deploys after CI has passed for that commit, browser checks included (decision 55).
+- A Part B quarter that has not started says so, rather than blaming the reader's clock (decision 55).
+- Part B limits come from the newest quarter that has started, not one posted early (decision 55).
+- "Wrong? Tell us" links stop at 5,000 characters, which GitHub's form accepts (decision 55).
 - Drug pages say more about their own product and repeat less (decision 52): a table of the
   product's other strengths, forms and brands with their NADAC and Medicare figures per unit;
   where its NADAC price sits in each FDA class (`classStanding()`); for more than 6 NDCs, a

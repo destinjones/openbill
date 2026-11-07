@@ -198,6 +198,8 @@ when forking.
 
 ## 12. Spot checks are pinned to source files; every refresh re-verifies at least ten
 
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): a floor per source as well as the total, and a tool that re-verifies NADAC and Part D through the government APIs.*
+
 **Context.** Unit tests show the code does what we meant. They can't show the number matches
 the government file.
 
@@ -211,6 +213,8 @@ file stops counting toward the ten instead of passing quietly.
 ## 13. External link checks are opt-in
 
 *Amended by [decision 50](#50-links-into-openbills-own-website-are-checked-against-this-commits-build): links into OpenBill's own website are checked against a local build, not the network.*
+
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): external links are checked by their own weekly workflow, and the required `links` job no longer goes to the network or uses `continue-on-error`.*
 
 **Context.** The docs link to the project's own GitHub pages (the CI badge, the issue forms,
 security advisories), which can't resolve before the first push. Some government sites also
@@ -608,6 +612,8 @@ size with its unit, and 89 have a quantity with no unit. Those 89 cannot be conv
 per NADAC unit, so they have no Part B spread.
 
 ## 29. Today, for ages on the page, is the UTC date
+
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): an age more than a day below zero is no longer put down to the clock; the note says the period has not started, or how far ahead of today it is.*
 
 **Context.** Decision 21 says the page counts ages "against the viewer's own today" and that an
 age can come out negative when "a viewer's clock or time zone is behind UTC". The page takes
@@ -1051,6 +1057,8 @@ domain, it should add a `robots.txt` then.
 
 ## 45. The showcase: aripiprazole 10 mg tablets, 30
 
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): a refresh prints the showcase's figures and re-checks these reasons (`tools/showcase.mjs`); no test pins the figures.*
+
 **Context.** The default card, the README, the screenshots and the site's preview image need one
 product. It should be a real, widely used drug with a gap that is large enough to matter, and
 it must not be an extreme case where the two figures may not measure the same thing
@@ -1102,6 +1110,8 @@ separately.
 
 ## 47. Corrections from the phase 2 review
 
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): `lastmod` no longer follows the templates' git history; it follows the data and a date a person moves.*
+
 *See [decision 52](#52-drug-pages-link-the-explanations-they-share-and-add-their-own-comparisons): drug pages no longer quote the five honesty lines; they link to them on methodology.html, which settles for drug pages the question left open below.*
 
 *Amended by [decision 48](#48-starting-quantity-by-dosage-form-preview-images-stay-png): kits and the other products priced per EA that are not oral tablets or capsules start at 1, so titles, descriptions and preview alt text quote the card's own 1-unit pack total instead of the unit price, and the starting-quantity question this entry left open is settled.*
@@ -1149,6 +1159,8 @@ which the page bodies and preview cards still use, and whether reader-facing pag
 the brief's house-rule sentences at all.
 
 ## 48. Starting quantity by dosage form; preview images stay PNG
+
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): the preview images stay PNG and are now written with a palette of up to 255 colours, about 40% of the size.*
 
 *Amended by [decision 49](#49-starting-quantity-case-packs-tablets-and-films-under-the-tongue-fda-listing-outliers): tablets and films taken under the tongue or against the cheek start at 30, a product whose NDCs are mostly oral tablets or capsules (and whose NADAC name says so) starts at 30 despite an outlier FDA listing, and a wholesale case or multi-pack priced per ML or GM starts at one inner unit.*
 
@@ -1303,6 +1315,8 @@ MG) GEL and TESTOSTERONE 50 MG/5 GRAM GEL now start at one 5 g tube of a carton 
 for `SL` above. None of the ten products in [HAND-CHECK.md](HAND-CHECK.md) changes.
 
 ## 50. Links into OpenBill's own website are checked against this commit's build
+
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): the required `links` job now checks only this repository's links and its own build; external links have their own weekly workflow.*
 
 *Amended by [decision 51](#51-launch-assets-a-press-kit-and-a-reveal-clip-built-on-every-deploy): a link to one of the press kit's pictures, which a `--no-og` build does not render, is checked against the list of files the image step writes.*
 
@@ -1697,5 +1711,123 @@ Chromium.
 
 **Consequences.** Names NADAC does not use, such as LOPID and RANEXA, now find nothing until FX-09,
 where before they found the wrong drug. A reader pressing Enter on "metformin" presses it twice. The
-page grows by about 30 KB. `docs/ARCHITECTURE.md`'s lines on `search.js` and the hash do not yet name
-`enterChoice` or `&ndc=`.
+page grows by about 30 KB.
+
+## 55. The refresh harness, page dates, smaller preview images and CI hardening
+
+**Context.** Recorded on 2026-11-06, after an audit of the repository. The audit refreshed the data
+to the NADAC of 2026-11-04 in a scratch copy and ran everything against it. `node --test` gave 3
+failures and 22 skips, all of them tests that had pinned one week's figures. It also found that a
+fetcher could keep an old file without saying so, that the Part B fetcher could adopt a quarter
+before it started, that nothing compared new data with old, that a code-only commit moved every
+page's date, that the preview images would approach GitHub's limit on a site, and that CI ran twice
+for each pull request commit and deployed before its browser checks had finished. The next stage
+rewrites the page templates, so this comes first.
+
+**Decision.**
+
+*Tests compute weekly figures.* A test that needs a price takes it from `src/core` on the same data
+and keeps its assertion about the shape of what is shown. A test of a named product says so and
+stops when that product has left the data, with the exception of the showcase, whose loss needs a
+person. The sentences in the press and quality tests are built from the core too. Decision 49's
+counts and the 151 products it names are stored in `tests/fixtures/decision49.rows.json`, so those
+tests keep running after a refresh instead of skipping. The default product still stops the build if
+it is gone; a "Try" suggestion falls back to another product (`TRY_FALLBACKS` in `build.js`), since
+one generic leaving NADAC is a normal week.
+
+*The showcase is printed, not pinned.* `tools/showcase.mjs` prints the showcase's figures and whether
+decision 45's reasons still hold, for the refresh pull request. The README's figures are only checked
+when it claims this data's NADAC week: until the refresh updates it, it describes the week before,
+which is true of that week.
+
+*The Python rules have fixtures and mutants.* `tests/pipeline.test.js` runs every fetcher and
+`build_drugs.py` on tiny files in `tests/fixtures/pipeline/`, with the network stubbed and the cache in
+a temporary folder. `tools/mutate_pipeline.mjs` breaks 40 of those rules one at a time and fails if the
+suite still passes. It takes about 40 seconds, so `node --test` does not run it; run it when you change
+a fetcher's rule. Its rule texts must match the code, so it also fails when a rule is rewritten.
+
+*Fetchers fail loudly and keep the last good file.* A new download is validated before it replaces the
+cached file; if it is malformed, the new file is dropped and the cache and manifest stay as they were.
+A publisher that renames a file, or stops publishing the data a fetcher expects, is an error rather
+than a quiet use of last year's. NADAC fails when its as-of date is more than 10 days old. Part D warns,
+and does not fail, past 913 days, because that source runs about two years behind by design. Its check
+for a renamed dataset compares the period too and is narrower than "any title with Spending or Drug",
+because "Medicare Part D Prescribers - by Provider and Drug" is a real dataset that is not this one.
+
+*`--require-online`.* A source that falls back to its cache exits 5, and `fetch_all.py` exits 1 and
+says NOT REFRESHED. Plain `fetch_all.py` still exits 0 with that line in its summary, because a person
+without network should still be able to build. A refresh job passes `--require-online`.
+
+*Part B: the newest quarter already started.* CMS posts a quarter's files before it starts, and the
+fetcher adopted them on sight, showing a limit not yet in effect (`fetch_asp.py`, `find_quarter`). It
+now takes the newest quarter that has started, and fails when no complete quarter covers today,
+allowing 10 days after the quarter ends. The freshness rule no longer blames the reader's clock for a
+quarter that has not started: an age below zero by more than `CLOCK_SKEW_DAYS` (1) says what it is.
+
+*Two gates on a refresh.* `build_drugs.py` exits non-zero when more than 0.5% of a week's rows are
+rejected. `tools/check_refresh.py` compares the new file with the previous one and fails below 97% of
+the previous rows, above 0.5% rejected, above 20 NDCs moving 5× or more either way, or a median ratio
+outside 0.9 to 1.1. Those limits rest on one three-week diff (2026-10-14 to 2026-11-04: 0.353× to 1.965×,
+none at 5×, median 1.000, 176 NDCs added and 105 removed), so they are starting points. A real market
+event passes with `--accept-movers`, which a person has to choose.
+
+*A floor per source, and a tool to re-verify.* Decision 12's total of ten let a refresh pass with no
+NADAC check at all, on the source that moves every week. At least 5 must now apply to the NADAC file,
+5 to Part D, 3 to the Part B limits and 2 to the crosswalk. A row entry pinned to a Part B or Part D file
+whose NDC has left this week's NADAC is skipped and does not count: the fact in that file did not
+change, the row is gone. `tools/reverify_spotchecks.py` reads each NADAC and Part D value from the
+publisher's API, a different route from the CSV the pipeline parsed, and rewrites an entry only if every
+value agrees. The APIs come from the same publisher, so this catches our parsing and joining, not the
+publisher's mistake. It reads Part D by pages rather than the API's filters: on 2026-11-06 a filter took most
+of a minute or answered 503 on every try, while all 14,536 rows came in three pages in under a second each.
+Part B has no API, so a person does those at the new quarter, and a person still
+does the slower [hand check](HAND-CHECK.md).
+
+*Timing tests use the median.* The search, parse and scan limits assert the median or the best of three
+runs and report the slowest as a diagnostic. One slow run on a shared machine says nothing about the code.
+
+*Page dates move with what the page says.* "Data changed" is the last commit touching `data/drugs.json`
+and nothing else. A data page's `lastmod` is the later of that and `PAGES_REWRITTEN`, a date in
+`src/build/drugpage.js` that a person moves when a change rewrites what the pages say across the
+site. The press kit also follows `CITATION.cff`. Git history of the templates is no longer read: a
+refactor, a test or a stylesheet fix tells a search engine nothing and tells a reader something false.
+A later change that rewrites the templates must move the constant in the same change.
+
+*Preview images keep PNG with a palette.* Each card is decoded, reduced with the median cut `tools/gif.mjs`
+already has and written as an 8-bit palette PNG by `tools/png.mjs`, with no dithering and no randomness,
+so the same screenshot gives the same bytes. There are at most 255 entries because the palette code
+keeps the GIF's transparent index free. Measured on 26 real cards: 1.9 MB to 0.8 MB (40.5%), about 30 KB
+each. Against one truecolour card: 75,636 to 30,365 bytes, 50.9 dB, and 0.059% of pixels more than 16 levels
+off in any channel, with no visible change. That is roughly 180 MB of images for 5,936 cards rather
+than 445 MB (scaled from those 26 cards, not a full build). Encoding adds about 60 ms per card in Node,
+about 6 minutes over a full build, which fits the build job's 30 minutes. zlib level 9 is 29,521 bytes in
+28.6 ms; level 7 is 30,638 bytes in 4.5 ms. Level 9 stays, since bytes are what the site is short of, and
+level 7 is the first thing to change if the build gets tight. `pages.yml` fails above 900 MB, before the
+upload. Decision 48's reason for PNG over JPEG still holds.
+
+*CI.* Each Action is pinned by full commit SHA with its version in a comment, and
+`.github/dependabot.yml` proposes updates monthly for Actions and npm. The required checks keep the
+names `test` and `links`. `links` now checks only what this commit can break: relative links, anchors and
+links into this commit's build of the site, with no `continue-on-error`, because that setting turned the
+workflow green while the required check still read failure. External links move to
+`.github/workflows/external-links.yml`, weekly and when the docs change. It is not a required check, and
+it has no `continue-on-error` either, because a red run there is the signal and blocks nothing. Pushes
+run CI on `main` only and pull request commits run as pull requests, so a commit runs once; a newer push
+to a pull request cancels the run before it, and a run on `main` is never cancelled. `npm ci` stops at 3
+minutes and retries once, since one install took 7 of the job's 20 minutes. The website deploys on
+`workflow_run` after CI succeeds for a push to `main`, and the build checks out that exact commit, so
+what deploys has passed the browser checks. It skips the deploy when a newer commit has reached `main`.
+`workflow_dispatch` still deploys by hand.
+
+*Report links stop at 5,000 characters.* A logged-out request to GitHub's new-issue form answered with a
+redirect at up to 6,000 characters of title and an error from 6,500. The longest real report link is 1,929.
+
+**Consequences.** A refresh has a written order: `fetch_all.py --require-online`, `build_drugs.py`,
+`check_refresh.py`, `reverify_spotchecks.py`, `node build.js`, `node --test` with the cache present,
+`showcase.mjs` into the pull request, and the hand check for a person. A real refresh no longer needs a
+test edit, so a failing test after one means something. Against the 2026-11-04 data the whole suite gives
+no failures. The site's pages keep their dates through code changes, so the templates can be rewritten
+without telling a search engine that 6,000 pages changed, until the constant moves. Deploys start about
+ten minutes later than they did, because they wait for CI. Three settings are the owner's to turn on,
+because a repository file cannot: Dependabot alerts and security updates, the allowed-actions policy, and
+branch protection, whose contexts stay `test` and `links`.

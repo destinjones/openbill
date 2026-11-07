@@ -9,13 +9,20 @@ CMS posts two zips per quarter on https://www.cms.gov/medicare/payment/part-b-dr
                   which NDCs bill under which HCPCS code, with package size, package quantity
                   and billable units.
 
-Both namings are matched; the newest quarter is chosen by parsing month and year from the link
-text, and both zips must be present for it. Members are read in memory (zipfile), never
-extracted; the Section 508 CSV versions are parsed (Windows-1252: they contain 0xA0 no-break
+Both namings are matched; the quarter is chosen by parsing month and year from the link text. It
+is the newest quarter with both zips that has already started: CMS posts a quarter's files about
+two weeks early, and those limits are not in effect yet, so the first refresh on or after the
+start date picks them up (this script prints what it saw). Members are read in memory (zipfile),
+never extracted; the Section 508 CSV versions are parsed (Windows-1252: they contain 0xA0 no-break
 spaces and are not valid UTF-8).
 
+Online, it fails rather than keep old limits quietly when (a) no complete quarter covers today,
+allowing QUARTER_GRACE_DAYS after the quarter ends, or (b) a zip link names a newer quarter and
+looks like one of these files, but matches neither pattern: CMS renamed these files once already.
+A new zip is validated before it replaces the cached one.
+
 Usage:
-  python tools/fetch_asp.py [--offline] [--force]
+  python tools/fetch_asp.py [--offline | --require-online] [--force]
 """
 
 from __future__ import annotations
@@ -42,6 +49,7 @@ PUBLISHER = "Centers for Medicare & Medicaid Services (CMS)"
 LICENSE = "https://www.usa.gov/government-copyright"
 ENCODING = "cp1252"
 QUARTER_MONTHS = {"january": 1, "april": 4, "july": 7, "october": 10}
+QUARTER_GRACE_DAYS = 10
 
 # Links are found by a linear scan (iter_zip_links), not one regular expression over the page:
 # the old pattern backtracked super-linearly on a page with many "<a" and no "</a>" (review PY-3).
@@ -52,6 +60,10 @@ AFTER_CHARS = 160
 PAGE_LIMIT = 8 << 20  # the real page is about 0.2 MB
 LIMITS_RE = re.compile(r"^(january|april|july|october)\s+(\d{4})\s+(?:medicare part b payment limit files?|asp pricing file)\b", re.I)
 XWALK_RE = re.compile(r"^(january|april|july|october)\s+(\d{4})\s+(?:asp\s+)?ndc-hcpcs crosswalks?\b", re.I)
+# A zip link that names a quarter and looks like a Part B limit or crosswalk file under another name.
+QUARTER_NAME_RE = re.compile(r"\b(january|april|july|october)\s+(\d{4})\b", re.I)
+LOOKS_LIKE_THESE_FILES_RE = re.compile(r"limit|pricing|crosswalk|hcpcs", re.I)
+OTHER_FILES_RE = re.compile(r"\bnoc\b|vaccine", re.I)
 POSTED_RE = re.compile(r"(\d{2})/(\d{2})/(\d{4})")
 NEXT_LINK_RE = re.compile(r"<a\b", re.I)  # the posted date sits between a link and the next one
 EFFECTIVE_RE = re.compile(r"effective\s+(\w+)\s+(\d{1,2}),\s+(\d{4})\s+through\s+(\w+)\s+(\d{1,2}),\s+(\d{4})", re.I)
@@ -90,22 +102,30 @@ def iter_zip_links(page: str):
         pos = c.end()
 
 
+def quarter_label(q: tuple[int, int]) -> str:
+    return f"{q[0]:04d}-{q[1]:02d}"
+
+
 def quarter_period(year: int, month: int) -> str:
     end_month = month + 2
     last = calendar.monthrange(year, end_month)[1]
     return f"{year:04d}-{month:02d}-01/{year:04d}-{end_month:02d}-{last:02d}"
 
 
-def find_quarter() -> dict:
-    """Newest quarter with both zips, from the ASP pricing files page."""
+def find_quarter(today: dt.date | None = None) -> dict:
+    """Newest quarter with both zips that has started by today, from the ASP pricing files page."""
+    today = today or cachelib.utc_now().date()
     page = cachelib.get_text(PAGE, limit=PAGE_LIMIT)
     found: dict[tuple[int, int], dict] = {}
+    unmatched: dict[tuple[int, int], list[str]] = {}
     for href, inner, after in iter_zip_links(page):
         text = _text(inner)
+        matched = False
         for kind, rx in (("limits", LIMITS_RE), ("crosswalk", XWALK_RE)):
             m = rx.match(text)
             if not m:
                 continue
+            matched = True
             q = (int(m.group(2)), QUARTER_MONTHS[m.group(1).lower()])
             posted = POSTED_RE.search(_text(NEXT_LINK_RE.split(after)[0]))
             found.setdefault(q, {})[kind] = {
@@ -113,10 +133,31 @@ def find_quarter() -> dict:
                 "link_text": text,
                 "posted": f"{posted.group(3)}-{posted.group(1)}-{posted.group(2)}" if posted else None,
             }
+        named = QUARTER_NAME_RE.search(text)
+        if not matched and named and LOOKS_LIKE_THESE_FILES_RE.search(text) and not OTHER_FILES_RE.search(text):
+            unmatched.setdefault((int(named.group(2)), QUARTER_MONTHS[named.group(1).lower()]), []).append(text)
     complete = [q for q, v in found.items() if "limits" in v and "crosswalk" in v]
     if not complete:
         raise FetchError(f"no quarter on {PAGE} has both a payment limit zip and an NDC-HCPCS crosswalk zip")
-    q = max(complete)
+    started = [q for q in complete if dt.date(q[0], q[1], 1) <= today]
+    if not started:
+        raise FetchError(f"every complete quarter on {PAGE} starts after {today}: {sorted(complete)}")
+    q = max(started)
+
+    renamed = {x: links for x, links in unmatched.items() if x > q and x not in complete}
+    if renamed:
+        raise FetchError(f"{PAGE} names a newer quarter than {quarter_label(q)} in links that match neither file pattern, so CMS may have renamed them: {sorted(sum(renamed.values(), []))}")
+    end = dt.date.fromisoformat(quarter_period(*q).split("/")[1])
+    late = (today - end).days
+    if late > QUARTER_GRACE_DAYS:
+        raise FetchError(f"the newest complete quarter on {PAGE} is {quarter_label(q)}, which ended {end}, {late} days before {today}. "
+                         "The next quarter's files are not posted, or are not named as this script expects")
+    if late > 0:
+        print(f"WARNING: Part B quarter {quarter_label(q)} ended {end}; no complete newer quarter is posted yet.", file=sys.stderr)
+    for x in sorted(found):
+        if x > q:
+            have = " and ".join(sorted(found[x]))
+            print(f"  Part B: {quarter_label(x)} {have} posted, not used: that quarter has not started or is not complete. The first refresh after both are out and it has started picks it up.")
     return {"quarter": q, **found[q]}
 
 
@@ -174,6 +215,17 @@ def read_member(path: Path, kind: str) -> tuple[str, list[str], list[list[str]],
     raise FetchError(f"{member}: no header row with {want}")
 
 
+def check_member(path: Path, kind: str, period: str) -> tuple[str, list[str], list[list[str]], str | None]:
+    """read_member, plus: the member has data rows, and any period it states is the link's quarter."""
+    member, header, data, preamble = read_member(path, kind)
+    if not data:
+        raise FetchError(f"{member}: a header but no rows")
+    eff = effective_period(preamble)
+    if eff and eff != period:
+        raise FetchError(f"file says effective {eff}, link text says quarter {period}")
+    return member, header, data, eff
+
+
 def effective_period(preamble: list[list[str]]) -> str | None:
     for r in preamble:
         m = EFFECTIVE_RE.search(" ".join(r))
@@ -201,19 +253,15 @@ def main(argv: list[str] | None = None) -> int:
 
     worst = 0
     for key, kind, label in (("asp_limits", "limits", "Part B payment limits"), ("asp_crosswalk", "crosswalk", "Part B NDC-HCPCS crosswalk")):
-        entry, happened, code = cachelib.run_source(key, label, resolver(kind), args.offline, args.force)
+        validate = lambda part, meta, kind=kind: check_member(part, kind, meta["period"])
+        entry, happened, code = cachelib.run_source(key, label, resolver(kind), args.offline, args.force, validate)
         if code:
             worst = worst or code
             continue
         try:
-            member, header, data, preamble = read_member(cachelib.cached_path(entry), kind)
+            member, header, data, eff = check_member(cachelib.cached_path(entry), kind, entry["period"])
         except (FetchError, zipfile.BadZipFile, UnicodeDecodeError) as e:
             print(f"{label}: FAILED: {e}", file=sys.stderr)
-            worst = worst or 4
-            continue
-        eff = effective_period(preamble)
-        if eff and eff != entry["period"]:
-            print(f"{label}: FAILED: file says effective {eff}, link text says quarter {entry['period']}", file=sys.stderr)
             worst = worst or 4
             continue
         as_of = entry.get("posted_date") or cachelib.http_date_to_iso(entry.get("last_modified"))
@@ -237,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
   period          {entry['period']}  (file header: {eff or 'not stated'})
   rows            {len(data):,}  ({extra})
 """.rstrip())
-    return worst
+    return cachelib.finish(worst, args)
 
 
 if __name__ == "__main__":

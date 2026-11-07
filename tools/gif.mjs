@@ -98,12 +98,25 @@ const MAX_COLORS = 255;
  * @returns {number[][]}
  */
 export function buildPalette(frames) {
-  const counts = new Uint32Array(1 << 24);
+  // Counted by runs in a Map: these are flat images with a few thousand colours, and tools/site.mjs
+  // does this once per preview card, where a table of 2^24 counters cost more than the rest.
+  const counts = new Map();
   for (const rgb of frames) {
-    for (let i = 0; i < rgb.length; i += 3) counts[(rgb[i] << 16) | (rgb[i + 1] << 8) | rgb[i + 2]] += 1;
+    let last = -1;
+    let run = 0;
+    for (let i = 0; i < rgb.length; i += 3) {
+      const k = (rgb[i] << 16) | (rgb[i + 1] << 8) | rgb[i + 2];
+      if (k === last) {
+        run += 1;
+        continue;
+      }
+      if (run) counts.set(last, (counts.get(last) || 0) + run);
+      last = k;
+      run = 1;
+    }
+    if (run) counts.set(last, (counts.get(last) || 0) + run);
   }
-  const colors = [];
-  for (let k = 0; k < counts.length; k++) if (counts[k]) colors.push({ k, r: k >> 16, g: (k >> 8) & 255, b: k & 255, n: counts[k] });
+  const colors = [...counts.keys()].sort((x, y) => x - y).map((k) => ({ k, r: k >> 16, g: (k >> 8) & 255, b: k & 255, n: counts.get(k) }));
   if (colors.length <= MAX_COLORS) return colors.sort((x, y) => y.n - x.n || x.k - y.k).map((c) => [c.r, c.g, c.b]);
 
   const boxOf = (list) => {
@@ -165,8 +178,8 @@ export function buildPalette(frames) {
 }
 
 /** Map every pixel of every frame to its nearest palette index. */
-function indexFrames(frames, palette) {
-  const lut = new Int16Array(1 << 24).fill(-1);
+export function indexFrames(frames, palette) {
+  const lut = new Map();
   const near = (r, g, b) => {
     let best = 0;
     let dist = Infinity;
@@ -182,10 +195,18 @@ function indexFrames(frames, palette) {
   };
   return frames.map((rgb) => {
     const out = new Uint8Array(rgb.length / 3);
+    let last = -1;
+    let v = 0;
     for (let i = 0, p = 0; i < rgb.length; i += 3, p++) {
       const k = (rgb[i] << 16) | (rgb[i + 1] << 8) | rgb[i + 2];
-      let v = lut[k];
-      if (v < 0) v = lut[k] = near(rgb[i], rgb[i + 1], rgb[i + 2]);
+      if (k !== last) {
+        last = k;
+        v = lut.get(k);
+        if (v === undefined) {
+          v = near(rgb[i], rgb[i + 1], rgb[i + 2]);
+          lut.set(k, v);
+        }
+      }
       out[p] = v;
     }
     return out;

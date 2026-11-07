@@ -30,8 +30,12 @@ A refresh commits the rebuilt file as usual; the LFS filter in `.gitattributes` 
 | Command | What it does |
 |---|---|
 | `python3 tools/fetch_all.py` | fetch every source into `tools/cache/` (skips unchanged files) |
-| `python3 tools/fetch_nadac.py` | fetch one source; `--offline` never touches the network, `--force` re-downloads |
+| `python3 tools/fetch_nadac.py` | fetch one source; `--offline` never touches the network, `--force` re-downloads, `--require-online` fails rather than fall back to the cache |
 | `python3 tools/build_drugs.py` | `tools/cache/` -> `data/drugs.json` |
+| `python3 tools/check_refresh.py` | compare a new `data/drugs.json` with the previous one; see [Refreshing the data](#refreshing-the-data) |
+| `python3 tools/reverify_spotchecks.py` | re-verify NADAC and Part D spot checks against the government APIs |
+| `node tools/showcase.mjs` | print the showcase's figures for the refresh pull request |
+| `node tools/mutate_pipeline.mjs` | break each Python rule in turn and fail if the tests still pass; run it after changing a fetcher |
 | `node build.js` | write `openbill.html`, `methodology.html`, `docs/DATA-QUALITY.md` |
 | `node tools/shots.mjs` | remake the README screenshots in `docs/img/` from `openbill.html` (after `node build.js`) |
 | `node tools/site.mjs --out <dir>` | build the website (drug, class and A–Z pages, the press kit, preview images, sitemap) into `<dir>`; see [The website](#the-website) |
@@ -43,6 +47,27 @@ never committed.
 
 If you change anything in `src/` or `data/`, run `node build.js` and commit the regenerated
 files with your change. The sync test fails otherwise.
+
+### Refreshing the data
+
+A refresh should need no test edit: the tests compute weekly figures from the core
+([decision 55](docs/DECISIONS.md#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening)).
+
+```bash
+python3 tools/fetch_all.py --require-online   # exit 1 if any source stayed on its cache
+python3 tools/build_drugs.py                  # exit non-zero above 0.5% rejected rows
+python3 tools/check_refresh.py --summary refresh.md   # new data against the previous data
+python3 tools/reverify_spotchecks.py          # NADAC and Part D, from the government APIs
+node build.js
+node --test                                   # with tools/cache/ here, so its tests run too
+node tools/showcase.mjs >> refresh.md         # for the pull request body
+```
+
+`check_refresh.py` stops a file that lost rows or moved too many prices at once. If a person has
+looked and the market really moved, `--accept-movers` passes the big-mover limit. At a new Part B
+quarter, re-verify those spot checks by hand: they have no API, and their floor fails until enough
+are pinned to the new files. Update the README's headline figures when `showcase.mjs` says to, and
+a person does [the hand check](docs/HAND-CHECK.md).
 
 ### The website
 
@@ -92,12 +117,14 @@ Linux). The projects in `playwright.config.js` run Chromium at 360px and desktop
 dark; Firefox at desktop, light (Playwright's Firefox has no phone emulation); and WebKit,
 Safari's engine, at 360px light and desktop dark. Run one engine with
 `npx playwright test --project=webkit-mobile-light` and so on; `--browser` is refused because
-the config defines projects. These are Playwright's current browser builds, so the oldest
-versions named above are not a tested result
+the config defines projects. These are the browser builds of the Playwright version in
+`package.json`, so the oldest versions named above are not a tested result
 ([decision 33](docs/DECISIONS.md#33-the-page-checks-the-inline-datas-sha256-browser-checks-run-in-chromium-firefox-and-webkit)). The docs
 link test checks relative links and anchors; to check external links too, run
 `OPENBILL_CHECK_EXTERNAL=1 node --test tests/docs-links.test.js`. CI runs all of this on
-every push and pull request.
+every pull request and every push to `main`, apart from the external links, which
+`.github/workflows/external-links.yml` checks weekly and when the docs change. The required checks
+are the jobs `test` and `links`.
 
 ## House rules
 
@@ -142,10 +169,15 @@ tools/
   fetch_partd.py       Medicare Part D Spending by Drug, annual
   fetch_asp.py         Medicare Part B payment limits + NDC-HCPCS crosswalk, quarterly
   build_drugs.py       tools/cache/ -> data/drugs.json
+  check_refresh.py     new data against the previous data: rows, rejects, big movers, median
+  reverify_spotchecks.py  NADAC and Part D spot checks against the government APIs
+  showcase.mjs         the showcase's figures, for the refresh pull request
+  mutate_pipeline.mjs  break each Python rule; fail if the tests still pass
   shots.mjs            README screenshots of openbill.html -> docs/img/ (Playwright)
   site.mjs             the website: drug, class and A–Z pages, press kit, previews, sitemap -> --out
   record.mjs           the reveal clip, 6-second GIFs of the card (Playwright) -> --out
   gif.mjs              the GIF encoder record.mjs uses (no dependency)
+  png.mjs              the palette PNG encoder for preview images (no dependency)
   cache/               raw downloads + manifest.json (sha256). Never committed.
 data/drugs.json        schema openbill.drugs/3: Part D and Part B tables, then one row per
                        NDC, one per line

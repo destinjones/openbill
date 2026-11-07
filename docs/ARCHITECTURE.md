@@ -27,9 +27,13 @@ build.js           src/ + data/ -> openbill.html, methodology.html, docs/DATA-QU
 
 | Command | What it does |
 |---|---|
-| `python tools/fetch_all.py` | fetch every source into `tools/cache/` (skips unchanged files) |
-| `python tools/fetch_nadac.py` (and `fetch_fda_ndc.py`, `fetch_partd.py`, `fetch_asp.py`) | fetch one source; `--offline` never touches the network, `--force` re-downloads |
-| `python tools/build_drugs.py` | cache -> `data/drugs.json` |
+| `python tools/fetch_all.py` | fetch every source into `tools/cache/` (skips unchanged files); `--require-online` exits 1 if any source stayed on its cache |
+| `python tools/fetch_nadac.py` (and `fetch_fda_ndc.py`, `fetch_partd.py`, `fetch_asp.py`) | fetch one source; `--offline` never touches the network, `--force` re-downloads, `--require-online` exits 5 rather than fall back to the cache |
+| `python tools/build_drugs.py` | cache -> `data/drugs.json`; exits non-zero when more than 0.5% of the week's rows are rejected |
+| `python tools/check_refresh.py` | new `data/drugs.json` against the previous one; exit 1 on lost rows, rejects, many big movers or a shifted median |
+| `python tools/reverify_spotchecks.py` | re-verify NADAC and Part D spot checks against the government APIs and rewrite them if every value agrees |
+| `node tools/showcase.mjs` | print the showcase's figures for this data, for the refresh pull request |
+| `node tools/mutate_pipeline.mjs` | break each Python rule in turn; exit 1 if the tests still pass (about 40 s, not part of `node --test`) |
 | `node build.js` | write `openbill.html`, `methodology.html`, `docs/DATA-QUALITY.md` |
 | `node build.js --check` | exit 1 if any generated file is out of date |
 | `node --test` | unit, data, spot-check, sync, quality-floor and docs-link tests |
@@ -88,8 +92,9 @@ Every number OpenBill shows is a **record**:
 
 Optional fields are left out rather than written as `null`. No other fields are allowed on a
 record. All dates are UTC calendar dates, and so is the page's "today": the UTC date of the
-viewer's clock, so a time zone never changes an age. An age that comes out negative (a clock set
-wrong) is shown as 0 days.
+viewer's clock, so a time zone never changes an age. An age that comes out negative is shown as
+0 days. Up to a day below zero is put down to the clock; beyond that the note says the quarter has
+not started, or how far the date is after today ([decision 55](DECISIONS.md#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening)).
 
 ### Price states (defined in `src/core/provenance.js`, strongest first)
 
@@ -256,11 +261,12 @@ ES modules. Conventions (the bundler in `build.js` relies on them):
 |---|---|
 | `provenance.js` | `PRICE_STATES`, `STATE_INFO`, `RECORD_FIELDS`, `KINDS`, `isPriceState`, `validateRecord(rec) → string[]`, `makeRecord(fields)`, `weakestState(states)`, `deriveRecord({ value, kind, per, rule, inputs, comparable, caveats })` |
 | `money.js` | `formatMoney(dollars)` → `$1,234.57`; `formatUnitPrice(dollars)` → source precision, ≥ 2 decimals (`$0.01451`, `$5.52114`); `multiplyMoney(unit, qty)`; `formatMultiple(ratio)` → `4.9×`, `11.5×`, `167×`, `0.92×`; `formatMultipleWithin(ratio, low, high)` (more digits only for a ratio strictly inside the bounds that would otherwise show as a bound or beyond); `formatPercent`, `formatCount` |
-| `ndc.js` | `isNdc11`, `normalizeNdc(input) → ndc11 \| null`, `ndcCandidates(input) → ndc11[]`, `formatNdc(ndc11)` → `00378-7185-05`, `looksLikeNdc(query)` |
+| `ndc.js` | `isNdc11`, `normalizeNdc(input) → ndc11 \| null`, `ndcCandidates(input) → ndc11[]`, `ndcProductCodes(input)`, `readNdc(query)` (a package, its possible readings and whether it is a guess, or a labeler and product code), `formatNdc(ndc11)` → `00378-7185-05`, `formatNdcCode(code)`, `looksLikeNdc(query)` |
 | `dates.js` | `isIsoDate`, `daysBetween(a, b)`, `isoDate(dateObj)` |
 | `sources.js` | `SOURCE_INFO` (label, cadence, `stale_after_days`, what it measures), `NADAC_EXPLANATION_CODES` |
 | `rules.js` | `RULES` (id, title, formula, description; feeds methodology.html), `HONESTY` (verbatim wording), `EXTREME_HIGH`, `EXTREME_LOW`, `EXTREME_HEADLINE`, `isExtremeSpread(rec)`, `formatSpreadMultiple(ratio)`, `inputDates(inputs)`, `labelerKey(name)`, `distinctLabelers(labelers)`, `NAME_OUTLIER_FACTOR`, `partDNameContext(rows)`, `nameOutlier(row, ctx)`, `DEFAULT_EA_QUANTITY` (30), `DEFAULT_EA_OTHER_QUANTITY` (1), `QUANTITY_CHIPS`, `eaForm(rows)`, `packageAmount(description)`, `WHOLESALE_MIN_UNITS` (10), `packageStart(description)`, `defaultQuantity(product) → { qty, unit, reason, chips, form }`, `unitTotal(record, qty)`, `partBPerNadacUnit(row)`, `partBCoinsurance(row)`, `referencePrice(row)`, `spread(nadacRec, refRec, opts)`, `describeSpread(ratio)`, `freshness(record, sourceInfo, todayIso)`, `summarizeProduct(rows, qty, { partDContext })` |
-| `search.js` | `normalizeQuery`, `groupProducts(rows)`, `buildIndex(products)`, `search(index, query, { limit })` |
+| `search.js` | `normalizeQuery`, `groupProducts(rows)`, `buildIndex(products, { aliases })`, `search(index, query, { limit })`, `enterChoice(results)` (what Enter may open, or null to stay on the list), `suggest(index, query, { limit })`, `editDistance` |
+| `hash.js` | `parseHash(hash, { isName })` → `{ kind: 'default' \| 'card' \| 'anchor' \| 'bad', ... }`, the one reader of the address after `#`; `hashFor(name, qty, paid, ndc)`, `HASH_KEYS`, `clipText`, `nameKey`, `caselessNames` |
 | `pack.js` | `packDrugs(doc) → compact`, `unpackDrugs(compact) → doc` — lossless: `unpackDrugs(packDrugs(doc))` deep-equals `doc`; `linkRows(doc) → rows` with `part_d`/`part_b` expanded from the tables |
 | `report.js` | `issueUrl({ template, title, fields })` → prefilled GitHub issue-form URL |
 | `esc.js` | `esc(value)` — HTML-escapes `& < > " '` and backtick; everything rendered goes through it |
@@ -364,7 +370,10 @@ ES modules. Conventions (the bundler in `build.js` relies on them):
 - Works from `file://`, offline, with zero network requests.
 - Phone-first: 44px minimum controls, 16px minimum input text, no horizontal scroll from
   360px up, light and dark via `prefers-color-scheme`.
-- State lives in the URL hash (`#drug=<name>&qty=<n>`), so a card is a shareable link.
+- State lives in the URL hash (`#drug=<name>&qty=<n>`, with `&paid=` and `&ndc=` when the reader
+  has them), so a card is a shareable link. `src/core/hash.js` reads it: names match in any case,
+  a bare `#NAME` opens a card, and a plain fragment such as `#main` or `#utm_source=reddit` leaves
+  the card alone ([decision 53](DECISIONS.md#53-the-address-the-live-regions-and-the-time-before-the-data-arrives)).
 - The state chip and the provenance line (source, file, effective date, retrieved date) are
   on the card for every number, always visible. The provenance panel (reason, explanation
   codes, NDCs, the formula) opens from the card.
@@ -386,9 +395,14 @@ GitHub prefills issue forms from the URL only for text fields, so every id below
 `tests/*.test.js`: core units; `data.test.js` (schema and provenance shape on every record,
 NDC join); `spotchecks.test.js` driven by `tests/spotchecks.json` (each entry names the
 source file and how it was independently verified; at least ten must apply to the current
-data); `build.test.js` (generated files in sync); `quality.test.js` (floors: at least 70% of
+data, and a floor per source: 5 NADAC, 5 Part D, 3 Part B limits, 2 crosswalk); `pipeline.test.js`
+(every fetcher and `build_drugs.py`, `check_refresh.py` and `reverify_spotchecks.py` on the tiny
+files in `tests/fixtures/pipeline/`, with the network stubbed); `workflows.test.js` (Actions pinned
+by SHA, required check names, the deploy gate, the CSP strings in `SECURITY.md`); `png.test.js` (the
+preview cards' encoder against an independent reader); `build.test.js` (generated files in sync); `quality.test.js` (floors: at least 70% of
 rows `filed`, no source without a URL); `docs-links.test.js` (every relative link and anchor
-resolves; external links when `OPENBILL_CHECK_EXTERNAL=1`); `site.test.js` and `press.test.js`
+resolves; links into the website when `OPENBILL_SITE_DIR` is set; external links when
+`OPENBILL_CHECK_EXTERNAL=1`); `site.test.js` and `press.test.js`
 (the static pages and the press kit against the core); `gif.test.js` (the clip's encoder against
 an independent decoder, `tests/gifdecode.js`). Browser checks live in
 `tests/browser/*.spec.js` (Playwright), not picked up by `node --test`.
@@ -443,12 +457,12 @@ input must be a positive amount up to $100,000, else the card says why.
 | `drug/<slug>/index.html` | one static page per product, numbers in the HTML source |
 | `class/<slug>/index.html` | one page per FDA pharmacologic class (EPC) listing its products |
 | `drugs/<letter>/index.html` | A–Z index of products |
-| `og/<slug>.png` | 1200×630 preview card per product, rendered with Playwright as a PNG (JPEG was tried and was 14.4% larger; [decision 48](DECISIONS.md#48-starting-quantity-by-dosage-form-preview-images-stay-png)) |
+| `og/<slug>.png` | 1200×630 preview card per product, rendered with Playwright as a PNG (JPEG was tried and was 14.4% larger; [decision 48](DECISIONS.md#48-starting-quantity-by-dosage-form-preview-images-stay-png)), then written with a palette of up to 255 colours by `tools/png.mjs` ([decision 55](DECISIONS.md#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening)) |
 | `og/site.png` | the site's preview card (the showcase product); `openbill.html` and `methodology.html` point at it |
 | `press/index.html` | the press kit: the showcase's figures, the build's counts and source dates, a paragraph to paste, the DOIs, contact, the honesty lines ([Press kit and reveal clip](#press-kit-and-reveal-clip)) |
 | `press/*.png`, `press/*.gif` | its pictures: the wordmark, the three card screenshots, the reveal clips and a still; skipped by `--no-og` |
 | `assets/site.css`, `assets/fonts/*.woff2` | shared by the static pages (same origin) |
-| `sitemap.xml` | every page; `lastmod` from git (data pages: last commit touching `data/drugs.json`) |
+| `sitemap.xml` | every page; `lastmod` from the data's last commit and `PAGES_REWRITTEN` ([decision 55](DECISIONS.md#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening)) |
 
 - `slugify(name)` in `src/core/slug.js`: lowercase ASCII, `&` → `and`, any other run of
   non-alphanumerics → `-`, trimmed. `siteSlugs(names)` gives product pages their slugs: a name
@@ -459,9 +473,9 @@ input must be a positive amount up to $100,000, else the card says why.
   same function. Class slugs use `uniqueSlugs()`, which fails on any collision
   ([decision 46](DECISIONS.md#46-product-names-that-share-a-slug-each-get-a-suffix-from-their-own-name)).
 - `404.html` (absolute links, `noindex`) is written too. Class pages with fewer than 3 products
-  are published but left out of `sitemap.xml`; a data page's `lastmod` is the newest commit
-  touching `data/drugs.json`, `src/build/drugpage.js`, `src/build/methodology.js`, `src/core/` or
-  `src/site/`. `tools/site.mjs` empties a non-empty `--out` only when it holds the
+  are published but left out of `sitemap.xml`; a data page's `lastmod` is the later of the last commit
+  touching `data/drugs.json` and `PAGES_REWRITTEN` in `src/build/drugpage.js`, which a person moves when
+  a change rewrites what the pages say across the site; "Data changed" is that commit alone. `tools/site.mjs` empties a non-empty `--out` only when it holds the
   `.openbill-site` marker it writes, and never one holding `.git`.
 - Static pages have **no JavaScript**: CSP `default-src 'none'; style-src 'self'; font-src 'self';
   img-src 'self' data:; base-uri 'none'; form-action 'none'`. They link to the app card
@@ -498,7 +512,7 @@ input must be a positive amount up to $100,000, else the card says why.
 ### Showcase
 
 The default card, README, screenshots and the site's preview card use
-**ARIPIPRAZOLE 10 MG TABLET at 30**: pharmacies pay $3.35 (30 × $0.11173, NADAC eff. 2026-09-23);
+**ARIPIPRAZOLE 10 MG TABLET at 30**. For the 2026-10-14 data, pharmacies pay $3.35 (30 × $0.11173, NADAC eff. 2026-09-23);
 Medicare Part D paid $46.50 (30 × $1.5499353611, 2024 average for generic aripiprazole); 13.9×,
 `estimated`. Chosen as a widely used generic with a large, non-extreme gap whose Part D row
 excludes ODT and injectable forms (checked in the raw Part D file).

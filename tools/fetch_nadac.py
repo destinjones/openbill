@@ -11,15 +11,20 @@ What this does:
   2. Downloads it only if it changed (new URL, or a different ETag / Last-Modified).
   3. Records sha256, size, ETag and retrieved date in tools/cache/manifest.json (key "nadac"),
      and verifies the cached file against that hash on every run.
-  4. Checks the header is the schema we parse, then prints the row count and the file's
-     effective (as-of) date.
+  4. Checks the header is the schema we parse, before a new file replaces the cached one, then
+     prints the row count and the file's effective (as-of) date.
+  5. Online, fails if the newest weekly file is more than MAX_AS_OF_AGE_DAYS old: CMS publishes
+     weekly, so an older file means a dataset this script did not find (a retitled one, say), not
+     that nothing new exists. Failing here beats quietly keeping last year's dataset.
 
-With no network it verifies and reports on the cached copy instead. Standard library only.
+With no network it verifies and reports on the cached copy instead, and says NOT REFRESHED.
+Standard library only.
 
 Usage:
   python tools/fetch_nadac.py            # fetch if changed, then report
   python tools/fetch_nadac.py --offline  # never touch the network
   python tools/fetch_nadac.py --force    # re-download even if unchanged
+  python tools/fetch_nadac.py --require-online  # exit 5 if only the cached copy could be used
 """
 
 from __future__ import annotations
@@ -39,7 +44,11 @@ KEY = "nadac"
 
 API = "https://data.medicaid.gov/api/1"
 LANDING = "https://data.medicaid.gov/dataset/{id}"
-TITLE_RE = re.compile(r"^NADAC \(National Average Drug Acquisition Cost\) (\d{4})$")
+# "NADAC" and a year at the end, however the rest is worded ("NADAC (National Average Drug
+# Acquisition Cost) 2026" today). The catalog's other NADAC datasets are not the weekly file.
+TITLE_RE = re.compile(r"\bNADAC\b.*\b(20\d{2})$")
+NOT_THE_WEEKLY_FILE_RE = re.compile(r"comparison|first time", re.I)
+MAX_AS_OF_AGE_DAYS = 10
 
 # The columns build_drugs.py parses. If CMS changes the file, stop rather than guess.
 EXPECTED_COLUMNS = [
@@ -68,12 +77,15 @@ def find_current_dataset() -> dict:
     results = found["results"]
     candidates = []
     for item in results.values() if isinstance(results, dict) else results:
-        m = TITLE_RE.match(item.get("title", "").strip())
-        if m:
+        title = item.get("title", "").strip()
+        m = TITLE_RE.search(title)
+        if m and not NOT_THE_WEEKLY_FILE_RE.search(title):
             candidates.append((int(m.group(1)), item["identifier"]))
     if not candidates:
-        raise FetchError("no 'NADAC (National Average Drug Acquisition Cost) <year>' dataset found")
+        raise FetchError("no NADAC dataset with a year in its title found")
     year, ident = max(candidates)
+    if sum(1 for y, _ in candidates if y == year) > 1:
+        raise FetchError(f"more than one NADAC dataset for {year}: {[i for y, i in candidates if y == year]}")
 
     ds = cachelib.get_json(f"{API}/metastore/schemas/dataset/items/{ident}?show-reference-ids=false")
     # DKAN wraps referenced objects as {"identifier": ..., "data": {...}}.
@@ -131,14 +143,20 @@ def summarise(path: Path) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     args = cachelib.arg_parser(__doc__.split("\n\n")[0]).parse_args(argv)
-    entry, happened, code = cachelib.run_source(KEY, "NADAC", find_current_dataset, args.offline, args.force)
+    s = None
+
+    def validate(part: Path, meta: dict) -> None:
+        nonlocal s
+        s = summarise(part)  # a large file: its summary is kept for the report below
+
+    entry, happened, code = cachelib.run_source(KEY, "NADAC", find_current_dataset, args.offline, args.force, validate)
     if code:
         return code
     path = cachelib.cached_path(entry)
 
     try:
-        s = summarise(path)
-    except FetchError as e:
+        s = s or summarise(path)
+    except (FetchError, ValueError, IndexError) as e:
         print(f"FAILED: {e}", file=sys.stderr)
         return 4
     if not args.offline and entry.get("as_of_date") != s["as_of_date"]:
@@ -158,7 +176,13 @@ NADAC  {entry.get('title') or entry.get('dataset_title')}
 """.rstrip())
     if entry.get("as_of_date") != s["as_of_date"]:
         print(f"WARNING: manifest as_of_date {entry.get('as_of_date')} differs from the file ({s['as_of_date']}); run online to record it.", file=sys.stderr)
-    return 0
+    if not args.offline and KEY not in cachelib.FELL_BACK:
+        age = (cachelib.utc_now().date() - dt.date.fromisoformat(s["as_of_date"])).days
+        if age > MAX_AS_OF_AGE_DAYS:
+            print(f"FAILED: the newest NADAC week found is {s['as_of_date']}, {age} days old, and CMS publishes weekly. "
+                  f"The dataset may have been retitled or moved: look at {API}/search?fulltext=NADAC", file=sys.stderr)
+            return 4
+    return cachelib.finish(0, args)
 
 
 if __name__ == "__main__":

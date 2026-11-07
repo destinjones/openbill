@@ -36,6 +36,16 @@ const products = groupProducts(linked);
 const byName = new Map(products.map((p) => [p.name, p]));
 const index = buildIndex(products);
 const NOT_YOURS = HONESTY.find((h) => h.id === 'not-your-price').parts.find((p) => p.strong).text;
+/** A date this many days after an ISO date. */
+const dayAfter = (iso, days) => new Date(Date.parse(`${iso}T00:00:00Z`) + days * 86400000).toISOString().slice(0, 10);
+/** A product can leave NADAC in any week: a test about one named product says so and skips. */
+const skipIfGone = (...names) => test.skip(!names.every((n) => byName.has(n)), `${names.join(', ')}: not in this data (decision 55)`);
+// For a test that needs some other drug: a query with several results, the first of them not the
+// default card, this week. Several, because Enter only moves to a list that has more than one.
+const OTHER_QUERY = ['eliquis 5', 'lisinopril 20', 'omeprazole 20', 'gabapentin 300'].find((q) => {
+  const hits = search(index, q);
+  return hits.length > 1 && hits[0].product.name !== DEFAULT;
+});
 
 function moneyRange(min, max) {
   const a = formatMoney(min.value);
@@ -449,8 +459,12 @@ test('search results say which name matched only when the product name does not 
   names.forEach((n, i) => {
     if (n.includes('INSULIN')) expect(vias[i], n).toBeNull();
   });
-  await page.locator('#q').fill('apixaban');
-  await expect(page.locator('#results button.result', { hasText: 'ELIQUIS' }).first().locator('.result-via')).toContainText('matched');
+  // A brand found by its generic name says so. Which one depends on the week (decision 55).
+  const brand = search(index, 'apixaban').find((r) => !r.product.name.includes('APIXABAN'));
+  if (brand) {
+    await page.locator('#q').fill('apixaban');
+    await expect(page.locator('#results button.result', { hasText: brand.product.name }).first().locator('.result-via')).toContainText('matched');
+  }
 });
 
 // This test used to pin Enter opening the first of several results, which is OB-13 and J25: typing
@@ -458,9 +472,9 @@ test('search results say which name matched only when the product name does not 
 test('Enter on several results stays on the list, and the next Enter chooses; no match shows a suggestion and a hint, and says so', async ({ page }) => {
   await open(page, PAGE);
   const input = page.locator('#q');
-  await input.fill('eliquis 5');
+  await input.fill(OTHER_QUERY);
   await expect(page.locator('#results button.result').first()).toBeVisible();
-  const found = search(index, 'eliquis 5');
+  const found = search(index, OTHER_QUERY);
   expect(found.length).toBeGreaterThan(1);
   await input.press('Enter');
   await expect(page.locator('#results button.result').first()).toBeFocused();
@@ -670,16 +684,80 @@ test('an NDC whose * route came from FDA’s product record, and that no FDA pac
 // are on the card, and it is labelled stale when it is.
 test('the FDA NDC Directory line and its age are on the card; stale when old', async ({ page }) => {
   const fda = doc.sources.fda_ndc;
-  await open(page, PAGE, { today: '2026-12-01' });
+  const today = dayAfter(fda.as_of_date, SOURCE_INFO.fda_ndc.stale_after_days + 1);
+  await open(page, PAGE, { today });
   const notes = page.locator('.notes');
   await expect(notes).toContainText(`FDA NDC Directory · ${fda.source_file} · as of ${fda.as_of_date} · retrieved ${fda.retrieved_date}`);
-  const f = freshness(fda, SOURCE_INFO.fda_ndc, '2026-12-01');
+  const f = freshness(fda, SOURCE_INFO.fda_ndc, today);
   expect(f.stale).toBe(true);
   await expect(notes.locator('.fresh-stale', { hasText: 'FDA NDC Directory' })).toContainText(f.message);
   await expect(notes.locator('.fresh-stale', { hasText: 'FDA NDC Directory' }).locator('.chip-stale')).toHaveText('stale');
 });
 
+// INFRA-10: the chip beside the number itself, which no other test held, in each form of the figure.
+test('a stale figure carries a visible stale chip beside the number: pack total, per-unit prices and Medicare', async ({ page }) => {
+  const staleBeside = (figure) => page.locator('.fig-value', { has: page.locator(`[data-figure="${figure}"]`) }).locator('.chip-stale');
+  // Fresh: no chip beside any of them.
+  await open(page, PAGE, { today: doc.sources.nadac.as_of_date });
+  await expect(page.locator('[data-figure="pharmacy"]')).toBeVisible();
+  await expect(staleBeside('pharmacy')).toHaveCount(0);
+  await expect(staleBeside('medicare')).toHaveCount(0);
+  // NADAC past its limit, 15 days after its as-of date.
+  const nadacStale = dayAfter(doc.sources.nadac.as_of_date, 15);
+  expect(freshness(doc.sources.nadac, SOURCE_INFO.nadac, nadacStale).stale).toBe(true);
+  await page.clock.setFixedTime(new Date(`${nadacStale}T12:00:00Z`));
+  await page.goto(PAGE);
+  await expect(staleBeside('pharmacy')).toBeVisible();
+  await expect(staleBeside('pharmacy')).toHaveText('stale');
+  await expect(staleBeside('medicare')).toHaveCount(0);
+  // The per-unit form, on a product with no single pack total.
+  await page.goto(PAGE + hashFor(mixedUnits));
+  await expect(page.locator('[data-figure="pharmacy-unit"]')).toBeVisible();
+  await expect(staleBeside('pharmacy-unit')).toBeVisible();
+  await expect(staleBeside('pharmacy-unit')).toHaveText('stale');
+  // Medicare past its limit: a day after the Part D data year's limit.
+  const partd = doc.sources.partd;
+  const reference = summary(byName.get(DEFAULT)).reference.range.min;
+  const medicareStale = dayAfter(reference.period.split('/')[1], SOURCE_INFO.partd.stale_after_days + 1);
+  expect(freshness(reference, SOURCE_INFO.partd, medicareStale).stale, partd.source_file).toBe(true);
+  await page.clock.setFixedTime(new Date(`${medicareStale}T12:00:00Z`));
+  await page.goto(PAGE);
+  await expect(staleBeside('medicare')).toBeVisible();
+  await expect(staleBeside('medicare')).toHaveText('stale');
+});
+
+// INFRA-10: esc() on the product name everywhere it is drawn. The name comes from the data file,
+// and a built page would still have to run what a hostile one holds were esc() ever dropped.
+test('a hostile product name creates no element in the title, search results, panel or report link', async ({ page }, info) => {
+  const hostile = 'ZZHOSTILE <img src=x onerror="window.__xss=1"><script>window.__xss=2</script> 5 MG TABLET';
+  const target = byName.get(DEFAULT).rows[0].ndc;
+  const url = pageWithData(info, 'hostile-name.html', {
+    mutate: (d) => {
+      for (const r of d.rows) if (r.ndc === target) r.name = hostile;
+    },
+  });
+  await page.goto(url + hashFor(hostile));
+  await expect(page.locator('html')).toHaveAttribute('data-ready', /.+/);
+  await expect(page.locator('#card-title')).toHaveText(hostile);
+  await page.locator('#q').fill('zzhostile');
+  await expect(page.locator('#results button.result .result-name').first()).toHaveText(hostile);
+  await openPanel(page);
+  await expect(page.locator('#panel-body')).toBeVisible();
+  const planted = await page.evaluate(() => ({
+    xss: window.__xss,
+    inCard: document.querySelectorAll('#card-title *, #card-title ~ * img[src="x"], .card img[src="x"]').length,
+    inResults: document.querySelectorAll('#results .result-name *').length,
+    anywhere: document.querySelectorAll('img[src="x"], img[onerror], script:not([type])').length - document.querySelectorAll('head script:not([type]), body > script:not([type])').length,
+    title: document.title.includes('<img') ? 'text' : 'none',
+  }));
+  expect(planted.xss).toBeUndefined();
+  expect(planted.inCard).toBe(0);
+  expect(planted.inResults).toBe(0);
+  expect(planted.anywhere).toBeLessThanOrEqual(0);
+});
+
 test('a #drug=…&qty=90 deep link opens that card at 90; quantity changes update it and are announced', async ({ page }) => {
+  skipIfGone('ATORVASTATIN 20 MG TABLET');
   await open(page, PAGE + hashFor('ATORVASTATIN 20 MG TABLET', 90));
   await expect(page.locator('#card-title')).toHaveText('ATORVASTATIN 20 MG TABLET');
   await expect(page.locator('#qty')).toHaveValue('90');
@@ -709,6 +787,7 @@ test('a #drug=…&qty=90 deep link opens that card at 90; quantity changes updat
 // opens at 1 now, offers 1 / 2 / 3, and the card says why, naming FDA's form.
 test('a kit priced per EA opens at 1 with 1, 2 and 3 to choose from, and says why', async ({ page }) => {
   const KIT = 'AVONEX 30 MCG/0.5 ML SYRINGE KIT (4 PACK)';
+  skipIfGone(KIT);
   const dq = summary(byName.get(KIT)).default_quantity;
   expect([dq.qty, dq.form.oral_solid]).toEqual([1, false]);
   const seen = await open(page, PAGE);
@@ -739,6 +818,7 @@ test('a kit priced per EA opens at 1 with 1, 2 and 3 to choose from, and says wh
 // Decision 49: a sublingual tablet and a tablet with an outlier FDA listing open at 30 like any
 // oral tablet, and the card says why under the quantity.
 test('a sublingual tablet and a tablet with an outlier FDA listing open at 30, with the reason under the quantity', async ({ page }) => {
+  skipIfGone('BUPRENORPHINE 8 MG TABLET SL', 'FEBUXOSTAT 40 MG TABLET');
   const seen = await open(page, PAGE);
   for (const [name, words] of [
     ['BUPRENORPHINE 8 MG TABLET SL', 'taken under the tongue'],
@@ -777,7 +857,9 @@ test('inline data that does not match its sha256 is refused', async ({ page }, i
   const tampered = pageWithData(info, 'tampered.html', {
     descriptor: (d) => {
       const raw = zlib.inflateRawSync(Buffer.from(d.data, 'base64')).toString('utf8');
-      const changed = Buffer.from(raw.replace(/0\.01451/g, '0.09451'), 'utf8');
+      // The first price in the data, one digit changed: no particular week's price.
+      const changed = Buffer.from(raw.replace(/"\d*\.\d+/, (price) => price.slice(0, -1) + (price.endsWith('9') ? '8' : '9')), 'utf8');
+      expect(changed.equals(Buffer.from(raw, 'utf8'))).toBe(false);
       expect(changed.length).toBe(d.json_bytes);
       return { ...d, data: zlib.deflateRawSync(changed).toString('base64') };
     },
@@ -820,6 +902,7 @@ test('a browser that cannot inflate deflate-raw is told so plainly', async ({ pa
 
 // Review APP-1 (security): a hostile source_url never becomes a live link.
 test('a hostile source_url in the data is never rendered as a link', async ({ page }, info) => {
+  skipIfGone('ATORVASTATIN 20 MG TABLET');
   const hostile = ['javascript:window.__xss="nadac"', 'JaVaScRiPt:window.__xss=1', 'data:text/html,<script>alert(1)</script>', '//evil.example/x'];
   const url = pageWithData(info, 'hostile.html', {
     mutate: (d) => {
@@ -845,6 +928,7 @@ test('a hostile source_url in the data is never rendered as a link', async ({ pa
 });
 
 test('no horizontal scroll, with the panel open, with search results and at 200% text', async ({ page }, info) => {
+  skipIfGone('ABILIFY ASIMTUFII 720 MG/2.4 ML');
   await open(page, PAGE + hashFor('ABILIFY ASIMTUFII 720 MG/2.4 ML'));
   const noScroll = async (what) => {
     const [sw, cw] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
@@ -1115,7 +1199,7 @@ test('What were you charged?: &paid= in the address is checked on load and round
   // Another drug starts without the reader's number.
   await page.goto(PAGE + hashFor(DEFAULT, DEFAULT_QTY, '12'));
   await expect(page.locator('#paid')).toHaveValue('12.00');
-  await page.locator('#q').fill('eliquis 5');
+  await page.locator('#q').fill(OTHER_QUERY);
   await page.locator('#results button.result').first().click();
   await expect(page.locator('#card-title')).not.toHaveText(DEFAULT);
   await expect(page.locator('#paid')).toHaveValue('');
