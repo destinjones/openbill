@@ -392,3 +392,39 @@ test('the bundler refuses imports outside the entry folder and a bundle that fai
   // The real page bundle runs against an empty page without throwing.
   assert.ok(bundle().code.length > 1000);
 });
+
+// Decision 53: one lookbehind stopped the whole page from parsing in Safari below 16.4, which then
+// sat on "Loading" instead of saying it cannot unpack the data.
+test('the bundle refuses a regular expression lookbehind', () => {
+  const reader = (map) => (rel) => map[rel];
+  for (const planted of ['const r = /(?<=a)b/;\n', 'const r = /(?<!a)b/;\n', "const r = new RegExp('(?<=a)b');\n"]) {
+    assert.throws(() => bundle('a/entry.js', reader({ 'a/entry.js': planted })), /lookbehind/, planted);
+  }
+  // A named group is not one, and every engine this page can run in reads it.
+  assert.ok(bundle('a/entry.js', reader({ 'a/entry.js': 'const r = /(?<year>a)b/;\n' })).code.length > 0);
+  assert.doesNotMatch(bundle().code, /\(\?<[=!]/, 'the page has none');
+  assert.doesNotMatch(built.files['openbill.html'], /\(\?<[=!]/, 'nor has the built page');
+});
+
+// Decision 53: what the page says before, and instead of, the script drawing a card.
+test('the static card has a way out that needs no script, and the search box is not disabled', () => {
+  const html = built.files['openbill.html'];
+  const az = `${SITE_URL}drugs/a/`;
+  const static_ = withoutScriptsAndStyles(html);
+  const card = /<article id="card"[^>]*>([\s\S]*?)<\/article>/.exec(static_);
+  assert.ok(card, 'the card is in the page');
+  assert.match(card[0], /^<article id="card" class="card card-pending" aria-labelledby="card-title">/, 'aria-busy comes from the script, so it cannot stick');
+  assert.match(card[1], /<h1 id="card-title"[^>]*tabindex="-1"/, 'aria-labelledby points at a heading from the start');
+  assert.match(card[1], new RegExp(`card-loading-script">Loading[^<]*<a href="${az}">`), 'the loading line links the plain pages');
+  assert.match(card[1], new RegExp(`<noscript><p class="card-loading">[^<]*<a href="${az}">`), 'so does the no-script line');
+  assert.doesNotMatch(card[1], /data\/drugs\.json/, 'never the 38 MB file');
+  assert.doesNotMatch(card[1], /data-figure|\$\d/, 'no figure before the data is checked');
+  const q = /<input id="q"[^>]*>/.exec(static_)[0];
+  assert.doesNotMatch(q, /\bdisabled\b/);
+  assert.match(q, /placeholder="[^"]+"/);
+});
+
+test('the stamp stays on the page from the page, and goes to it from anywhere else', () => {
+  assert.match(built.files['openbill.html'], /<a class="stamp" href="#"/);
+  assert.match(built.files['methodology.html'], /<a class="stamp" href="openbill\.html"/);
+});

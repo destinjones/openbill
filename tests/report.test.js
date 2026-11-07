@@ -74,6 +74,19 @@ test('issueUrl truncation: several long fields, multi-byte text, lone surrogates
   assert.equal(q.get('device'), 'phone');
   const lone = issueUrl({ template: 'bug.yml', fields: { what_happened: 'a\ud800b' } });
   assert.equal(query(lone).get('what_happened'), 'a�b');
+  // Decision 53: the form without a lookbehind treats every case as the old one did.
+  for (const [input, output] of [
+    ['\ud83d\ude00', '\ud83d\ude00'],
+    ['\ude00', '�'],
+    ['\ud83d', '�'],
+    ['\ude00\ud83d', '��'],
+    ['\ud83d\ud83d\ude00', '�\ud83d\ude00'],
+    ['\ud83d\ude00\ude00', '\ud83d\ude00�'],
+    ['a\ud83d\ude00b\ude00c\ud83dd', 'a\ud83d\ude00b�c�d'],
+    ['plain é', 'plain é'],
+  ]) {
+    assert.equal(query(issueUrl({ template: 'bug.yml', fields: { what_happened: input } })).get('what_happened'), output, JSON.stringify(input));
+  }
 });
 
 // Review regressions: the longest field was cut all the way down to "…" while shorter long

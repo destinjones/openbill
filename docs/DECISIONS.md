@@ -4,7 +4,8 @@ A numbered log of the choices behind OpenBill: context, decision, consequences. 
 not rewritten; a later entry supersedes or amends an earlier one by number, and the earlier
 entry carries a one-line note pointing at it. Entries 1 to 23 were recorded on 2026-10-17,
 during phase 1; entries 24 to 32 were recorded later the same day, after a review and a
-rebuild of `data/drugs.json`, entries 33 to 48 on 2026-10-18, and entries 49 onward on 2026-10-19.
+rebuild of `data/drugs.json`, entries 33 to 48 on 2026-10-18, entries 49 to 52 on 2026-10-19, and
+entries 53 onward on 2026-11-06.
 Entries 39 to 49 are phase 2: the cost-plus estimate, "what you were charged" and the drug
 pages. The contract
 they produce is [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -546,6 +547,9 @@ test is made before rounding.
 *Amended by
 [decision 33](#33-the-page-checks-the-inline-datas-sha256-browser-checks-run-in-chromium-firefox-and-webkit):
 the page now checks the sha256, and the browser checks run in Firefox and WebKit too.*
+*Amended by
+[decision 53](#53-the-address-the-live-regions-and-the-time-before-the-data-arrives):
+the script no longer fails to parse below Safari 16.4, and the message links the plain pages.*
 
 **Context.** Decision 6 inlined the JSON text of `packDrugs(doc)` in the page. That text is 6.5
 MB (6,502,204 bytes for the first build, 6,515,285 for the rebuilt data), which is a lot to put
@@ -1448,3 +1452,250 @@ explanations it shares. The five honesty lines are no longer quoted on drug page
 still list them. The drug pages' HTML is about the same size (134.8 MB against 134.3 MB), and
 `node --test` renders every drug page once more for the floor, about 10 seconds. A data refresh
 that pulls the share below a floor fails the tests rather than shipping thinner pages.
+
+## 53. The address, the live regions, and the time before the data arrives
+
+**Context.** An audit recorded on 2026-11-06 reproduced these on the live page. The skip link's
+`#card`, like `#main`, `#top` or `#utm_source=reddit`, was read as a card link with no drug in
+it and replaced the card with an error, and a reload stayed broken. A quantity of `1e300000000`
+in a link held the tab for about 21 seconds, and `0e-99999999999999` crashed it. A screen reader
+could be left with one drug's prices under another drug's heading. At 6x CPU on slow 4G the
+search box stayed disabled for the whole load, the longest task was about 2.9 seconds, and the
+card's arrival moved the page by a cumulative layout shift of 0.63. One lookbehind stopped the
+script from parsing in Safari below 16.4, before it could give the message decision 26 promises.
+
+**Decision.**
+
+- **One reader of the hash.** `parseHash(hash, { isName })` in `src/core/hash.js` is DOM-free and
+  returns one of `default`, `card`, `anchor` or `bad`. Every value is text the caller still has to
+  check. To add a key that goes with a drug, add it to `HASH_KEYS` and read it off the result. A
+  key that means something without a drug (a list, an NDC) needs its own kind, ahead of the
+  no-drug check, or it will read as a broken link.
+- **What is addressed to OpenBill.** A single word is an anchor unless it is a product's whole
+  name. Text holding whitespace cannot be an HTML id, so it is a name, and a name the file does
+  not have goes into the search box and runs. Parameters with none of our keys are someone
+  else's and are ignored. One of our keys with no drug (`#drug=`, and `#qty=30`) still says "That
+  link does not name a drug": the audit asked for that only on an empty `drug=`, but `#qty=30` is
+  our link with its drug lost, and an existing test pins it. Names match whatever their case or
+  spacing; if two products differed only in those, neither would be guessed.
+- **A fragment leaves the card alone and puts the address back.** So a reload or a shared link
+  still opens the card. The skip link is handled on click with no hash change at all, and `#card`
+  from elsewhere does the same as the skip link. `#ndc-…` no longer breaks the card, but it does
+  not open the panel either; the panel's anchors are for a later change.
+- **A quantity is refused from its text, before any BigInt.** At most 32 characters
+  (`QTY_MAX_CHARS`) and an exponent of at most 32 (`QTY_MAX_EXPONENT`), which still reads `1e3`,
+  `30000e-1` and `0.0001e1`. `toDecimal()` refuses exponents past 1000, which no JavaScript number
+  reaches. Anything the engine still throws becomes "that number could not be read". Reflected
+  text is cut at 80 characters and search text at 200; `tests/hash.test.js` checks that no product
+  name reaches 200, so the cut cannot turn one name into another.
+- **The live regions say one true thing, once.** The status starts with the drug's name, then
+  what is wrong with the quantity, and is written only when its text changes. It is emptied, with
+  anything queued, before any other card, message or failure is drawn. The paid result is a live
+  region too, so it waits for the same 500 ms pause; until then it is `aria-busy` and dimmed, so
+  it is not read as the answer for the new quantity. Ready is said as "<card>. Search is ready.";
+  failure uses `role="alert"` and moves focus to the title.
+- **The panel is built when it opens.** On its click, on `toggle` (for any other way of opening
+  it) and on `beforeprint`, because print shows it open. While open it is kept current. The cost:
+  a closed panel is empty, so a browser's find-in-page no longer opens it to find an NDC.
+- **The search box is live from the start.** It says "Search starts when the data loads" as a
+  placeholder, because a line of its own would itself move the page. Text typed early is kept and
+  run when the index is ready, and Enter pressed meanwhile opens the first result then.
+- **Room is reserved; nothing is drawn in it.** `.card-pending` has a minimum height of 1640 px on
+  a phone and 1290 px from 640 px up, near the real card (1643 and 1290). No figure is
+  pre-rendered, because no figure may appear before the data's checksum is checked (decision 33).
+  A message or the failure state is far shorter and gives the room back, which moves things up
+  (0.35 on a 1280 px desktop): accepted, since that link has already failed, and a shorter
+  reservation would bring the shift back for every working card.
+- **With no script: a heading, a sentence and the plain pages.** The static card has an `h1`, so
+  its `aria-labelledby` resolves from the start, and absolute links to the A–Z index, never the
+  38 MB JSON. `@media (scripting: none)` hides the search and Try links, because the page has
+  exactly one inline style and one inline script and tests hold it to that, so a `<noscript><style>`
+  is not available. A browser without that media feature (Chrome below 120, Firefox below 113,
+  Safari below 17) with scripts off still shows them, and the `<noscript>` line still says where
+  to go. `aria-busy` is set by the script, so it cannot stick when the script never runs.
+- **The failure state speaks to readers.** `PlainError` marks a sentence written for them;
+  anything else becomes "The price data built into this page could not be read". The engine's text
+  goes only in the report link. Search and Try are hidden there, since they would do nothing.
+- **From `file:`, `methodology.html` and `data/` links go to the website.** A file: page cannot
+  tell whether those files are beside it, and in the saved copy the README describes they are not.
+  A clone's copy goes to the website too; that is the cost. Four assertions in
+  `tests/browser/openbill.spec.js` pinned the relative links from `file:`, which are the dead ones;
+  they now expect the website's, and a new test pins the relative form on the website itself.
+- **The stamp is `#` on the page itself,** which draws the default card with nothing to download.
+- **No lookbehind, by build check.** `bundle()` refuses `(?<=` and `(?<!` anywhere in the code, a
+  comment included, because the check does not read JavaScript. On WebKit 16.0 the old page stays
+  on "Loading" with a parse error; the new one runs, and gives the plain message when
+  `DecompressionStream` is absent, which is what Safari below 16.4 lacks.
+- **`setOwn()` assigns directly, except for `__proto__`,** and `start()` yields between its stages,
+  so the card can paint and a keystroke can land between them.
+
+Measured with Playwright in Chromium, median of 5, the page gzipped over local HTTP, on one
+machine. Slow 4G is 1.44 Mb/s and 562.5 ms of latency.
+
+| | 6x, slow 4G, 360 px | 6x, no network limit, 360 px | 1x, 1280 px |
+|---|---|---|---|
+| Longest task, ms | 2,850 → 588 | 2,123 → 375 | 243 → none over 50 |
+| Unpack, ms | 1,615 → 580 | 976 → 365 | 127 → 48 |
+| Cumulative layout shift | 0.63 → 0.00 | 0.63 → 0.00 | 0.36 → 0.00 |
+| Search ready, ms | 11,121 → 9,848 | 3,714 → 2,658 | 403 → 293 |
+| Largest contentful paint, ms | 10,544 → 9,268 | 3,172 → 2,264 | 64 → 260 |
+
+**Consequences.** Largest contentful paint stays about 9 seconds on slow 4G: the download dominates,
+and the content that counts is the card, which cannot be drawn sooner without pre-rendering a
+figure. On a 1280 px desktop it moves from 64 ms, which was the loading line, to the card itself.
+The page grows by about 19 KB. This amends decision 26: Safari below 16.4 now reaches the promised
+message, and a browser in that message also gets a way to the plain pages.
+
+## 54. What a search lists first, what Enter opens, and the NDC a reader came with
+
+**Context.** An audit recorded on 2026-11-06 reproduced these on the live page, and each was
+reproduced again in Chromium before this change. Typing "amlodipine" and pressing Enter opened
+KATERZIA at $630.48, "meloxicam" a capsule at $337.39, "diazepam" a rectal gel, "naltrexone"
+VIVITROL, because an exact FDA name beat a product's own name and the first of any list opened.
+Sertraline listed 100, 25, 50. "lopid" found CLOPIDOGREL and "statin" found NYSTATIN, as matches
+inside a word; "syringe" found SENNA SYRUP. A bare `8330100101` opened GABAPENTIN when FDA's own
+form of those digits is a metformin package. A package NADAC does not have silently showed
+another one, a card forgot which NDC opened it, and the panel reached 53,961 px on ATORVASTATIN
+10 MG at 360 px (the whole page 57,526 px).
+
+**Decision.**
+
+- **Order, using no displayed figure.** First, how the product meets the query, best first: its
+  own name exactly; its own name starting with a query word and holding them all; its own name
+  starting with a query word while another name holds them all; its own name holding them with
+  none at its start; only another name; a partial match. So a product's own name beats an FDA or
+  Part D name, even an exact one. Then, inside that, whether every word was whole, what to hold
+  back, and a fixed rank.
+- **The fixed rank reconciles two requests.** The brief says NDC count, then Part D claims, then
+  numeric strength, and also that sertraline lists 25, 50, 100. Sorted strictly by NDC count,
+  sertraline lists 50, 100, 25. So the count ranks families, not strengths: a family is a name
+  without its numbers and units, and families sort by their most-listed strength's NDC count, then
+  by claims. Inside a family the common strengths come first in numeric order, and a rare one
+  waits behind them. Rare is listed by under a quarter as many NDCs as the family's most-listed
+  strength (`COMMON_SHARE`): that is what keeps METFORMIN HCL 625 and 750 MG, at about 500 times
+  the price per tablet of 500 MG, from sitting between 500 and 850.
+- **What is held back, inside its tier.** An injected form, when the words also find a tablet or
+  capsule. A combination, when the same query finds the ingredient alone, listed by at least a
+  quarter as many NDCs (`oxycodone` starts with OXYCODONE HCL, `hydrocodone` with the combination,
+  because there is no plain single). A release form, when the query names none and an
+  immediate-release form is there, not a rare one (`omeprazole` still starts with OMEPRAZOLE DR). A
+  release-form tablet gives way only to another tablet or capsule: POTASSIUM CHLORIDE's 10% liquid
+  does not push the ER tablet away for being immediate-release. Anything else, when tablets and
+  capsules are at least half as widely listed.
+- **Never inside a word.** A word matches when it is a word of the name or starts one. A synonym
+  counts only as a whole word, so SYRINGE (SYR) no longer starts SYRUP. A number or single letter
+  before the last word must be whole, so "b12" no longer reaches BIKTARVY through a B-word and the
+  strength 120-something. 37 of the 5,471 one-word FDA names were reachable only by a match inside
+  a word, among them LOPID, OXACILLIN and CORTISONE; these now say "No drug matches" rather than
+  list another drug, until FX-09's table of names.
+- **Partial matches are labelled.** The letters only start a word that is not the name's first
+  ("besyl"), or start another name with nothing of the product's own ("ultram" is griseofulvin
+  ULTRAMicrosize; "apix" on the way to apixaban). They sort last, say "Partial match", and a list
+  of nothing else says no drug has that name.
+- **Enter (`enterChoice`, DOM-free).** It opens the one result, or a product's own exact name, and
+  nothing else: not the top of a list, an ambiguous NDC, a partial match, another package, a
+  12-digit guess, or a product reached only through a list of ingredients ("ferrous sulfate" finds
+  one multivitamin). If two names read the same without punctuation, the name typed does not settle
+  it. On a plain list Enter moves focus to the first row, so the phone keyboard closes and the next
+  Enter is a choice the reader can see. Lists that need reading first keep focus on the box.
+- **"Unchanged typed state" is read as a limit, not a third way to open.** The brief says Enter
+  opens with "one result or an exact name or unchanged typed state". Read as permission, it would
+  be J25's bug: choose 2.5 mg, return to the box, press Enter, and be sent to whatever is first.
+  So text unchanged since a result was opened from it never opens anything. If the owner meant
+  the other reading, it is one condition in `enterTarget()`.
+- **The list.** It returns when the box takes focus or a click with text in it, closes on a click
+  outside the search section and on any hash change, and a pending keystroke cannot bring it back.
+  ArrowDown and ArrowUp move between the box and the rows; a printable key goes back to the box.
+  iOS reports a tap on plain text only to a listener below `<body>`, so the outside-click listener
+  sits on each child of `<body>` too, with their tap highlight off. A close on `pointerup` was
+  rejected: moving the page under a finger before the click lands can make the click hit
+  something else.
+- **Reading an NDC (`readNdc`).** Dots and slashes count as hyphens, a three-digit labeler
+  (378-7185-05) gets its zeros back, hyphens in no layout (00378-718-505) are read by the digits,
+  and 5-4, 4-4, 5-3, 3-4, 9 or 8 digits read as labeler and product. A bare 10-digit number lists
+  every reading, FDA's own printed form first, and says to check the hyphens. Of the 27,083 rows
+  with FDA's 10-digit form, 92 read several ways without hyphens, and 15 listed the wrong drug
+  first; now none does.
+- **A different package is called one.** When the exact NDC is not in the file but its first 9
+  digits are (16714-611-02 finds 16714-611-01), the result says "A different package" and Enter
+  stays. The audit counted 9,617 of FDA's 219,166 packages in that position; that count was not
+  repeated here. "Not in the file" is the common answer: of FDA's 120,758 distinct human
+  prescription packages (`ndctext.zip`, the build's copy in `tools/cache`), 96,128 are not in this
+  build's `data/drugs.json`. The page says "most packages on FDA's list of prescription drugs are
+  not in it" rather than the figures, which would go stale without a source line. The two
+  sentences that said the same thing in the status and the help are now one, in the status.
+- **Twelve digits are never called a barcode or an NDC.** 300378718505, the form the audit saw,
+  is not a true barcode: a real UPC-A holds a 10-digit NDC and a check digit (303787185053). A
+  number starting with 3 is tried both ways, only as a guess beside a name, and packages carry
+  12-digit numbers of other kinds, so the screen says "A 12-digit number is not an NDC" and "check
+  your label".
+- **`&ndc=` goes through `parseHash`.** It is one more of `HASH_KEYS`, read with a drug, and checked
+  with `normalizeNdc()` where it is used. A real NDC of this product stays and is rewritten as 11
+  digits; another package of its labeler and product stays and is labelled; anything else leaves
+  the address, with a sentence showing at most `clipText()` of it. `#ndc=X` alone stays a link with
+  no drug: resolving an NDC with no drug is a feature nobody asked for at this stage.
+- **"Your NDC" above the figures** names the NDC, its labeler and package, and that row's NADAC
+  line exactly as the panel prints it, with chip and date. It is the one new place a figure
+  appears, it is a figure the panel already showed, and the three figures below it do not change.
+  The quantity does not start at the package's size (J16 suggested it): FX-16 leaves it out, and
+  this stage does not change what figures show.
+- **The panel's limit is 13,000 px at 360 px wide on every product.** Each NDC, each record after
+  the first of a group, and a "without this Medicare figure" list of more than 3 sit behind a
+  44 px summary. The reader's own NDC starts open, and what is open stays open when a new quantity
+  rebuilds the panel. Printing opens them all and puts them back. Measured on all 5,936 products:
+  the tallest is 11,545 px (NALOXONE 2 MG/2 ML SYRINGE, 20 records), and ATORVASTATIN 10 MG goes from
+  53,961 to 9,325 px. A spec pins the limit on that product and the product with most NDCs. NDCs
+  alone were not enough: closing only them left 21,628 px on the naloxone.
+- **`buildIndex(products, { aliases })` is where FX-09 plugs in.** Rows of `{ name, generic, source }`
+  answer a query nothing else fits, and the results carry the row, because a generic's price is not
+  the brand's. Enter does not open them. Nothing passes a table yet, and the page has no label for
+  those results; FX-09 adds the data and the label.
+- **Suggestions narrowed once.** Ending matches inside words newly sent "lopid" to the suggester,
+  which offered RAPID. Two edits must now keep the first letter. "statin" still gets STARTING or
+  STRAIN and "ranexa" RYNEX, and those stay FX-09's to fix.
+
+**Tests that pinned the wrong thing, changed here.**
+
+- `tests/search.test.js`, "search ranks exact > prefix > ...": pinned ZABC and XABCX as substring
+  matches, the cause of OB-06.
+- `tests/search.test.js`, "within a rank, ...": its last line pinned an exact alias over a product's
+  own name, the cause of OB-04.
+- `tests/search.test.js`, "tokens rank across products": pinned alphabetical order over NDC count.
+- `tests/ndc.test.js`, "Unicode dashes": pinned dots as junk, which OB-12 asks to read.
+- `tests/browser/openbill.spec.js`, "Enter opens the first result" and the `&paid=` test's Enter:
+  pinned Enter opening the first of several, OB-13 and J25. The first now checks that the card
+  stays and the next Enter chooses; the second clicks the result.
+- `tests/hash.test.js` and `#panel summary` in the spec only follow the new key and the nested
+  summaries; nothing they checked was removed.
+
+**Measured.** First result of the 150 most prescribed names (ClinCalc DrugStats, "The Top 300 of
+2024", ranks 1 to 150, semicolons as spaces), on this build's data, before → after:
+
+| First result is... | Before | After |
+|---|---|---|
+| a release form, with a plain form to prefer | 6 | 0 |
+| rare beside the most-listed result (under a quarter) | 28 | 3 |
+| at least 5 times the unit price of the most-listed result | 16 | 2 |
+| outside the most-listed result's family | 61 | 25 |
+| injected, with an oral solid in the list | 2 | 1 |
+| a product not named for the query's first word | 14 | 12 |
+| the most-listed result is past the 20 shown | 7 | 1 |
+
+The 12 are mostly brands whose generic has no NADAC name of its own. What remains: `potassium
+chloride` starts with the 10% liquid, because the ER tablets are named POTASSIUM CL and do not hold
+"chloride"; `cholecalciferol` with FOSAMAX PLUS D, because no product is named for it; `diclofenac`
+with the 25 MG potassium tablet, about 74 times the unit price of the most-listed result, since
+price is not used to sort; and `mirtazapine` with the 7.5 MG, about 5.5 times.
+
+Search over 26 queries in Node on the real data: median 1.95 → 0.81 ms, slowest query's median 3.25
+→ 2.25 ms. The limits in `search.test.js` are unchanged. In Chromium at 6x, input to list written
+less the debounce, median of three alternating rounds of 11: "m" 778 → 931 ms, "in" 969 → 886,
+"met" 222 → 162, "metformin" 167 → 192, "tablet" 188 → 202, "sertraline" 206 → 221, "metformin 500"
+189 → 190. These move both ways and are noisy; a profile puts the search code near 20 ms a keystroke
+at 6x in both builds. Building the index costs more: 96 → 131 ms in Node, `index_ms` 35 → 61 at 1x in
+Chromium.
+
+**Consequences.** Names NADAC does not use, such as LOPID and RANEXA, now find nothing until FX-09,
+where before they found the wrong drug. A reader pressing Enter on "metformin" presses it twice. The
+page grows by about 30 KB. `docs/ARCHITECTURE.md`'s lines on `search.js` and the hash do not yet name
+`enterChoice` or `&ndc=`.

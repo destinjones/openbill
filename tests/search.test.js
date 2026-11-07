@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
-import { SYNONYMS, SUGGEST_MIN_LENGTH, normalizeQuery, groupProducts, buildIndex, search, suggest, editDistance } from '../src/core/search.js';
+import { SYNONYMS, SUGGEST_MIN_LENGTH, normalizeQuery, groupProducts, buildIndex, search, enterChoice, suggest, editDistance } from '../src/core/search.js';
 import { linkRows } from '../src/core/pack.js';
 
 const FIXTURE = JSON.parse(readFileSync(new URL('./fixtures/drugs.v3.sample.json', import.meta.url), 'utf8'));
@@ -73,7 +73,9 @@ test('search by name: exact, prefix, synonyms, FDA names', () => {
   assert.deepEqual(search(index, null), []);
 });
 
-test('search ranks exact > prefix > all-tokens-prefix > substring; ties shorter then alphabetical', () => {
+// This test used to pin ZABC and XABCX as 'substring' matches of "abc". That is how "statin" found
+// NYSTATIN and "lopid" found CLOPIDOGREL (OB-06), so nothing matches inside a word any more.
+test('search ranks exact > prefix > all-tokens-prefix, never inside a word; ties alphabetical', () => {
   const rows = ['XABCX', 'XYZ ABC', 'ABC DEF', 'ABC', 'ABD ABC', 'ABC DE', 'ZABC'].map((name, i) => ({ name, ndc: String(i).padStart(11, '0'), unit: 'EA' }));
   const idx = buildIndex(groupProducts(rows));
   const r = search(idx, 'abc');
@@ -85,8 +87,6 @@ test('search ranks exact > prefix > all-tokens-prefix > substring; ties shorter 
       ['ABC DEF', 'prefix'],
       ['ABD ABC', 'tokens'],
       ['XYZ ABC', 'tokens'],
-      ['ZABC', 'substring'],
-      ['XABCX', 'substring'],
     ],
   );
   assert.equal(search(idx, 'abc', { limit: 2 }).length, 2);
@@ -96,7 +96,8 @@ test('search ranks exact > prefix > all-tokens-prefix > substring; ties shorter 
 
 test('search: tokens rank across products; each product appears once', () => {
   const r = search(index, '500 mg');
-  assert.deepEqual(names(r), ['ACETAMINOPHEN 500 MG TABLET', 'METFORMIN HCL 500 MG TABLET']);
+  // This test used to pin the alphabetical order. The product with more NDCs comes first now (OB-13).
+  assert.deepEqual(names(r), ['METFORMIN HCL 500 MG TABLET', 'ACETAMINOPHEN 500 MG TABLET']);
   assert.ok(r.every((x) => x.match === 'tokens'));
   const all = search(index, 'tablet', { limit: 100 });
   assert.equal(new Set(names(all)).size, all.length);
@@ -268,10 +269,292 @@ test('search: within a rank, products whose own name matches come before alias-o
   assert.deepEqual(r.map((x) => x.match), ['prefix', 'prefix']);
   // The brand name still finds the brand first.
   assert.deepEqual(names(search(idx, 'crestor')), ['CRESTOR 10 MG TABLET']);
-  // A better rank still wins over an own-name match: an exact alias beats a prefix of the name.
+  // The product's own name wins, even over an exact alias. This test used to pin the reverse, which
+  // is what put KATERZIA above amlodipine and VIVITROL above naltrexone tablets (OB-04).
   const idx2 = buildIndex(groupProducts([
     { name: 'APIXABAN 5 MG TABLET', ndc: '00000000003', unit: 'EA' },
     { name: 'ELIQUIS 5 MG TABLET', ndc: '00000000004', unit: 'EA', identity: { proprietary_name: 'Eliquis', nonproprietary_name: 'apixaban' } },
   ]));
-  assert.deepEqual(names(search(idx2, 'apixaban')), ['ELIQUIS 5 MG TABLET', 'APIXABAN 5 MG TABLET']);
+  assert.deepEqual(names(search(idx2, 'apixaban')), ['APIXABAN 5 MG TABLET', 'ELIQUIS 5 MG TABLET']);
+});
+
+const row = (name, ndc, extra = {}) => ({ name, ndc: String(ndc).padStart(11, '0'), unit: 'EA', ...extra });
+/** One NADAC name listed under `n` NDCs, each with its own number. */
+const listed = (name, n, from) => Array.from({ length: n }, (_, i) => row(name, from + i));
+const named = (rows, q, opts) => names(search(buildIndex(groupProducts(rows)), q, opts));
+
+test('ranking: NDC count, then Part D claims, then numeric strength', () => {
+  const rows = [...listed('ZED 5 MG TABLET', 9, 100), ...listed('ABC DRUG 5 MG TABLET', 3, 200), ...listed('ABC OTHER 5 MG TABLET', 3, 300)];
+  rows[9].part_d = { claims: { value: 50 } };
+  rows[12].part_d = { claims: { value: 900 } };
+  assert.deepEqual(named(rows, '5 mg'), ['ZED 5 MG TABLET', 'ABC OTHER 5 MG TABLET', 'ABC DRUG 5 MG TABLET']);
+});
+
+test('strengths read as numbers, common ones first; a rare strength waits', () => {
+  const rows = [...listed('SERT 100 MG TABLET', 40, 100), ...listed('SERT 25 MG TABLET', 30, 200), ...listed('SERT 50 MG TABLET', 40, 300), ...listed('SERT 1,000 MG TABLET', 20, 400), ...listed('SERT 12.5 MG TABLET', 2, 500)];
+  assert.deepEqual(named(rows, 'sert'), ['SERT 25 MG TABLET', 'SERT 50 MG TABLET', 'SERT 100 MG TABLET', 'SERT 1,000 MG TABLET', 'SERT 12.5 MG TABLET']);
+});
+
+test('a name’s own start beats an FDA name; no release word prefers no release word; oral solid over vial', () => {
+  const alias = { identity: { proprietary_name: 'Katerzia', nonproprietary_name: 'amlodipine' } };
+  assert.deepEqual(named([...listed('KATERZIA 1 MG/ML SUSP', 30, 100).map((r) => ({ ...r, ...alias })), row('AMLODIPINE 5 MG TABLET', 200)], 'amlodipine'), ['AMLODIPINE 5 MG TABLET', 'KATERZIA 1 MG/ML SUSP']);
+
+  const forms = [...listed('DRUG ER 500 MG TABLET', 20, 100), ...listed('DRUG 500 MG TABLET', 10, 200), ...listed('DRUG 500 MG VIAL', 40, 300), ...listed('DRUG 5% CREAM', 15, 400)];
+  assert.deepEqual(named(forms, 'drug'), ['DRUG 500 MG TABLET', 'DRUG 5% CREAM', 'DRUG ER 500 MG TABLET', 'DRUG 500 MG VIAL']);
+  assert.equal(named(forms, 'drug er')[0], 'DRUG ER 500 MG TABLET', 'a release word in the query finds that form');
+  // Held back, not hidden; and with nothing plain to prefer, or only something rare, it stays.
+  assert.deepEqual(named([...listed('OME DR 20 MG CAPSULE', 30, 100), row('OME 2 MG/ML SUSP', 200)], 'ome')[0], 'OME DR 20 MG CAPSULE');
+  // A liquid does not outrank a release-form tablet by being the only immediate-release form.
+  assert.deepEqual(named([...listed('POT ER 8 MEQ TABLET', 10, 100), ...listed('POT 10% LIQUID', 10, 200)], 'pot'), ['POT ER 8 MEQ TABLET', 'POT 10% LIQUID']);
+});
+
+test('a combination waits for the ingredient alone, unless there is none', () => {
+  const single = [...listed('OXYC HCL 5 MG TABLET', 10, 100), ...listed('OXYC-ACETAMINOPHEN 5-325 MG TAB', 30, 200)];
+  assert.deepEqual(named(single, 'oxyc'), ['OXYC HCL 5 MG TABLET', 'OXYC-ACETAMINOPHEN 5-325 MG TAB']);
+  const none = [...listed('HYDRO BIT ER 10 MG CAPSULE', 10, 100), ...listed('HYDRO-ACETAMINOPHEN 5-325 MG TAB', 30, 200)];
+  assert.equal(named(none, 'hydro')[0], 'HYDRO-ACETAMINOPHEN 5-325 MG TAB');
+});
+
+test('synonyms match whole words only, and nothing matches inside a word', () => {
+  const rows = [row('SENNA 8.8 MG/5 ML SYRUP', 1), row('ENOX 40 MG/0.4 ML SYR', 2), row('NYSTATIN 100,000 UNIT/ML SUSP', 3), row('CLOPIDOGREL 75 MG TABLET', 4), row('BIKTARVY 50-200-25 MG TAB', 5, { identity: { nonproprietary_name: 'bictegravir sodium, emtricitabine, and tenofovir alafenamide' } })];
+  assert.deepEqual(named(rows, 'syringe'), ['ENOX 40 MG/0.4 ML SYR']);
+  assert.deepEqual(named(rows, 'syr'), ['SENNA 8.8 MG/5 ML SYRUP', 'ENOX 40 MG/0.4 ML SYR'].sort());
+  assert.deepEqual(named(rows, 'suspension'), ['NYSTATIN 100,000 UNIT/ML SUSP']);
+  assert.deepEqual(named(rows, 'statin'), []);
+  assert.deepEqual(named(rows, 'lopid'), []);
+  assert.deepEqual(named(rows, 'b12'), [], 'a B-word and a strength starting 12 are not "b12"');
+});
+
+test('a word started somewhere other than the name’s start is labelled partial; typing a strength is not', () => {
+  const rows = [row('GRISEO ULTRA 125 MG TAB', 1, { identity: { nonproprietary_name: 'Ultramicrosize griseo' } }), row('AMLO BESYLATE 5 MG TAB', 2), row('SERT 50 MG TABLET', 3), row('ELIQ 5 MG TABLET', 4, { identity: { nonproprietary_name: 'apixaban' } })];
+  const idx = buildIndex(groupProducts(rows));
+  const match = (q) => search(idx, q)[0].match;
+  assert.equal(match('besyl'), 'partial');
+  assert.equal(match('ultram'), 'partial');
+  assert.equal(match('apix'), 'partial');
+  assert.equal(match('apixaban'), 'exact');
+  assert.equal(match('sert 5'), 'prefix');
+  assert.equal(match('sert'), 'prefix');
+  assert.equal(match('besylate'), 'tokens');
+});
+
+test('enterChoice opens only one result or an exact name', () => {
+  const rows = [row('ABC 5 MG TABLET', 1), row('ABC 10 MG TABLET', 2), row('XYZ 1 MG TABLET', 3), row('MULTI 1 MG TABLET', 4, { identity: { nonproprietary_name: 'Vitamin A, Iron Sulfate, Zinc' } }), row('ULT 1 MG TABLET', 5, { identity: { nonproprietary_name: 'Ultramicrosize ult' } })];
+  const idx = buildIndex(groupProducts(rows));
+  const enter = (q) => {
+    const c = enterChoice(search(idx, q, { limit: 1000 }));
+    return c && c.product.name;
+  };
+  assert.equal(enter('abc'), null, 'several results');
+  assert.equal(enter('abc 5'), 'ABC 5 MG TABLET', 'one result');
+  assert.equal(enter('abc 5 mg tablet'), 'ABC 5 MG TABLET', 'an exact name');
+  assert.equal(enter('iron sulfate'), null, 'only from another name’s list of ingredients');
+  assert.equal(enter('ultram'), null, 'a partial match');
+  assert.equal(enter('nothing here'), null);
+  assert.equal(enterChoice([]), null);
+  assert.equal(enterChoice(null), null);
+  assert.equal(enter('00000000001'), 'ABC 5 MG TABLET', 'one exact NDC');
+  // Two names that read the same without their punctuation: the name typed does not settle it.
+  const twins = buildIndex(groupProducts([row('ABC-5 MG TABLET', 1), row('ABC 5 MG TABLET', 2)]));
+  assert.equal(enterChoice(search(twins, 'abc 5 mg tablet')), null);
+});
+
+test('NDC results say what they are, and Enter opens only a sure one', () => {
+  const rows = [
+    row('ONE 5 MG TABLET', '00378718505', { identity: { package_ndc: '0378-7185-05' } }),
+    row('TWO 5 MG TABLET', '03787018505'),
+    row('THREE 5 MG TABLET', '16714061101', { identity: { package_ndc: '16714-611-01' } }),
+    row('THREE 5 MG TABLET', '16714061103'),
+    row('ONLY 5 MG TABLET', '55555666601'),
+  ];
+  const idx = buildIndex(groupProducts(rows));
+  const bare = search(idx, '0378718505');
+  assert.deepEqual(names(bare), ['ONE 5 MG TABLET', 'TWO 5 MG TABLET'], 'FDA’s own form of a reading comes first; every reading is listed');
+  assert.ok(bare.every((r) => r.match === 'ndc' && r.ambiguous && r.entered === r.matched));
+  assert.equal(bare[0].printed, '0378-7185-05');
+  assert.equal(enterChoice(bare), null);
+  // Not in the file, but the same labeler and product is.
+  const other = search(idx, '16714-611-02');
+  assert.equal(other.length, 1);
+  assert.equal(other[0].match, 'ndc-package');
+  assert.equal(other[0].entered, '16714061102');
+  assert.equal(other[0].matched, '16714061101');
+  assert.equal(enterChoice(other), null);
+  // Labeler and product only.
+  const code = search(idx, '16714-611');
+  assert.equal(code[0].match, 'ndc-product');
+  assert.equal(code[0].entered, null);
+  assert.equal(enterChoice(code).product.name, 'THREE 5 MG TABLET');
+  // A 12-digit number is a guess, whatever it finds.
+  const long = search(idx, '300378718505');
+  assert.equal(long[0].product.name, 'ONE 5 MG TABLET');
+  assert.equal(long[0].guess, true);
+  assert.equal(enterChoice(long), null);
+  assert.deepEqual(search(idx, '99999-9999-99'), []);
+  assert.deepEqual(search(idx, '399999999999'), []);
+});
+
+test('an alias table plugs in where nothing else fits, and marks what it returns', () => {
+  const rows = [row('METFORMIN HCL 500 MG TABLET', 1), row('METFORMIN HCL 850 MG TABLET', 2), row('LOPINAVIR 100 MG TABLET', 3)];
+  const entry = { name: 'Glucophage', generic: 'metformin', source: 'a test table' };
+  const idx = buildIndex(groupProducts(rows), { aliases: [entry] });
+  const r = search(idx, 'glucophage');
+  assert.deepEqual(names(r), ['METFORMIN HCL 500 MG TABLET', 'METFORMIN HCL 850 MG TABLET']);
+  assert.equal(r[0].alias, entry);
+  assert.equal(enterChoice(r.slice(0, 1)), null, 'a generic’s price is not the brand’s; the reader chooses');
+  // A name that finds something itself never reaches the table.
+  assert.equal(search(buildIndex(groupProducts(rows), { aliases: [{ name: 'metformin', generic: 'lopinavir', source: 'x' }] }), 'metformin')[0].alias, undefined);
+  assert.equal(search(buildIndex(groupProducts(rows)), 'glucophage').length, 0, 'no table, no answer');
+});
+
+test('suggest does not offer a longer word that merely holds the query, or two edits off the first letter', () => {
+  const rows = [row('NYSTATIN 100,000 UNIT/ML SUSP', 1), row('RAPID 5 MG TABLET', 2), row('METFORMIN 500 MG TABLET', 3), row('LOPIDOX 5 MG TABLET', 4)];
+  const idx = buildIndex(groupProducts(rows));
+  assert.deepEqual(suggest(idx, 'statin'), []);
+  assert.deepEqual(suggest(idx, 'lapid'), [{ query: 'RAPID', distance: 1 }], 'one edit may change the first letter');
+  assert.deepEqual(suggest(idx, 'tapis'), [], 'two edits may not');
+  assert.deepEqual(suggest(idx, 'etformin'), [{ query: 'METFORMIN', distance: 1 }]);
+  assert.deepEqual(suggest(idx, 'metfromn'), [{ query: 'METFORMIN', distance: 2 }]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// The real data: what the audit's table asked for (OB-04, OB-06, OB-13, OB-08, J15).
+
+let real;
+function realIndex(t) {
+  if (real !== undefined) {
+    if (!real) t.skip('data/drugs.json is not here');
+    return real;
+  }
+  real = null;
+  const path = new URL('../data/drugs.json', import.meta.url);
+  try {
+    const doc = JSON.parse(readFileSync(path, 'utf8'));
+    if (doc.schema === 'openbill.drugs/3') real = buildIndex(groupProducts(linkRows(doc)));
+  } catch {
+    real = null;
+  }
+  if (!real) t.skip('data/drugs.json is not here');
+  return real;
+}
+
+test('real data: the first result of a plain name is the plain tablet', (t) => {
+  const idx = realIndex(t);
+  if (!idx) return;
+  const first = (q) => search(idx, q)[0].product.name;
+  for (const [q, want] of [
+    ['amlodipine', /^AMLODIPINE BESYLATE [\d.]+ MG TAB$/],
+    ['metformin', /^METFORMIN HCL [\d,]+ MG TABLET$/],
+    ['meloxicam', /^MELOXICAM [\d.]+ MG TABLET$/],
+    ['naltrexone', /^NALTREXONE [\d.]+ MG TABLET$/],
+    ['diazepam', /^DIAZEPAM [\d.]+ MG TABLET$/],
+    ['metformin 500', /^METFORMIN HCL 500 MG TABLET$/],
+    ['metformin 1000', /^METFORMIN HCL 1,000 MG TABLET$/],
+    ['metoprolol 25', /^METOPROLOL TARTRATE 25 MG TAB$/],
+    ['metoprolol succinate', /^METOPROLOL SUCC ER 25 MG TAB$/],
+    ['pantoprazole sodium 40 mg', /^PANTOPRAZOLE SOD DR 40 MG TAB$/],
+    ['hydrocodone', /^HYDROCODONE-ACETAMINOPHEN 5-325 MG TABLET$/],
+    ['xarelto', /^XARELTO 2\.5 MG TABLET$/],
+    ['omeprazole', /^OMEPRAZOLE DR /],
+    ['oxycodone', /^OXYCODONE HCL /],
+    ['estradiol', /^ESTRADIOL [\d.]+ MG TABLET$/],
+  ]) {
+    assert.match(first(q), want, q);
+  }
+  // The rows those lists held at the top before, still found, further down.
+  assert.ok(names(search(idx, 'naltrexone')).includes('VIVITROL 380 MG VIAL-DILUENT'));
+  assert.ok(names(search(idx, 'metformin')).includes('METFORMIN ER 1,000 MG OSM-TAB'));
+});
+
+test('real data: strengths in natural order', (t) => {
+  const idx = realIndex(t);
+  if (!idx) return;
+  const strengths = (q, re) => names(search(idx, q, { limit: 100 })).map((n) => re.exec(n)).filter(Boolean).map((m) => Number(m[1].replace(',', '')));
+  const ascending = (list) => list.every((v, i) => i === 0 || list[i - 1] < v);
+  assert.deepEqual(strengths('sertraline', /^SERTRALINE HCL ([\d,]+) MG TABLET$/), [25, 50, 100]);
+  assert.deepEqual(strengths('metformin', /^METFORMIN HCL (500|850|1,000) MG TABLET$/), [500, 850, 1000]);
+  assert.ok(ascending(strengths('atorvastatin', /^ATORVASTATIN ([\d,]+) MG TABLET$/)));
+});
+
+test('real data: a word inside a longer word finds nothing, and a synonym does not start a word', (t) => {
+  const idx = realIndex(t);
+  if (!idx) return;
+  for (const [q, wrong] of [
+    ['lopid', /^CLOPIDOGREL/],
+    ['statin', /^NYSTATIN/],
+    ['ranexa', /^TRANEXAMIC/],
+    ['oxacillin', /^DICLOXACILLIN/],
+    ['chlorothiazide', /^HYDROCHLOROTHIAZIDE/],
+    ['cortisone', /^HYDROCORTISONE/],
+    ['b12', /^BIKTARVY/],
+  ]) {
+    const r = search(idx, q, { limit: 1000 });
+    assert.ok(!r.some((x) => wrong.test(x.product.name) && x.match !== 'partial'), `${q} → ${names(r).slice(0, 3)}`);
+  }
+  assert.ok(!names(search(idx, 'syringe', { limit: 1000 })).some((n) => /SYRUP/.test(n)), 'SYRINGE is SYR, which does not start SYRUP');
+  assert.ok(search(idx, 'syringe').length > 0);
+  assert.ok(search(idx, 'ultram').every((r) => r.match === 'partial'));
+});
+
+test('real data: a bare 10-digit number lists every reading, FDA’s own first, and Enter never guesses', (t) => {
+  const idx = realIndex(t);
+  if (!idx) return;
+  let printedTen = 0;
+  let several = 0;
+  for (const p of idx.products) {
+    for (const r of p.rows) {
+      const printed = r.identity && r.identity.package_ndc;
+      if (typeof printed !== 'string') continue;
+      const digits = printed.replace(/-/g, '');
+      if (digits.length !== 10) continue;
+      printedTen++;
+      const found = search(idx, digits);
+      assert.equal(found[0].product.name, p.name, `${printed} (bare) lists ${found[0].product.name} first`);
+      assert.equal(found[0].matched, r.ndc, printed);
+      if (found.length > 1) {
+        several++;
+        assert.equal(enterChoice(found), null, `${printed} (bare) has ${found.length} readings`);
+      }
+      // With its hyphens, it is one package, and Enter may open it.
+      const sure = search(idx, printed);
+      assert.equal(sure.length, 1, printed);
+      assert.equal(enterChoice(sure).product.name, p.name, printed);
+    }
+  }
+  assert.ok(printedTen > 1000, `${printedTen} rows carry FDA’s 10-digit form`);
+  assert.ok(several > 0, 'the data has numbers that read several ways, or this test tests nothing');
+});
+
+test('real data: the audit’s NDC forms', (t) => {
+  const idx = realIndex(t);
+  if (!idx) return;
+  // J15: not in NADAC; its sibling is, and the result says it is a different package.
+  const other = search(idx, '16714-611-02');
+  assert.equal(other[0].match, 'ndc-package');
+  assert.equal(other[0].product.name, 'SERTRALINE HCL 25 MG TABLET');
+  assert.equal(other[0].entered, '16714061102');
+  assert.notEqual(other[0].matched, other[0].entered);
+  assert.equal(enterChoice(other), null);
+  // OB-08's first example: FDA's digits, read FDA's way first, with no opening on Enter.
+  const bare = search(idx, '8330100101');
+  assert.ok(bare.length > 1);
+  assert.match(bare[0].product.name, /^METFORMIN/);
+  assert.equal(enterChoice(bare), null);
+  // OB-12: other ways to write 00378-7185-05, whichever package data the file holds for them.
+  const want = search(idx, '00378-7185-05');
+  assert.equal(want[0].match, 'ndc');
+  for (const q of ['00378.7185.05', '00378/7185/05', '378-7185-05', '00378-718-505', 'NDC 00378 7185 05']) {
+    assert.equal(search(idx, q)[0].product.name, want[0].product.name, q);
+    assert.equal(search(idx, q)[0].match, 'ndc', q);
+  }
+  const code = search(idx, '0378-7185');
+  assert.equal(code[0].match, 'ndc-product');
+  assert.equal(code[0].product.name, want[0].product.name);
+  // Neither 12-digit form is opened on Enter, or claims to be sure.
+  for (const q of ['300378718505', '303787185053']) {
+    const r = search(idx, q);
+    assert.ok(r.length > 0, q);
+    assert.ok(r.every((x) => x.guess), q);
+    assert.equal(enterChoice(r), null, q);
+  }
 });

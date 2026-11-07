@@ -19,6 +19,7 @@ import { REPO_URL, APP_NAME, SITE_URL } from './src/core/config.js';
 import { STATE_INFO, PRICE_STATES } from './src/core/provenance.js';
 import { HONESTY, RULES, summarizeProduct, partDNameContext } from './src/core/rules.js';
 import { formatMoney, formatCount } from './src/core/money.js';
+import { hashFor } from './src/core/hash.js';
 import { SOURCE_INFO } from './src/core/sources.js';
 import { renderMethodology } from './src/build/methodology.js';
 import { ogImagePath, OG_IMAGE_TYPE, OG_WIDTH, OG_HEIGHT } from './src/build/drugpage.js';
@@ -354,6 +355,10 @@ export function bundle(entry = ENTRY, read = readText) {
   parts.push('})();\n');
   const code = parts.join('');
   if (/<\/script|<!--/i.test(code)) throw new Error('the bundle contains "</script" or "<!--", which would end the inline script early');
+  // One lookbehind stops the whole script from parsing in Safari below 16.4, before the page can
+  // say it cannot unpack its data (decision 53). Text in a comment counts too, on purpose: the
+  // check does not try to read JavaScript.
+  if (/\(\?<[=!]/.test(code)) throw new Error('the bundle contains a regular expression lookbehind, (?<= or (?<!, which Safari below 16.4 cannot parse');
   // Compile the bundle, so a name clash between an import and a declaration fails here, then run
   // it once against an empty page: every module's top level runs, so an export that names no
   // declaration (a ReferenceError) fails the build instead of the page. The page code finds no
@@ -598,10 +603,6 @@ function fill(template, values, what) {
   return out;
 }
 
-function hashFor(drug, qty) {
-  return `#drug=${encodeURIComponent(drug)}${qty === undefined ? '' : `&qty=${encodeURIComponent(String(qty))}`}`;
-}
-
 function honestyText(id) {
   const line = HONESTY.find((h) => h.id === id);
   if (!line) throw new Error(`HONESTY has no line ${id}`);
@@ -679,12 +680,27 @@ ${items}
 </section>`;
 }
 
-function stampHtml(doc, buildId) {
+/**
+ * The masthead. On the page itself the stamp links to # (the default card, with nothing to
+ * download again, and it works from file: too); on any other page, to the page.
+ */
+function stampHtml(doc, buildId, { home }) {
   const nadac = doc.sources.nadac;
   return `<header class="masthead">
-<a class="stamp" href="openbill.html" aria-label="${esc(APP_NAME)} drug price receipt, home"><span class="stamp-name">${esc(APP_NAME)}</span><span class="stamp-sub">drug price receipt</span></a>
+<a class="stamp" href="${home ? '#' : 'openbill.html'}" aria-label="${esc(APP_NAME)} drug price receipt, home"><span class="stamp-name">${esc(APP_NAME)}</span><span class="stamp-sub">drug price receipt</span></a>
 <p class="mono masthead-line">NADAC week of ${esc(nadac.as_of_date)}</p>
 </header>`;
+}
+
+/**
+ * The card before the script has drawn one. Its way out needs no script, because this may be all a
+ * reader ever gets: scripts turned off or blocked, or a browser that cannot parse the bundle.
+ */
+function cardLoadingHtml() {
+  const az = esc(`${SITE_URL}drugs/a/`);
+  return `<header class="card-head"><h1 id="card-title" class="card-title" tabindex="-1">Drug prices</h1></header>
+<p class="card-loading card-loading-script">Loading this week’s NADAC file… Or <a href="${az}">browse every drug as a plain page</a>.</p>
+<noscript><p class="card-loading">The search and the cards here need JavaScript, which is turned off. Every drug also has a plain page that needs none: <a href="${az}">browse every drug A–Z</a> on the website.</p></noscript>`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -861,7 +877,8 @@ export function buildAll() {
       CSP: esc(cspFor([code], [css])),
       STYLE: css,
       SOCIAL: socialMeta({ title: pageTitle[1], description: showcaseDescription(doc), url: SITE_URL }),
-      MASTHEAD: stampHtml(doc, buildId),
+      MASTHEAD: stampHtml(doc, buildId, { home: true }),
+      CARD_LOADING: cardLoadingHtml(),
       TRY_LINKS: tryLinks,
       HOWTO: howToReadHtml(),
       FOOTER: footerHtml(doc, buildId, { home: true }),
@@ -886,7 +903,7 @@ export function buildAll() {
     description: m.description || '',
     social: socialMeta({ title: m.title, description: m.description || m.title, url: `${SITE_URL}methodology.html` }),
     css,
-    bodyHtml: `${stampHtml(doc, buildId)}\n<main id="main" class="doc">\n${m.bodyHtml}\n</main>\n${footerHtml(doc, buildId, { home: false })}`,
+    bodyHtml: `${stampHtml(doc, buildId, { home: false })}\n<main id="main" class="doc">\n${m.bodyHtml}\n</main>\n${footerHtml(doc, buildId, { home: false })}`,
   });
 
   let quality = renderDataQuality(doc);

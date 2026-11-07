@@ -17,8 +17,10 @@ const ELLIPSIS = '…';
 const ELLIPSIS_ENCODED = encodeURIComponent(ELLIPSIS).length;
 
 function wellFormed(s) {
-  // encodeURIComponent throws on a lone surrogate; replace it with U+FFFD.
-  return s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '�');
+  // encodeURIComponent throws on a lone surrogate; replace it with U+FFFD. Pairs are matched first
+  // and kept. No lookbehind: Safari below 16.4 cannot parse one, and that stops the whole page
+  // before it can show its message (build.js refuses them).
+  return s.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, (m) => (m.length === 2 ? m : '�'));
 }
 
 function cut(value, maxEncoded) {

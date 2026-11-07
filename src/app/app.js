@@ -3,17 +3,18 @@
 
 import { esc, safeHref } from '../core/esc.js';
 import { unpackDrugs, linkRows } from '../core/pack.js';
-import { groupProducts, buildIndex, search, suggest, normalizeQuery } from '../core/search.js';
+import { groupProducts, buildIndex, search, suggest, enterChoice, normalizeQuery } from '../core/search.js';
 import { summarizeProduct, partDNameContext, freshness, inputDates, rangesByUnit, isExtremeSpread, formatSpreadMultiple, paidComparison, parsePaid, COST_PLUS, HONESTY, RULES, PAID_PRIVACY } from '../core/rules.js';
-import { formatMoney, formatUnitPrice, formatCount, formatMultiple } from '../core/money.js';
+import { formatMoney, formatUnitPrice, formatCount, formatMultiple, quantityProblem, QTY_MAX_CHARS } from '../core/money.js';
 import { formatValue, validateRecord, STATE_INFO } from '../core/provenance.js';
-import { formatNdc, isNdc11, looksLikeNdc, ndcCandidates } from '../core/ndc.js';
+import { formatNdc, formatNdcCode, isNdc11, normalizeNdc, readNdc } from '../core/ndc.js';
 import { SOURCE_INFO, NADAC_EXPLANATION_CODES } from '../core/sources.js';
 import { issueUrl } from '../core/report.js';
 import { REPO_URL, SITE_URL } from '../core/config.js';
 import { siteSlugs } from '../core/slug.js';
 import { isoDate, parsePeriod } from '../core/dates.js';
 import { sha256Hex } from '../core/sha256.js';
+import { parseHash, hashFor, nameKey, caselessNames, clipText, QUERY_MAX_CHARS } from '../core/hash.js';
 
 const SCRIPT_START = performance.now();
 const RESULT_LIMIT = 20;
@@ -21,6 +22,11 @@ const COUNT_LIMIT = 1000;
 const INLINE_FORMAT = 'openbill.inline/1';
 const CALCULATION = 'OpenBill calculation';
 const CANNOT_UNPACK = 'This browser cannot unpack the inline data (it has no DecompressionStream for deflate-raw). A current Firefox, Chrome, Edge or Safari can.';
+const DATA_UNREADABLE = 'The price data built into this page could not be read, so it may be damaged.';
+const SEARCH_WAIT = 'Search starts when the data has loaded; keep typing.';
+const SEARCH_READY = 'Search is ready.';
+/** The website's A to Z list of drugs: plain pages that need no script and no data in this page. */
+const AZ_URL = `${SITE_URL}drugs/a/`;
 /** People's words for NADAC's pricing units, next to the code itself. */
 const UNIT_WORDS = Object.freeze({ EA: 'each (EA)', ML: 'mL', GM: 'g' });
 
@@ -29,17 +35,28 @@ const app = {
   doc: null,
   products: [],
   byName: new Map(),
+  caseless: new Map(), // nameKey(name) → name, for a retyped or lower-cased name in a link
   partDContext: null, // partDNameContext(rows): each Part D name's products, for nameOutlier()
   index: null,
   today: null,
-  // { product, qty: string, paid: string, paidNote: string|null, summary }. `paid` is what the
+  // { product, qty: string, paid: string, paidNote: string|null, ndc, summary }. `paid` is what the
   // reader typed as what they were charged: kept in memory and in the address after # only
-  // (so the browser's history has it), never saved or sent by OpenBill.
+  // (so the browser's history has it), never saved or sent by OpenBill. `ndc` is linkNdc()'s answer
+  // for the NDC the reader entered, or null.
   current: null,
   cache: new Map(), // product name → summarizeProduct(rows) without a quantity
   priceCache: new Map(), // product name → NADAC ranges per unit, for search results
-  announce: null, // timer for the card's status message
-  paidTimer: null, // timer for the "What were you charged?" result
+  announce: null, // timer for the card's status message and, with it, the paid result
+  paidTimer: null, // timer for the "What were you charged?" result while its box is typed in
+  paidShown: '', // the paid result's current HTML, so an unchanged one is not written (and read out) again
+  panelFor: null, // the summary the panel was last built from; a closed panel is not built
+  shown: false, // something other than the static loading state is on the card
+  missQuery: null, // the search text a link's unknown name put in #q
+  enterWaiting: false, // Enter was pressed in #q before the search index was ready
+  allResults: [], // everything the current search found, not only the rows shown
+  pickedQuery: null, // the text in #q when a result was opened from it; typing clears it
+  searchTimer: null, // the pause after a keystroke before searching
+  printOpened: [], // closed details in the panel that printing opened
   slugs: null, // product name → its website slug (siteSlugs, as tools/site.mjs builds the pages)
 };
 
@@ -211,28 +228,37 @@ function caveatsOf(rec) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Hash state: #drug=<name>&qty=<n>&paid=<dollars>. `paid` is the reader's own number; the part
-// after # never leaves the browser, and it is the only place the page keeps that number.
+// Hash state: #drug=<name>&qty=<n>&paid=<dollars>, read by parseHash() in src/core/hash.js. `paid`
+// is the reader's own number; the part after # never leaves the browser, and it is the only place
+// the page keeps that number.
 
-function hashFor(name, qty, paid) {
-  const q = qty === undefined || qty === null || qty === '' ? '' : `&qty=${encodeURIComponent(String(qty))}`;
-  const p = paid ? `&paid=${encodeURIComponent(paid)}` : '';
-  return `#drug=${encodeURIComponent(name)}${q}${p}`;
+function findProduct(text) {
+  return app.byName.get(text) || app.byName.get(app.caseless.get(nameKey(text)));
+}
+
+function defaultRoute() {
+  return { kind: 'card', drug: app.build.default.drug, qty: String(app.build.default.qty), paid: null, home: true };
 }
 
 function readHash() {
-  const raw = location.hash.replace(/^#/, '');
-  if (!raw) return { drug: app.build.default.drug, qty: String(app.build.default.qty), paid: null, fromHash: false };
-  let params;
-  try {
-    params = new URLSearchParams(raw);
-  } catch {
-    return { error: 'The address after # could not be read.' };
+  const h = parseHash(location.hash, { isName: (text) => Boolean(findProduct(text)) });
+  return h.kind === 'default' ? defaultRoute() : h;
+}
+
+/**
+ * A saved copy has no methodology.html or data/drugs.json beside it, and a file: page cannot tell
+ * whether it does, so from file: these links go to the website (decision 53).
+ */
+function siteHref(rel) {
+  return location.protocol === 'file:' ? `${SITE_URL}${rel}` : rel;
+}
+
+function pointSavedCopyAtSite() {
+  if (location.protocol !== 'file:') return;
+  for (const a of document.querySelectorAll('a[href]')) {
+    const rel = a.getAttribute('href');
+    if (/^(methodology\.html|data\/)/.test(rel)) a.setAttribute('href', siteHref(rel));
   }
-  const drug = params.get('drug');
-  if (drug === null || drug.trim() === '') return { error: 'The address names no drug (it needs #drug=<name>).' };
-  const qty = params.get('qty');
-  return { drug, qty: qty === null ? null : qty, paid: params.get('paid'), fromHash: true };
 }
 
 // The reader's amount (typed, or from a link's &paid=) is untrusted: if the core ever threw on
@@ -263,7 +289,7 @@ function paidForHash(text) {
 
 function currentHash() {
   const c = app.current;
-  return hashFor(c.product.name, c.qty, paidForHash(c.paid));
+  return hashFor(c.product.name, c.qty, paidForHash(c.paid), c.ndc && c.ndc.ndc);
 }
 
 function replaceHash(hash) {
@@ -315,7 +341,7 @@ function figurePharmacy(s) {
     return `<section class="fig fig-pharmacy" aria-labelledby="fig-ph">
 <h2 id="fig-ph" class="fig-label">Pharmacy pays</h2>
 <p class="fig-value"><span class="amount amount-unit" data-figure="pharmacy-unit">${esc(unitGroups(s.nadac_by_unit))}</span> ${chip(s.nadac.state)}${stale ? ` ${staleChip()}` : ''}</p>
-<p class="why">${esc(s.pack.reason)}</p>
+<p id="qty-why" class="why">${esc(s.pack.reason)}</p>
 ${provLines(s.nadac.records)}</section>`;
   }
   const p = s.pack;
@@ -531,8 +557,20 @@ ${isMissing(s.reference) && showsMedicare(s) ? `<li>${honestyLine('not-your-pric
   };
 }
 
-/** A short summary of the figures for the card's status region, read out after a change. */
-function statusText(s, refPack) {
+/**
+ * Why the quantity gives no pack total, when that is the quantity's fault and not the units'.
+ * The same sentence the card shows, so the field and the status can say it too.
+ */
+function quantityFault(s, qty) {
+  if (!isMissing(s.pack)) return null;
+  return qty === '' || quantityProblem(qty) ? s.pack.reason : null;
+}
+
+/**
+ * A short summary of the figures for the card's status region, read out after a change. It names
+ * the drug, so it can never be heard as the price of another one, and starts with what is wrong.
+ */
+function statusText(s, refPack, fault) {
   const bits = [];
   if (!isMissing(s.pack)) bits.push(`At ${formatCount(s.pack.qty)} ${unitWords(s.unit)}: pharmacy pays ${moneyRange(s.pack.min, s.pack.max, s.pack.same)}`);
   else bits.push(`Pharmacy pays ${unitGroups(s.nadac_by_unit)}`);
@@ -542,7 +580,7 @@ function statusText(s, refPack) {
   } else bits.push('Medicare: we don’t know yet');
   if (!isMissing(s.cost_plus)) bits.push(`cost-plus estimate ${moneyRange(s.cost_plus.min, s.cost_plus.max, s.cost_plus.same)}, estimated`);
   if (!isMissing(s.spread)) bits.push(`spread ${multipleRange(s.spread.range)}, ${s.spread.state}${s.spread.extreme ? `. ${s.spread.sentence}` : ''}`);
-  return `${bits.join('; ')}.`;
+  return `${s.name}. ${fault ? `${fault} ` : ''}${bits.join('; ')}.`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -560,7 +598,7 @@ function recordHtml(title, rec, inputs) {
     ? `${esc(rec.source_name)} <span class="mono">${esc(rec.source_url)}</span>`
     : /^https:\/\//.test(href)
       ? `<a href="${esc(href)}" target="_blank" rel="noopener">${esc(rec.source_name)}</a>`
-      : `<a href="${esc(href)}">${esc(rec.source_name)}</a>`;
+      : `<a href="${esc(siteHref(href))}">${esc(rec.source_name)}</a>`;
   const rows = [
     ['Value', esc(rec.kind === 'ratio' ? formatSpreadMultiple(rec.value) : formatValue(rec))],
     ['Kind', esc(rec.kind)],
@@ -588,7 +626,13 @@ function recordGroup(title, recs, inputsOf) {
     seen.add(k);
     return true;
   });
-  return list.map((r, i) => recordHtml(list.length > 1 ? `${title} (${i + 1} of ${list.length})` : title, r, inputsOf ? inputsOf(r) : null)).join('');
+  const one = (r, i) => recordHtml(list.length > 1 ? `${title} (${i + 1} of ${list.length})` : title, r, inputsOf ? inputsOf(r) : null);
+  if (list.length === 1) return one(list[0], 0);
+  // The rest wait behind a summary: a group can hold four records of a thousand pixels each.
+  return `${one(list[0], 0)}<details class="rec-more" data-key="${esc(title)}"><summary>${esc(title)}: ${list.length - 1} more</summary>${list
+    .slice(1)
+    .map((r, i) => one(r, i + 1))
+    .join('')}</details>`;
 }
 
 /** Map each calculated record of the per-NDC results to inputDates() of its own inputs. */
@@ -654,7 +698,12 @@ function routeFromProduct(row) {
   return `<p class="route-from"><span class="k">Route for the Part D match:</span> ${esc(d.route)}. The FDA NDC Directory does not list this NDC as a package of its own${within}. Its route was taken from FDA’s record for the same product${record}. ${esc(d.brand_name)} is a Part D name CMS marks with * (one average over several routes), which only NDCs on the route its NDCs share point at.</p>`;
 }
 
-function ndcItem(x) {
+/** One row's NADAC price, chip and date: the same line in the panel and in "Your NDC". */
+function nadacLine(row) {
+  return `<span class="k">NADAC:</span> ${esc(unitPrice(row.nadac))} ${chip(row.nadac.state)} <span class="mono">eff. ${esc(row.nadac.effective_date)}</span>`;
+}
+
+function ndcItem(x, yours) {
   const row = x.row;
   const id = row.identity;
   const codes = (row.explanation_codes || [])
@@ -675,17 +724,19 @@ function ndcItem(x) {
           .join(' · '),
       )}</p>`;
   const g = row.generic_nadac;
-  return `<li class="ndc" id="ndc-${esc(row.ndc)}">
-<h4 class="ndc-id mono">NDC ${esc(showNdc(row.ndc))}</h4>
+  // Closed unless it is the reader's own: a product can have 70 of these (decision 54).
+  return `<li class="ndc" id="ndc-${esc(row.ndc)}"><details class="ndc-more" data-key="${esc(row.ndc)}"${yours ? ' open' : ''}>
+<summary><h4 class="ndc-id mono">NDC ${esc(showNdc(row.ndc))}</h4>${id && id.labeler ? `<span class="ndc-labeler">${esc(id.labeler)}</span>` : ''}</summary>
+<div class="ndc-body">
 ${id ? `<p>${esc([id.proprietary_name, id.nonproprietary_name, id.dosage_form, id.route, id.strength].filter(Boolean).join(' · '))}</p><p><span class="k">Labeler:</span> ${esc(id.labeler)}</p><p><span class="k">Package:</span> ${esc(id.package_description)}</p>` : '<p>The FDA NDC Directory file used for this build does not list this NDC as a package of its own with a product record, so OpenBill has no FDA name or package description for it.</p>'}
 ${routeFromProduct(row)}
-<p><span class="k">NADAC:</span> ${esc(unitPrice(row.nadac))} ${chip(row.nadac.state)} <span class="mono">eff. ${esc(row.nadac.effective_date)}</span>${row.carried_forward ? ' · carried forward from the previous file' : ''}</p>
+<p>${nadacLine(row)}${row.carried_forward ? ' · carried forward from the previous file' : ''}</p>
 ${g ? `<p><span class="k">Generic equivalent’s NADAC (a different product):</span> ${esc(unitPrice(g))} ${chip(g.state)} <span class="mono">${esc(`${g.source_name} · eff. ${g.effective_date}`)}</span></p>` : ''}
 <p><span class="k">Rate class:</span> ${esc(row.rate_class)} · <span class="k">OTC:</span> ${row.otc ? 'yes' : 'no'}</p>
 ${codes ? `<p class="k">NADAC explanation codes:</p><ul class="codes">${codes}</ul>` : ''}
 ${ref}
 ${sp}
-</li>`;
+</div></details></li>`;
 }
 
 function panelHtml(s, refPack) {
@@ -712,10 +763,12 @@ function panelHtml(s, refPack) {
     if (refPack) parts.push(recordGroup(`${s.reference.label}: pack total`, refPack.same ? [refPack.min] : [refPack.min, refPack.max], () => s.reference.inputs));
     parts.push(recordGroup(`${s.reference.label} per unit`, s.reference.range.records, inputsOf));
     if (s.reference.without.length) {
+      const list = `<ul>${s.reference.without.map((w) => `<li><span class="mono">${esc(showNdc(w.ndc))}</span> ${esc(w.reason)}</li>`).join('')}</ul>`;
+      const count = s.reference.without.length;
       parts.push(
-        `<div class="rec rec-missing"><h4 class="rec-title">NDCs without this Medicare figure</h4><ul>${s.reference.without
-          .map((w) => `<li><span class="mono">${esc(showNdc(w.ndc))}</span> ${esc(w.reason)}</li>`)
-          .join('')}</ul></div>`,
+        `<div class="rec rec-missing"><h4 class="rec-title">NDCs without this Medicare figure</h4>${
+          count > 3 ? `<details class="rec-more" data-key="NDCs without"><summary>${esc(formatCount(count))} NDCs, each with its reason</summary>${list}</details>` : list
+        }</div>`,
       );
     }
   }
@@ -761,12 +814,13 @@ function panelHtml(s, refPack) {
   }
 
   parts.push(`<h3>Each NDC (${esc(formatCount(s.per_ndc.length))})</h3>`);
-  parts.push(`<ol class="ndc-list">${s.per_ndc.map(ndcItem).join('')}</ol>`);
+  const yours = app.current && app.current.ndc && app.current.ndc.row ? app.current.ndc.ndc : null;
+  parts.push(`<ol class="ndc-list">${s.per_ndc.map((x) => ndcItem(x, x.row.ndc === yours)).join('')}</ol>`);
 
   parts.push('<h3>Rules applied</h3>');
   parts.push(
     `<ul class="rules">${rulesApplied(s)
-      .map((r) => `<li><a href="methodology.html#${esc(r.id)}">${esc(r.title)}</a><p class="mono">${esc(r.formula)}</p></li>`)
+      .map((r) => `<li><a href="${esc(siteHref(`methodology.html#${r.id}`))}">${esc(r.title)}</a><p class="mono">${esc(r.formula)}</p></li>`)
       .join('')}</ul>`,
   );
   return parts.join('\n');
@@ -780,6 +834,21 @@ function qtyChips(s) {
   return s.default_quantity.chips.map(String);
 }
 
+/** A crafted quantity longer than any usable one does not go into the box. */
+function qtyBoxValue(qty) {
+  return qty.length > QTY_MAX_CHARS ? '' : qty;
+}
+
+/** Ties the reason to the field: invalid while the typed quantity is unusable, cleared when it is not. */
+function syncQtyField(qty, fault) {
+  const input = $('qty');
+  if (!input) return;
+  if (fault) input.setAttribute('aria-describedby', 'qty-why');
+  else input.removeAttribute('aria-describedby');
+  if (fault && qty !== '') input.setAttribute('aria-invalid', 'true');
+  else input.removeAttribute('aria-invalid');
+}
+
 function qtyControls(s, qty) {
   const unit = s.unit || 'units';
   const offered = qtyChips(s);
@@ -789,7 +858,7 @@ function qtyControls(s, qty) {
     : '';
   return `<div class="qty" role="group" aria-labelledby="qty-label">
 <span id="qty-label" class="qty-label">Quantity</span>
-${chips}<label class="qty-field${isChip ? ' qty-field-quiet' : ''}"><span class="visually-hidden">Other quantity</span><input id="qty" class="qty-input" type="number" inputmode="decimal" min="0.001" max="9999" step="any" value="${esc(qty)}" aria-label="${esc(`Quantity in ${unitWords(unit)}`)}"><span id="qty-unit" class="qty-unit">${esc(unitWords(s.unit))}</span></label>
+${chips}<label class="qty-field${isChip ? ' qty-field-quiet' : ''}"><span class="visually-hidden">Other quantity</span><input id="qty" class="qty-input" type="number" inputmode="decimal" min="0.001" max="9999" step="any" value="${esc(qtyBoxValue(qty))}" aria-label="${esc(`Quantity in ${unitWords(unit)}`)}"><span id="qty-unit" class="qty-unit">${esc(unitWords(s.unit))}</span></label>
 </div>`;
 }
 
@@ -838,11 +907,12 @@ function paidInvalid(text) {
 
 function paidControls(s) {
   const c = app.current;
+  app.paidShown = paidResultHtml(s);
   return `<section class="paid" aria-labelledby="paid-label">
 <label id="paid-label" class="paid-label" for="paid">What were you charged?</label>
 <p id="paid-hint" class="paid-hint">${esc(PAID_HINT)}</p>
 <div class="paid-field"><span class="paid-cur" aria-hidden="true">$</span><input id="paid" class="paid-input" type="text" inputmode="decimal" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="24" aria-describedby="paid-hint paid-result" aria-invalid="${paidInvalid(c.paid) ? 'true' : 'false'}" value="${esc(c.paid || '')}"></div>
-<div id="paid-result" class="paid-result" aria-live="polite" aria-atomic="true">${paidResultHtml(s)}</div>
+<div id="paid-result" class="paid-result" aria-live="polite" aria-atomic="true">${app.paidShown}</div>
 </section>`;
 }
 
@@ -850,7 +920,13 @@ function renderPaid() {
   const c = app.current;
   const box = $('paid-result');
   if (!c || !box || !c.summary) return;
-  box.innerHTML = paidResultHtml(c.summary);
+  const html = paidResultHtml(c.summary);
+  box.removeAttribute('aria-busy');
+  // A live region: writing the same words again would read them out again.
+  if (html !== app.paidShown) {
+    box.innerHTML = html;
+    app.paidShown = html;
+  }
   const input = $('paid');
   if (input) input.setAttribute('aria-invalid', paidInvalid(c.paid) ? 'true' : 'false');
 }
@@ -904,76 +980,212 @@ function headHtml(s) {
 </header>`;
 }
 
-function renderCard({ focus = false } = {}) {
+/** Moves focus to the card's heading; the page scrolls to the card unless `scroll` is false. */
+function focusTitle({ scroll = true } = {}) {
+  const h = $('card-title');
+  if (!h) return;
+  h.focus({ preventScroll: true });
+  if (scroll) $('card').scrollIntoView({ block: 'start' });
+}
+
+function writeStatus(text) {
+  const st = $('card-status');
+  if (st && st.textContent !== text) st.textContent = text;
+}
+
+/**
+ * Before the card shows something else: nothing still queued for the last one may be read out
+ * over the new heading, and what was said about it must not stay to be found by reading on.
+ */
+function dropAnnouncements() {
+  clearTimeout(app.announce);
+  clearTimeout(app.paidTimer);
+  writeStatus('');
+}
+
+function markCardShown() {
+  const card = $('card');
+  card.classList.remove('card-pending');
+  card.setAttribute('aria-busy', 'false');
+  app.shown = true;
+}
+
+/** Builds the panel for the current figures, if it does not already show them. */
+function fillPanel() {
+  const c = app.current;
+  const body = $('panel-body');
+  if (!c || !c.summary || !body || app.panelFor === c.summary) return;
+  const open = [...body.querySelectorAll('details[open]')].map((d) => d.dataset.key);
+  body.innerHTML = panelHtml(c.summary, referencePack(c.summary));
+  for (const d of body.querySelectorAll('details')) if (open.includes(d.dataset.key)) d.open = true;
+  app.panelFor = c.summary;
+}
+
+/** Open the panel at one NDC, for the "Your NDC" line and a #ndc- anchor. */
+function revealNdc(ndc) {
+  const panel = $('panel');
+  if (!panel) return;
+  fillPanel();
+  panel.open = true;
+  const item = $(`ndc-${ndc}`);
+  if (!item) return;
+  item.querySelector('details').open = true;
+  item.scrollIntoView();
+  item.querySelector('summary').focus({ preventScroll: true });
+}
+
+/**
+ * What the address's &ndc= says about this product, or null with none. It is untrusted text: only
+ * a real NDC of this product, or of another package of the same labeler and product, stays. Anything
+ * else is dropped with a sentence (note) that shows at most clipText() of it.
+ */
+function linkNdc(raw, product) {
+  if (raw === null || raw === undefined || raw.trim() === '') return null;
+  const ndc = normalizeNdc(raw);
+  const dropped = (note) => ({ ndc: null, row: null, others: [], note });
+  if (!ndc) return dropped(`The NDC in this link, “${clipText(raw.trim())}”, could not be read, so it was left out.`);
+  const row = product.rows.find((r) => r.ndc === ndc);
+  if (row) return { ndc, row, others: [], note: null };
+  const others = product.rows.filter((r) => r.ndc.slice(0, 9) === ndc.slice(0, 9));
+  if (others.length) return { ndc, row: null, others, note: null };
+  return dropped(`NDC ${showNdc(ndc)} in this link is not a package of this drug, so it was left out.`);
+}
+
+function packageLines(row) {
+  const id = row.identity;
+  const words = id ? [id.labeler, id.package_description].filter(Boolean).join(' · ') : '';
+  return `${words ? `<p>${esc(words)}</p>` : ''}<p>${nadacLine(row)}</p>`;
+}
+
+/** The NDC the reader came with, above the figures for the product as a whole (decision 54). */
+function yourNdcHtml(entered) {
+  if (!entered) return '';
+  if (entered.note) return `<p id="your-ndc" class="your-ndc">${esc(entered.note)}</p>`;
+  const title = `<p class="your-ndc-title"><span class="k">Your NDC:</span> <span class="mono">${esc(showNdc(entered.ndc))}</span></p>`;
+  if (entered.row) {
+    return `<div id="your-ndc" class="your-ndc">${title}${packageLines(entered.row)}<button type="button" class="your-ndc-more" data-ndc="${esc(entered.ndc)}">Show this NDC in Sources and method</button></div>`;
+  }
+  const [nearest] = entered.others;
+  const more = entered.others.length - 1;
+  return `<div id="your-ndc" class="your-ndc">${title}<p>This NDC is not in the NADAC file. NADAC prices each NDC separately, and it lists this labeler’s same product in a different package. This price is for that package, not yours:</p><p class="mono">NDC ${esc(showNdc(nearest.ndc))}</p>${packageLines(nearest)}${
+    more ? `<p>${esc(formatCount(more))} more of this labeler’s package${more === 1 ? ' is' : 's are'} in Sources and method.</p>` : ''
+  }<button type="button" class="your-ndc-more" data-ndc="${esc(nearest.ndc)}">Show that NDC in Sources and method</button></div>`;
+}
+
+function renderCard({ focus = false, scroll = true } = {}) {
   const card = $('card');
   const { product, qty } = app.current;
   const s = summarizeProduct(product.rows, qty === '' ? undefined : qty, { partDContext: app.partDContext });
   app.current.summary = s;
   const f = figuresHtml(s);
   const share = pageUrl(product.name);
+  dropAnnouncements();
   card.innerHTML = `${headHtml(s)}
+${yourNdcHtml(app.current.ndc)}
 <div id="figures" class="figures">${f.html}</div>
 ${qtyControls(s, qty)}
 ${paidControls(s)}
 <div id="after" class="after">${f.after}</div>
 <div class="card-foot">
 ${share ? `<a id="share" class="share" href="${esc(share)}" target="_blank" rel="noopener">Shareable page</a>\n` : ''}<a id="report" class="report" href="${esc(f.report)}" target="_blank" rel="noopener">Wrong? Tell us</a>
-<details id="panel" class="panel"><summary>Sources and method</summary><div id="panel-body" class="panel-body">${panelHtml(s, f.refPack)}</div></details>
+<details id="panel" class="panel"><summary>Sources and method</summary><div id="panel-body" class="panel-body"></div></details>
 </div>`;
-  card.setAttribute('aria-busy', 'false');
+  app.panelFor = null;
+  syncQtyField(qty, quantityFault(s, qty));
+  markCardShown();
   document.title = `${s.name}: OpenBill`;
-  if (focus) {
-    const h = $('card-title');
-    h.focus({ preventScroll: true });
-    card.scrollIntoView({ block: 'start' });
-  }
+  if (focus) focusTitle({ scroll });
 }
 
-/** Re-render the figures and the panel for a new quantity, keeping the quantity box as it is. */
+/** Re-render the figures for a new quantity, keeping the quantity box as it is. */
 function renderFigures() {
   const { product, qty } = app.current;
   const s = summarizeProduct(product.rows, qty === '' ? undefined : qty, { partDContext: app.partDContext });
   app.current.summary = s;
   const f = figuresHtml(s);
+  const fault = quantityFault(s, qty);
   $('figures').innerHTML = f.html;
-  renderPaid();
   $('after').innerHTML = f.after;
-  $('panel-body').innerHTML = panelHtml(s, f.refPack);
+  // A closed panel is built when it opens: writing it here cost more than the figures themselves
+  // on a product with many NDCs.
+  if ($('panel').open) fillPanel();
   $('report').setAttribute('href', f.report);
   for (const b of document.querySelectorAll('.qty-chip')) b.setAttribute('aria-pressed', b.dataset.qty === qty ? 'true' : 'false');
   const field = document.querySelector('.qty-field');
   if (field) field.classList.toggle('qty-field-quiet', qtyChips(s).includes(qty));
-  // Say what changed, once typing pauses (WCAG 4.1.3: status messages).
+  syncQtyField(qty, fault);
+  // Say what changed, once typing pauses (WCAG 4.1.3: status messages). The paid result is a live
+  // region too, so it waits for the same pause; until then it is marked as out of date.
+  const paidBox = $('paid-result');
+  if (paidBox && paidResultHtml(s) !== app.paidShown) paidBox.setAttribute('aria-busy', 'true');
   clearTimeout(app.announce);
-  const text = statusText(s, f.refPack);
+  const text = statusText(s, f.refPack, fault);
   app.announce = setTimeout(() => {
-    const st = $('card-status');
-    if (st) st.textContent = text;
+    renderPaid();
+    writeStatus(text);
   }, 500);
 }
 
 function renderMessage(title, html) {
   const card = $('card');
+  dropAnnouncements();
   card.innerHTML = `<header class="card-head"><h1 id="card-title" class="card-title" tabindex="-1">${esc(title)}</h1></header>
 <div class="card-message">${html}</div>`;
-  card.setAttribute('aria-busy', 'false');
+  markCardShown();
+  document.title = `${title}: OpenBill`;
 }
 
-function renderFromHash({ focus = false } = {}) {
-  const h = readHash();
-  if (h.error) {
+function defaultCardLink(words) {
+  return `<a href="${esc(hashFor(app.build.default.drug, app.build.default.qty))}">${esc(words)} ${esc(app.build.default.drug)}</a>`;
+}
+
+/**
+ * A link's unknown name goes in the search box, unless the reader is typing there.
+ * @returns {boolean} whether it did
+ */
+function prefillSearch(text) {
+  const input = $('q');
+  const typed = input.value.trim() !== '' && (!app.index || document.activeElement === input);
+  if (typed && input.value !== app.missQuery) return false;
+  input.value = String(text).slice(0, QUERY_MAX_CHARS);
+  app.missQuery = input.value;
+  runSearch(input.value);
+  return true;
+}
+
+function routeHash(focus) {
+  let h = readHash();
+  if (h.kind === 'anchor') {
+    const skipTarget = h.anchor === 'card';
+    if (app.shown) {
+      // Not addressed to this page's state: the card stays, and the address goes back to naming
+      // it, so a reload or a shared link still opens the same card.
+      if (app.current) replaceHash(currentHash());
+      if (skipTarget) focusTitle();
+      const entry = /^ndc-(\d{11})$/.exec(h.anchor || '');
+      if (entry && app.current && app.current.product.ndcs.includes(entry[1])) revealNdc(entry[1]);
+      return;
+    }
+    h = defaultRoute();
+    // Opening at #card, as after a reload: land where the skip link would, unless the reader has
+    // already gone somewhere.
+    if (skipTarget && document.activeElement === document.body) focus = true;
+  }
+  if (h.kind === 'bad') {
     app.current = null;
-    renderMessage('That link does not name a drug', `<p>${esc(h.error)}</p><p><a href="${esc(hashFor(app.build.default.drug, app.build.default.qty))}">Open ${esc(app.build.default.drug)}</a> or search above.</p>`);
+    renderMessage('That link does not name a drug', `<p>${esc(h.problem)}</p><p>${defaultCardLink('Open')} or search above.</p>`);
+    if (focus) focusTitle();
     return;
   }
-  const product = app.byName.get(h.drug);
+  const product = findProduct(h.drug);
   if (!product) {
     app.current = null;
+    const filled = prefillSearch(h.drug);
     renderMessage(
       'No drug by that name',
-      `<p>This week’s NADAC file has no product named “${esc(h.drug)}”. NADAC names change when CMS updates a description, so an old link can stop working.</p><p>Search for it above, or <a href="${esc(hashFor(app.build.default.drug, app.build.default.qty))}">open ${esc(app.build.default.drug)}</a>.</p>`,
+      `<p>This week’s NADAC file has no product named “${esc(clipText(h.drug))}”. NADAC names change when CMS updates a description, so an old link can stop working.</p><p>${filled ? 'That name is in the search box above' : 'Search for it above'}, or ${defaultCardLink('open')}.</p>`,
     );
-    if (focus) $('card-title').focus();
+    if (focus) focusTitle();
     return;
   }
   let qty = h.qty;
@@ -983,12 +1195,16 @@ function renderFromHash({ focus = false } = {}) {
   }
   qty = qty.trim();
   const paid = paidFromHash(h.paid);
-  // A link's unusable &paid= is dropped from the address as well as the box.
-  if (paid.note) replaceHash(hashFor(product.name, h.qty, ''));
-  if (app.current && app.current.product === product && $('qty')) {
+  const entered = linkNdc(h.ndc, product);
+  const ndc = entered && entered.ndc;
+  // A link's unusable &paid= or &ndc= is dropped from the address as well as the box, and a name or
+  // an NDC spelled another way (or with no drug= before it) is written the way the page writes it.
+  if (paid.note || h.drug !== product.name || h.bare || (typeof h.ndc === 'string' && h.ndc !== ndc)) replaceHash(hashFor(product.name, h.qty, paid.paid, ndc));
+  const held = app.current && app.current.product === product ? app.current.ndc : null;
+  if (app.current && app.current.product === product && $('qty') && ((held && held.ndc) || null) === (ndc || null) && !(entered && entered.note)) {
     app.current.qty = qty;
     const input = $('qty');
-    if (document.activeElement !== input) input.value = qty;
+    if (document.activeElement !== input) input.value = qtyBoxValue(qty);
     const box = $('paid');
     if (box && document.activeElement !== box && paidForHash(app.current.paid) !== paid.paid) {
       app.current.paid = paid.paid;
@@ -996,10 +1212,25 @@ function renderFromHash({ focus = false } = {}) {
     }
     app.current.paidNote = paid.note;
     renderFigures();
+    // Back, Forward or a followed link to this drug at another quantity; never from under a reader
+    // typing in the card's own boxes (an old browser can reach here from their typing).
+    if (focus && document.activeElement !== input && document.activeElement !== box) focusTitle({ scroll: !h.home });
     return;
   }
-  app.current = { product, qty, paid: paid.paid, paidNote: paid.note, summary: null };
-  renderCard({ focus });
+  app.current = { product, qty, paid: paid.paid, paidNote: paid.note, ndc: entered, summary: null };
+  renderCard({ focus, scroll: !h.home });
+}
+
+function renderFromHash({ focus = false } = {}) {
+  // An address is untrusted text. If the core ever threw on one, that must cost only this card:
+  // the search box and the other cards still work, and the reader gets a sentence, not an error.
+  try {
+    routeHash(focus);
+  } catch {
+    app.current = null;
+    renderMessage('That link could not be opened', `<p>Something in the address after # could not be read.</p><p>${defaultCardLink('Open')} or search above.</p>`);
+    if (focus) focusTitle();
+  }
 }
 
 function summaryWithoutQty(product) {
@@ -1029,11 +1260,11 @@ function setQty(qty) {
   if (replaceHash(currentHash())) renderFigures();
 }
 
-function openProduct(name, { qty } = {}) {
+function openProduct(name, { qty, ndc } = {}) {
   const product = app.byName.get(name);
   if (!product) return;
   const q = qty === undefined ? String(summaryWithoutQty(product).default_quantity.qty) : String(qty);
-  const hash = hashFor(name, q);
+  const hash = hashFor(name, q, '', ndc);
   clearResults();
   if (location.hash === hash) {
     app.current = null;
@@ -1050,85 +1281,209 @@ function clearResults() {
   $('results').innerHTML = '';
   $('search-help').innerHTML = '';
   $('search-status').textContent = '';
-  app.lastResults = [];
+  app.allResults = [];
+  clearTimeout(app.searchTimer);
+}
+
+function listClosed() {
+  return !$('results').firstChild && !$('search-help').firstChild;
+}
+
+/** The line under a result that says how an NDC found it, or which other name did. */
+function resultNote(r, query) {
+  if (r.match === 'ndc-product') return `<span class="result-ndc mono">Labeler and product code ${esc(formatNdcCode(r.code))}</span>`;
+  if (r.match === 'ndc-package') return `<span class="result-ndc mono">A different package: NDC ${esc(showNdc(r.matched))}</span>`;
+  if (r.match === 'ndc') {
+    const printed = r.ambiguous && r.printed ? `, printed ${r.printed} by FDA` : '';
+    return `<span class="result-ndc mono">${r.guess ? 'Read as NDC' : 'NDC'} ${esc(showNdc(r.matched))}${esc(printed)}${r.guess ? '; check your label' : ''}</span>`;
+  }
+  if (r.match === 'partial') return `<span class="result-via result-partial">Partial match${r.own ? '' : `: “${esc(r.matched)}”`}</span>`;
+  // Say which name matched only when the product's own name does not already show the query.
+  const q = normalizeQuery(query);
+  const own = normalizeQuery(r.product.name);
+  return r.matched && r.matched !== r.product.name && !(q && own.includes(q)) ? `<span class="result-via">matched “${esc(r.matched)}”</span>` : '';
 }
 
 function resultItem(r, query) {
   const p = resultPrices(r.product);
-  const ndcNote = r.match === 'ndc' ? `<span class="result-ndc mono">NDC ${esc(showNdc(r.matched))}</span>` : '';
-  // Say which name matched only when the product's own name does not already show the query.
-  const q = normalizeQuery(query);
-  const own = normalizeQuery(r.product.name);
-  const via = r.match !== 'ndc' && r.matched && r.matched !== r.product.name && !(q && own.includes(q)) ? `<span class="result-via">matched “${esc(r.matched)}”</span>` : '';
-  return `<li><button type="button" class="result" data-name="${esc(r.product.name)}">
+  return `<li><button type="button" class="result" data-name="${esc(r.product.name)}"${r.entered ? ` data-ndc="${esc(r.entered)}"` : ''}>
 <span class="result-name">${esc(r.product.name)}</span>
 <span class="result-meta"><span class="result-price mono">NADAC ${esc(p.text)}</span> ${chip(p.state)}</span>
-${ndcNote}${via}
+${resultNote(r, query)}
 </button></li>`;
 }
 
+/** While the data loads, the box already takes typing; this says when it will be used. */
+function showSearchWait() {
+  const status = $('search-status');
+  if (status.textContent !== SEARCH_WAIT) status.textContent = SEARCH_WAIT;
+}
+
+/** What the list above the results says: how many, and what Enter will do. */
+function listStatus(all, shown, said, choice) {
+  const n = all.length;
+  const top = all[0];
+  if (top.guess) return `A 12-digit number is not an NDC. Read as one, it could be ${n === 1 ? 'this drug' : 'any of these'}; check the NDC printed on your label.`;
+  if (top.match === 'ndc-package') {
+    const tried = [...new Set(all.map((r) => r.entered))].map(showNdc).join(' or ');
+    return `No package in the NADAC file has NDC ${tried}. ${n === 1 ? 'This is' : 'These are'} the same labeler’s product in a different package, and NADAC prices each NDC separately.`;
+  }
+  if (top.match === 'ndc' && top.ambiguous) return `Without hyphens, this number could be ${n === 2 ? 'either' : 'any'} of these ${n} drugs. Check the hyphens on your label, or choose one.`;
+  if (all.every((r) => r.match === 'partial')) return `No drug is named “${said}”. ${n === 1 ? 'This is a partial match' : 'These are partial matches'}; check the spelling.`;
+  const many = n >= COUNT_LIMIT ? `${formatCount(COUNT_LIMIT)} or more` : formatCount(n);
+  const count = `${many} drug${n === 1 ? '' : 's'} match${n === 1 ? 'es' : ''} “${said}”.`;
+  if (choice) return n === 1 ? `${count} Press Enter to open it.` : `${count} Press Enter to open ${choice.product.name}.`;
+  if (n > shown) return `${count} Showing the first ${shown}; choose one, or type more to narrow it down.`;
+  return `${count} ${n === 1 ? 'Open it from the list if it is the one you mean.' : 'Choose one from the list.'}`;
+}
+
+/** What Enter would open just now: nothing, once a result has been opened from this same text. */
+function enterTarget(text) {
+  return text === app.pickedQuery ? null : enterChoice(app.allResults);
+}
+
 function runSearch(query) {
-  const q = String(query || '');
+  const q = String(query || '').slice(0, QUERY_MAX_CHARS);
+  if (!app.index) {
+    showSearchWait();
+    return;
+  }
   if (!q.trim()) {
     clearResults();
     return;
   }
-  if (!app.index) return;
+  clearTimeout(app.searchTimer);
+  const said = clipText(q.trim());
+  // Results for a link's unknown name are shown before the card; they say why they are there.
+  const miss = q === app.missQuery ? 'No drug by that name. ' : '';
   const all = search(app.index, q, { limit: COUNT_LIMIT });
   const shown = all.slice(0, RESULT_LIMIT);
-  app.lastResults = shown;
+  app.allResults = all;
   $('results').innerHTML = shown.map((r) => resultItem(r, q)).join('');
   if (all.length) {
-    const many = all.length >= COUNT_LIMIT ? `${formatCount(COUNT_LIMIT)} or more` : formatCount(all.length);
-    $('search-status').textContent =
-      all.length > shown.length
-        ? `${many} drugs match “${q.trim()}”. Showing the first ${shown.length}; type more to narrow it down.`
-        : `${many} drug${all.length === 1 ? '' : 's'} match${all.length === 1 ? 'es' : ''} “${q.trim()}”. Press Enter to open the first.`;
+    $('search-status').textContent = miss + listStatus(all, shown.length, said, enterTarget(q));
     $('search-help').innerHTML = '';
     return;
   }
   const ideas = suggest(app.index, q);
-  const ndc = looksLikeNdc(q);
-  const tried = ndc ? ndcCandidates(q).map(showNdc) : [];
+  const read = readNdc(q);
+  const tried = read && read.kind === 'package' && !read.guess ? read.ndcs.map(showNdc) : [];
+  const codes = read && read.kind === 'product' ? read.codes.map(formatNdcCode) : [];
   // The status region is read out: it carries the suggestion and the NDC explanation too.
-  const said = [`No drug matches “${q.trim()}”.`];
-  if (ideas.length) said.push(`Did you mean ${ideas.map((i) => i.query).join(' or ')}?`);
-  if (ndc && tried.length) said.push(`No product in this week’s NADAC file has NDC ${tried.join(' or ')}.`);
-  $('search-status').textContent = said.join(' ');
+  const parts = [`No drug matches “${said}”.`];
+  if (ideas.length) parts.push(`Did you mean ${ideas.map((i) => i.query).join(' or ')}?`);
+  if (tried.length) parts.push(`No product in the NADAC file has NDC ${tried.join(' or ')}.`);
+  if (codes.length) parts.push(`No product in the NADAC file has labeler and product code ${codes.join(' or ')}.`);
+  if (read && read.guess) parts.push('A 12-digit number is not an NDC.');
+  $('search-status').textContent = parts.join(' ');
   $('search-help').innerHTML = `${
     ideas.length
       ? `<p>Did you mean ${ideas.map((i) => `<button type="button" class="suggest" data-query="${esc(i.query)}">${esc(i.query)}</button>`).join(' or ')}?</p>`
       : ''
-  }${ndc && tried.length ? `<p>No product in this week’s NADAC file has NDC ${esc(tried.join(' or '))}. NADAC covers drugs its pharmacy survey prices; many NDCs are not in it.</p>` : ''}
+  }${read ? '<p>NADAC covers what its pharmacy survey prices, and most packages on FDA’s list of prescription drugs are not in it.</p>' : ''}
 <p class="hint">Try the generic name (for example “metformin” rather than a brand), fewer words, or the 10- or 11-digit NDC printed on the label.</p>`;
+}
+
+function openResult(name, ndc) {
+  app.pickedQuery = $('q').value;
+  openProduct(name, { ndc: ndc || undefined });
+}
+
+/**
+ * Enter in #q, or Enter from before the index was ready (decision 54). It opens only what
+ * enterChoice() allows. Otherwise it stays: a plain list takes the focus, so the next Enter is a
+ * choice the reader can see; a list that needs reading first leaves the focus on the words typed.
+ */
+function enterInSearch() {
+  const input = $('q');
+  runSearch(input.value);
+  const choice = enterTarget(input.value);
+  if (choice) {
+    openResult(choice.product.name, choice.entered);
+    return;
+  }
+  const top = app.allResults[0];
+  if (!top || top.match === 'partial' || top.match === 'ndc-package' || top.guess || (top.match === 'ndc' && top.ambiguous)) return;
+  $('results').querySelector('button.result').focus();
 }
 
 // ---------------------------------------------------------------------------------------------
 // Events and startup
 
+/**
+ * Bound before the data is unpacked: the box takes typing from the moment it is painted, and the
+ * skip link and the card's events work whenever the card arrives.
+ */
 function bind() {
   const input = $('q');
-  let timer = null;
+  // Coming back to the box with text in it, the list comes back too.
+  const reopen = () => {
+    if (app.index && input.value.trim() && listClosed()) runSearch(input.value);
+  };
+  input.addEventListener('focus', () => {
+    if (!app.index) showSearchWait();
+    reopen();
+  });
+  input.addEventListener('click', reopen);
+  // Typed before this script ran, while the page was still arriving.
+  if (input.value.trim() || document.activeElement === input) showSearchWait();
   input.addEventListener('input', () => {
-    clearTimeout(timer);
+    clearTimeout(app.searchTimer);
+    app.missQuery = null;
+    app.pickedQuery = null;
     // One or two letters match most of the list; wait a little longer before searching them.
     const wait = input.value.trim().length <= 2 ? 200 : 60;
-    timer = setTimeout(() => runSearch(input.value), wait);
+    app.searchTimer = setTimeout(() => runSearch(input.value), wait);
   });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      clearTimeout(timer);
-      runSearch(input.value);
-      if (app.lastResults && app.lastResults.length) openProduct(app.lastResults[0].product.name);
+      clearTimeout(app.searchTimer);
+      if (!app.index) {
+        app.enterWaiting = true;
+        showSearchWait();
+        return;
+      }
+      enterInSearch();
     } else if (e.key === 'Escape') {
       clearResults();
+    } else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && app.index && input.value.trim()) {
+      reopen();
+      const buttons = $('results').querySelectorAll('button.result');
+      if (!buttons.length) return;
+      e.preventDefault();
+      buttons[e.key === 'ArrowDown' ? 0 : buttons.length - 1].focus();
     }
   });
   $('results').addEventListener('click', (e) => {
     const b = e.target.closest('button.result');
-    if (b) openProduct(b.dataset.name);
+    if (b) openResult(b.dataset.name, b.dataset.ndc);
   });
+  $('results').addEventListener('keydown', (e) => {
+    const b = e.target.closest('button.result');
+    if (!b) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const li = b.parentElement;
+      const next = e.key === 'ArrowDown' ? li.nextElementSibling : li.previousElementSibling;
+      if (next) next.firstElementChild.focus();
+      else if (e.key === 'ArrowUp') input.focus();
+    } else if (e.key === 'Escape') {
+      // In this order, or the box's focus would bring the list straight back.
+      input.focus();
+      clearResults();
+    } else if ((e.key.length === 1 && e.key !== ' ' && !e.ctrlKey && !e.metaKey && !e.altKey) || e.key === 'Backspace') {
+      // Typing goes on where it belongs; the box takes this key.
+      input.focus();
+    }
+  });
+  // Outside the search section the list closes. iOS only reports a tap on plain text to a listener
+  // below <body>, so the listener sits on each of its children as well as on the document.
+  const closeOutside = (e) => {
+    if (app.index && !e.target.closest('.search')) clearResults();
+  };
+  document.addEventListener('click', closeOutside);
+  for (const el of document.body.children) el.addEventListener('click', closeOutside);
   $('search-help').addEventListener('click', (e) => {
     const b = e.target.closest('button.suggest');
     if (!b) return;
@@ -1136,7 +1491,38 @@ function bind() {
     runSearch(b.dataset.query);
     input.focus();
   });
+  // The skip link's target is the heading, and the address keeps naming the card (without this
+  // script, the browser's own jump to #card still works).
+  document.querySelector('.skip').addEventListener('click', (e) => {
+    e.preventDefault();
+    focusTitle();
+  });
   const card = $('card');
+  // Built before the panel opens on a click or a key press, so it never paints empty.
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('#panel > summary')) fillPanel();
+    const more = e.target.closest('button.your-ndc-more');
+    if (more) revealNdc(more.dataset.ndc);
+  });
+  // "toggle" does not bubble. This catches the panel opening any other way, as find in page does.
+  card.addEventListener(
+    'toggle',
+    (e) => {
+      if (e.target.id === 'panel' && e.target.open) fillPanel();
+    },
+    true,
+  );
+  // The print stylesheet shows the panel's contents even when it is closed. Each NDC's own details
+  // are opened as well, in the browsers that do not take that from a stylesheet, and put back.
+  window.addEventListener('beforeprint', () => {
+    fillPanel();
+    app.printOpened = [...document.querySelectorAll('#panel-body details:not([open])')];
+    for (const d of app.printOpened) d.open = true;
+  });
+  window.addEventListener('afterprint', () => {
+    for (const d of app.printOpened) d.open = false;
+    app.printOpened = [];
+  });
   card.addEventListener('click', (e) => {
     const b = e.target.closest('button.qty-chip');
     if (!b) return;
@@ -1149,25 +1535,37 @@ function bind() {
     else if (e.target && e.target.id === 'paid') setPaid(e.target.value);
   });
   window.addEventListener('hashchange', () => {
-    const h = readHash();
-    if (!h.error && app.current && h.drug !== app.current.product.name) app.current = null;
+    // Still loading, the first render reads the address itself. After a failed load there is no
+    // card to change.
+    if (app.byName.size === 0) return;
+    if (app.index) clearResults();
     renderFromHash({ focus: true });
   });
 }
 
+/** An error whose message was written for readers. Any other error's words stay out of the card. */
+class PlainError extends Error {}
+
 function renderFatal(err) {
   const card = $('card');
   if (!card) return;
-  const msg = err && err.message ? err.message : String(err);
+  const said = err instanceof PlainError ? err.message : DATA_UNREADABLE;
+  const detail = err && err.message ? err.message : String(err);
   let report = REPO_URL + '/issues/new?template=bug.yml';
   try {
-    report = issueUrl({ template: 'bug.yml', title: 'The page did not load', fields: { what_happened: msg, build_id: app.build ? app.build.build_id : '' } });
+    report = issueUrl({ template: 'bug.yml', title: 'The page did not load', fields: { what_happened: detail, build_id: app.build ? app.build.build_id : '' } });
   } catch {
     // keep the plain link
   }
-  card.innerHTML = `<header class="card-head"><h1 id="card-title" class="card-title">The data did not load</h1></header>
-<div class="card-message"><p>${esc(msg)}</p><p>No figures are shown rather than wrong ones. <a href="${esc(report)}" target="_blank" rel="noopener">Report it</a>.</p></div>`;
-  card.setAttribute('aria-busy', 'false');
+  dropAnnouncements();
+  card.innerHTML = `<header class="card-head"><h1 id="card-title" class="card-title" tabindex="-1">The data did not load</h1></header>
+<div class="card-message" role="alert"><p>${esc(said)}</p><p>No figures are shown rather than wrong ones.</p><p><a href="${esc(AZ_URL)}">Browse every drug A–Z</a> as plain pages on the website, or <a href="${esc(report)}" target="_blank" rel="noopener">report this</a>.</p></div>`;
+  markCardShown();
+  document.title = 'The data did not load: OpenBill';
+  // The search box and the Try links go with the data (styles.css, data-ready="error").
+  document.documentElement.dataset.ready = 'error';
+  const active = document.activeElement;
+  if (!active || active === document.body || active.id === 'q') focusTitle({ scroll: false });
 }
 
 async function sha256Of(buf) {
@@ -1187,10 +1585,10 @@ async function sha256Of(buf) {
 
 async function inflate(descriptor) {
   if (!descriptor || descriptor.format !== INLINE_FORMAT || descriptor.encoding !== 'deflate-raw+base64' || typeof descriptor.data !== 'string') {
-    throw new Error('The inline data block is not in the format this page reads.');
+    throw new PlainError('The inline data block is not in the format this page reads.');
   }
   if (typeof descriptor.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(descriptor.sha256)) {
-    throw new Error('The inline data block has no checksum to check it against, so it is not used.');
+    throw new PlainError('The inline data block has no checksum to check it against, so it is not used.');
   }
   // Chrome and Edge 80 to 102 have DecompressionStream but not its 'deflate-raw' format, and
   // throw a TypeError for it: the reader gets the same plain sentence either way.
@@ -1200,55 +1598,84 @@ async function inflate(descriptor) {
   } catch {
     inflater = null;
   }
-  if (!inflater) throw new Error(CANNOT_UNPACK);
+  if (!inflater) throw new PlainError(CANNOT_UNPACK);
   const bin = atob(descriptor.data);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   const stream = new Blob([bytes]).stream().pipeThrough(inflater);
   const buf = new Uint8Array(await new Response(stream).arrayBuffer());
   if (buf.length !== descriptor.json_bytes) {
-    throw new Error(`The inline data unpacked to ${buf.length} bytes, not the ${descriptor.json_bytes} the build recorded.`);
+    throw new PlainError(`The inline data unpacked to ${buf.length} bytes, not the ${descriptor.json_bytes} the build recorded.`);
   }
   const digest = await sha256Of(buf);
   if (digest !== descriptor.sha256) {
-    throw new Error(`The inline data does not match its recorded checksum (sha256 ${digest.slice(0, 12)}…, expected ${descriptor.sha256.slice(0, 12)}…), so it may have been changed or damaged.`);
+    throw new PlainError(`The inline data does not match its recorded checksum (sha256 ${digest.slice(0, 12)}…, expected ${descriptor.sha256.slice(0, 12)}…), so it may have been changed or damaged.`);
   }
   return new TextDecoder('utf-8', { fatal: true }).decode(buf);
 }
 
+/** Hands the main thread back between stages of start-up, so the page can paint and take input. */
+function nextTask() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 async function start() {
   try {
+    pointSavedCopyAtSite();
+    bind();
+    $('card').setAttribute('aria-busy', 'true');
     app.build = JSON.parse($('openbill-build').textContent);
     const t0 = performance.now();
     const text = await inflate(JSON.parse($('openbill-data').textContent));
     const t1 = performance.now();
-    app.doc = unpackDrugs(JSON.parse(text));
+    // Each stage in its own task. Each one is timed by itself, so the timings stay comparable.
+    const timings = {};
+    const stage = async (name, work) => {
+      await nextTask();
+      const t = performance.now();
+      const out = work();
+      timings[name] = Math.round(performance.now() - t);
+      return out;
+    };
+    const packed = await stage('parse_ms', () => JSON.parse(text));
+    app.doc = await stage('unpack_docs_ms', () => unpackDrugs(packed));
     const t2 = performance.now();
-    const rows = linkRows(app.doc);
-    app.partDContext = partDNameContext(rows);
-    app.products = groupProducts(rows);
+    const rows = await stage('link_ms', () => linkRows(app.doc));
+    app.partDContext = await stage('context_ms', () => partDNameContext(rows));
+    app.products = await stage('group_ms', () => groupProducts(rows));
+    await nextTask();
     app.byName = new Map(app.products.map((p) => [p.name, p]));
+    app.caseless = caselessNames(app.byName.keys());
     app.today = isoDate(new Date());
-    bind();
     // The card first; the search index, which the card does not need, in a later task.
     renderFromHash({ focus: false });
     const t3 = performance.now();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await nextTask();
     const t4 = performance.now();
     app.index = buildIndex(app.products);
     const input = $('q');
-    input.disabled = false;
-    if (input.value.trim()) runSearch(input.value);
+    input.removeAttribute('placeholder');
+    // A miss on the first render, or typing while the page loaded: its search runs now.
+    if (input.value.trim()) {
+      if (app.enterWaiting) enterInSearch();
+      else runSearch(input.value);
+    } else if ($('search-status').textContent === SEARCH_WAIT) {
+      $('search-status').textContent = SEARCH_READY;
+    }
+    app.enterWaiting = false;
+    // WCAG 4.1.3: the wait is over, and nothing else on the page says so.
+    writeStatus(`${$('card-title').textContent}. ${SEARCH_READY}`);
     const t5 = performance.now();
     const root = document.documentElement;
     root.dataset.startupMs = String(Math.round(t3 - SCRIPT_START));
     root.dataset.timings = JSON.stringify({
       inflate_ms: Math.round(t1 - t0),
-      unpack_ms: Math.round(t2 - t1),
+      unpack_ms: timings.parse_ms + timings.unpack_docs_ms,
       first_card_ms: Math.round(t3 - t2),
       first_card_since_navigation_ms: Math.round(t3),
       index_ms: Math.round(t5 - t4),
       since_navigation_ms: Math.round(t5),
+      ...timings,
     });
     root.dataset.ready = 'true';
   } catch (err) {

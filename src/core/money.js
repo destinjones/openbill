@@ -7,10 +7,15 @@
 // 114.99999999999999. Rounding is half-up (half away from zero). No Intl and no
 // toLocaleString, so the output is identical in every environment.
 
+import { clipText } from './hash.js';
+
 const MULTIPLY = '×';
 const ELLIPSIS_PRICE = '<$0.00001';
 const ELLIPSIS_CENT = '<$0.01';
 const ELLIPSIS_MULTIPLE = '<0.01' + MULTIPLY;
+// A JavaScript number never needs a larger exponent (1e308, 5e-324). Beyond this, BigInt maths
+// on one short string can take minutes or crash the tab.
+const DECIMAL_MAX_EXPONENT = 1000;
 
 /**
  * Parse a number or a plain decimal string into an exact decimal { int, scale },
@@ -36,6 +41,7 @@ export function toDecimal(x) {
   }
   const frac = m[3] || '';
   const exp = m[4] ? parseInt(m[4], 10) : 0;
+  if (Math.abs(exp) > DECIMAL_MAX_EXPONENT) throw new RangeError(`the exponent of ${clipText(s)} is too large`);
   let int = BigInt((m[2] || '0') + frac);
   let scale = frac.length - exp;
   if (scale < 0) {
@@ -48,6 +54,7 @@ export function toDecimal(x) {
 
 function trimDecimal(d) {
   let { int, scale } = d;
+  if (int === 0n) return { int, scale: 0 };
   while (scale > 0 && int % 10n === 0n) {
     int /= 10n;
     scale -= 1;
@@ -208,9 +215,24 @@ export function formatUnitPrice(dollars) {
   return (r.neg ? '-$' : '$') + r.body;
 }
 
+/** No usable quantity is longer than this as text; 9999 with 3 decimals is 8 characters. */
+export const QTY_MAX_CHARS = 32;
+// A short mantissa needs no larger exponent to reach any usable quantity (0.001 to 9999).
+const QTY_MAX_EXPONENT = 32;
+const QTY_EXPONENT_RE = /[eE]([+-]?)(\d+)$/;
+
 function parseQuantity(qty) {
   if (typeof qty === 'number' && !Number.isFinite(qty)) throw new RangeError(`quantity must be finite, got ${qty}`);
   if (typeof qty !== 'number' && typeof qty !== 'string') throw new TypeError(`quantity must be a number, got ${qty === null ? 'null' : typeof qty}`);
+  // Decided from the text, before any BigInt maths: a crafted link's qty=1e300000000 took 20
+  // seconds and 0e-99999999999999 crashed the tab (decision 53), as PAID_MAX_CHARS guards &paid=.
+  const raw = String(qty);
+  const text = raw.length > QTY_MAX_CHARS * 4 ? raw : raw.trim();
+  if (text.length > QTY_MAX_CHARS) throw new RangeError('quantity is too long');
+  const e = QTY_EXPONENT_RE.exec(text);
+  if (e && !(Number(e[2]) <= QTY_MAX_EXPONENT)) {
+    throw new RangeError(e[1] === '-' ? `quantity has more than 3 decimals: ${text}` : `quantity must be at most 9999, got ${text}`);
+  }
   const d = toDecimal(qty);
   if (d.scale > 3) throw new RangeError(`quantity has more than 3 decimals: ${qty}`);
   if (d.int <= 0n) throw new RangeError(`quantity must be greater than 0, got ${qty}`);
@@ -218,9 +240,14 @@ function parseQuantity(qty) {
   return d;
 }
 
+// Every message parseQuantity() and toDecimal() write themselves. Anything else came from the
+// JavaScript engine (a BigInt limit, say), and is not shown to a reader.
+const QTY_OWN_WORDS = /^(quantity |not a )/;
+
 /**
  * Check a quantity the way multiplyMoney does. Returns null when it is usable, else a
- * plain sentence saying why not (for the page to show).
+ * plain sentence saying why not (for the page to show), which repeats at most
+ * REFLECT_MAX_CHARS of the value.
  * @param {number|string} qty
  * @returns {string|null}
  */
@@ -229,7 +256,8 @@ export function quantityProblem(qty) {
     parseQuantity(qty);
     return null;
   } catch (e) {
-    return `Quantity ${String(qty)} is not usable: ${e.message}.`;
+    const why = e && QTY_OWN_WORDS.test(e.message) ? e.message : 'that number could not be read';
+    return `Quantity ${clipText(String(qty))} is not usable: ${why}.`;
   }
 }
 

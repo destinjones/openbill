@@ -7,10 +7,11 @@ import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
+import http from 'node:http';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { linkRows, packDrugs, unpackDrugs } from '../../src/core/pack.js';
-import { groupProducts, buildIndex, search } from '../../src/core/search.js';
+import { groupProducts, buildIndex, search, enterChoice } from '../../src/core/search.js';
 import { summarizeProduct, partDNameContext, freshness, inputDates, rangesByUnit, formatSpreadMultiple, isExtremeSpread, paidComparison, parsePaid, COST_PLUS, RULES, HONESTY, EXTREME_HEADLINE, EXTREME_LOW, EXTREME_HIGH } from '../../src/core/rules.js';
 import { formatMoney, formatMultiple, formatUnitPrice } from '../../src/core/money.js';
 import { formatNdc } from '../../src/core/ndc.js';
@@ -174,7 +175,7 @@ async function open(page, url, { today = TODAY, ready = 'true' } = {}) {
  * let the page settle first; the click itself is still a real click.
  */
 async function openPanel(page) {
-  const summary = page.locator('#panel summary');
+  const summary = page.locator('#panel > summary');
   await scrollSettled(page);
   await summary.scrollIntoViewIfNeeded();
   await scrollSettled(page);
@@ -358,7 +359,7 @@ test('the spread and a Part B conversion show each input’s own date or period'
 test('opening Sources and method shows every reason and every NDC', async ({ page }) => {
   await open(page, PAGE);
   const e = expected(DEFAULT, DEFAULT_QTY);
-  const summaryEl = page.locator('#panel summary');
+  const summaryEl = page.locator('#panel > summary');
   await expect(summaryEl).toHaveText('Sources and method');
   await openPanel(page);
   const body = page.locator('#panel-body');
@@ -370,7 +371,7 @@ test('opening Sources and method shows every reason and every NDC', async ({ pag
   for (const ndc of [e.s.ndcs[0], e.s.ndcs[e.s.ndcs.length - 1]]) await expect(body).toContainText(`NDC ${formatNdc(ndc)}`);
   await expect(body).toContainText('calculated from the most recently completed pharmacy survey');
   for (const id of ['unit-total', 'reference-price', 'spread', 'cost-plus', 'what-you-paid', 'freshness']) {
-    await expect(body.locator(`ul.rules a[href="methodology.html#${id}"]`), `rules list links #${id}`).toHaveCount(1);
+    await expect(body.locator(`ul.rules a[href="${SITE_URL}methodology.html#${id}"]`), `rules list links #${id}`).toHaveCount(1);
   }
   await expect(body.locator('.not-yours').first()).toHaveText(NOT_YOURS);
 });
@@ -394,7 +395,7 @@ test('"Wrong? Tell us" opens a prefilled wrong-price issue in a new tab, before 
   // Review A11Y-2: DOM order (and so tab order) matches what is seen: the link, then the panel.
   const before = await page.evaluate(() => Boolean(document.getElementById('report').compareDocumentPosition(document.getElementById('panel')) & Node.DOCUMENT_POSITION_FOLLOWING));
   expect(before).toBe(true);
-  const [r, p] = await Promise.all([link.boundingBox(), page.locator('#panel summary').boundingBox()]);
+  const [r, p] = await Promise.all([link.boundingBox(), page.locator('#panel > summary').boundingBox()]);
   expect(r.y).toBeLessThan(p.y);
 });
 
@@ -452,14 +453,20 @@ test('search results say which name matched only when the product name does not 
   await expect(page.locator('#results button.result', { hasText: 'ELIQUIS' }).first().locator('.result-via')).toContainText('matched');
 });
 
-test('Enter opens the first result; no match shows a suggestion and a hint, and says so', async ({ page }) => {
+// This test used to pin Enter opening the first of several results, which is OB-13 and J25: typing
+// "metformin" and pressing Enter opened a price the reader had not chosen.
+test('Enter on several results stays on the list, and the next Enter chooses; no match shows a suggestion and a hint, and says so', async ({ page }) => {
   await open(page, PAGE);
   const input = page.locator('#q');
   await input.fill('eliquis 5');
   await expect(page.locator('#results button.result').first()).toBeVisible();
-  const first = search(index, 'eliquis 5')[0].product.name;
+  const found = search(index, 'eliquis 5');
+  expect(found.length).toBeGreaterThan(1);
   await input.press('Enter');
-  await expect(page.locator('#card-title')).toHaveText(first);
+  await expect(page.locator('#results button.result').first()).toBeFocused();
+  await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#card-title')).toHaveText(found[0].product.name);
   await input.fill('metfromin');
   // Review A11Y-1: the suggestion is in the live status region, so it is read out.
   await expect(page.locator('#search-status')).toHaveText('No drug matches “metfromin”. Did you mean METFORMIN?');
@@ -565,7 +572,7 @@ test('a Part D spread far from the other products under its name says so on the 
   const s = summary(nameOutlierProduct);
   await expect(page.locator('.spread')).toContainText(s.spread.name_outliers[0]);
   await openPanel(page);
-  await expect(page.locator('#panel-body ul.rules a[href="methodology.html#part-d-name-outlier"]')).toHaveCount(1);
+  await expect(page.locator(`#panel-body ul.rules a[href="${SITE_URL}methodology.html#part-d-name-outlier"]`)).toHaveCount(1);
 });
 
 // Review NUM-5: NDCs priced per different units showed only four prices and merged the units.
@@ -717,7 +724,7 @@ test('a kit priced per EA opens at 1 with 1, 2 and 3 to choose from, and says wh
   await expect(page.locator('[data-figure="cost-plus"]')).toHaveText(e1.costPlus);
   await expect(page.locator('.qty-note')).toHaveText(dq.reason);
   await expect(page.locator('.qty-note')).toContainText('dosage form “KIT”');
-  await page.locator('.qty-chip[data-qty="2"]').click();
+  await settledClick(page, page.locator('.qty-chip[data-qty="2"]'));
   await expect(page.locator('[data-figure="pharmacy"]')).toHaveText(expected(KIT, 2).pharmacy);
   await expect(page.locator('.qty-chip[data-qty="2"]')).toHaveAttribute('aria-pressed', 'true');
   expect(new URL(page.url()).hash).toBe(hashFor(KIT, 2));
@@ -826,10 +833,11 @@ test('a hostile source_url in the data is never rendered as a link', async ({ pa
   for (const hash of [hashFor('ATORVASTATIN 20 MG TABLET', 'abc'), hashFor('ATORVASTATIN 20 MG TABLET', ''), hashFor(withGeneric)]) {
     await page.goto(url + hash);
     await expect(page.locator('html')).toHaveAttribute('data-ready', /.+/);
-    const r = await page.evaluate(() => {
-      document.querySelector('#panel') && (document.querySelector('#panel').open = true);
-      return [...document.querySelectorAll('a[href]')].map((a) => a.getAttribute('href')).filter((h) => !/^(https:\/\/|methodology\.html#|#|openbill\.html$|methodology\.html$|data\/drugs\.json$)/.test(h));
+    await page.evaluate(() => {
+      document.querySelector('#panel').open = true;
     });
+    await expect(page.locator('#panel-body li.ndc').first(), hash).toBeAttached();
+    const r = await page.evaluate(() => [...document.querySelectorAll('a[href]')].map((a) => a.getAttribute('href')).filter((h) => !/^(https:\/\/|methodology\.html#|#|openbill\.html$|methodology\.html$|data\/drugs\.json$)/.test(h)));
     expect(r, hash).toEqual([]);
     expect(await page.evaluate(() => window.__xss)).toBeUndefined();
   }
@@ -986,8 +994,8 @@ test('the cost-plus line shows the core’s estimate, its chip, formula, explana
   const body = page.locator('#panel-body');
   await expect(body.locator('.rec-title', { hasText: 'Cost-plus estimate: pack total' })).toHaveCount(1);
   await expect(body).toContainText(cp.min.reason);
-  await expect(body.locator('ul.rules a[href="methodology.html#cost-plus"]')).toHaveCount(1);
-  await expect(body.locator('a[href="methodology.html#cost-plus"]').first()).toBeVisible();
+  await expect(body.locator(`ul.rules a[href="${SITE_URL}methodology.html#cost-plus"]`)).toHaveCount(1);
+  await expect(body.locator(`a[href="${SITE_URL}methodology.html#cost-plus"]`).first()).toBeVisible();
   // The quantity changes the estimate with the pack.
   await page.locator('.qty-chip[data-qty="90"]').click();
   await expect(page.locator('[data-figure="cost-plus"]')).toHaveText(expected(DEFAULT, 90).costPlus);
@@ -1108,7 +1116,7 @@ test('What were you charged?: &paid= in the address is checked on load and round
   await page.goto(PAGE + hashFor(DEFAULT, DEFAULT_QTY, '12'));
   await expect(page.locator('#paid')).toHaveValue('12.00');
   await page.locator('#q').fill('eliquis 5');
-  await page.locator('#q').press('Enter');
+  await page.locator('#results button.result').first().click();
   await expect(page.locator('#card-title')).not.toHaveText(DEFAULT);
   await expect(page.locator('#paid')).toHaveValue('');
   expect((await hashParams(page)).has('paid')).toBe(false);
@@ -1157,4 +1165,1077 @@ test('products whose names share a slug each link their own page, with the site 
   expect(new Set(hrefs).size).toBe(sharedSlug.length);
   await expect(page.locator('#report')).toBeVisible();
   await seen.check();
+});
+
+// ---------------------------------------------------------------------------------------------
+// Decision 53: what an address can do to the card, what a screen reader hears, what happens before
+// and instead of the data arriving.
+
+const OTHER = ['ELIQUIS 5 MG TABLET'].find((n) => byName.has(n)) || products.find((p) => p.name !== METFORMIN && p.name !== DEFAULT && /\s/.test(p.name)).name;
+const AZ = `${SITE_URL}drugs/a/`;
+// Each of these took from 5 to 25 seconds in BigInt maths, or crashed the tab, or (WebKit) put the
+// engine's own "Out of memory: BigInt" on the card.
+const CRAFTED_QUANTITIES = ['1e300000000', '1e999999999', '1e10000000', '0e-999999999', '0e-99999999999999', '1e-999999999', '9'.repeat(400000)];
+
+const pageReady = (page, value = 'true') => expect(page.locator('html')).toHaveAttribute('data-ready', value, { timeout: 30_000 });
+
+/** A full load of this address. A goto that only changes the hash would not load anything. */
+async function load(page, url, value = 'true') {
+  await page.goto(url);
+  await page.reload();
+  await pageReady(page, value);
+}
+
+/** The hash changes as it does when a link on another part of the page, or a person, changes it. */
+const followHash = (page, hash) => page.evaluate((h) => { location.hash = h; }, hash);
+
+const addressHash = (page) => new URL(page.url()).hash;
+
+/** Records every text written to these live regions, and what the card said at that moment. */
+async function recordWrites(page, ids) {
+  await page.evaluate((list) => {
+    window.__writes = [];
+    for (const id of list) {
+      const el = document.getElementById(id);
+      new MutationObserver(() => window.__writes.push({ id, text: el.textContent, card: document.getElementById('card-title').textContent })).observe(el, { childList: true, subtree: true, characterData: true });
+    }
+  }, ids);
+}
+
+const takeWrites = (page, id) => page.evaluate((which) => window.__writes.splice(0).filter((w) => !which || w.id === which), id);
+
+/**
+ * The page over local HTTP, with everything after the search box held back until release(): a slow
+ * connection, with no waiting on a clock. Gzip is not used, so each part is written when it is due.
+ */
+async function pageHeldBack() {
+  const html = readFileSync(path.join(ROOT, 'openbill.html'));
+  const cut = html.indexOf('</section>') + '</section>'.length;
+  let release;
+  const held = new Promise((r) => {
+    release = r;
+  });
+  const server = http.createServer(async (req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    res.write(html.subarray(0, cut));
+    // Enough for an engine that waits for a first screenful before it draws anything.
+    res.write(`<!--${' '.repeat(4096)}-->`);
+    await held;
+    res.end(html.subarray(cut));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return {
+    url: `http://127.0.0.1:${server.address().port}/`,
+    release,
+    close: () => {
+      release();
+      server.closeAllConnections();
+      server.close();
+    },
+  };
+}
+
+/** A real click, once any smooth scroll has finished; see openPanel(). */
+async function settledClick(page, locator) {
+  await scrollSettled(page);
+  await locator.scrollIntoViewIfNeeded();
+  await scrollSettled(page);
+  await locator.click();
+}
+
+// J02, A17: the skip link's #card used to be read as a card link with no drug in it, and replaced
+// the prices with "That link does not name a drug".
+for (const [label, hash, name] of [
+  ['the default card', '', DEFAULT],
+  ['a drug card', hashFor(METFORMIN, 60), METFORMIN],
+]) {
+  test(`the skip link on ${label} keeps the card and lands on its title`, async ({ page, browserName }) => {
+    const seen = await open(page, PAGE + hash);
+    const figures = await page.locator('[data-figure]').count();
+    expect(figures).toBeGreaterThan(0);
+    // WebKit's Tab skips links unless the reader has asked otherwise, as Safari's does.
+    if (browserName === 'webkit') await page.locator('.skip').focus();
+    else await page.keyboard.press('Tab');
+    await expect(page.locator('.skip')).toBeFocused();
+    expect((await page.locator('.skip').boundingBox()).y, 'on the screen once focused').toBeGreaterThanOrEqual(0);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#card-title')).toHaveText(name);
+    await expect(page.locator('#card-title')).toBeFocused();
+    await expect(page.locator('[data-figure]')).toHaveCount(figures);
+    await expect(page).toHaveTitle(`${name}: OpenBill`);
+    expect(addressHash(page), 'the address still names the card').toBe(hash);
+    await page.reload();
+    await pageReady(page);
+    await expect(page.locator('#card-title')).toHaveText(name);
+    await expect(page.locator('[data-figure]')).toHaveCount(figures);
+    await seen.check();
+  });
+}
+
+test('an address of #card opens the default card, focused on its title, and while reading goes back to the card', async ({ page }) => {
+  const seen = await open(page, `${PAGE}#card`);
+  await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  await expect(page.locator('#card-title')).toBeFocused();
+  await expect(page.locator('[data-figure]').first()).toBeVisible();
+  await page.goto(PAGE + hashFor(METFORMIN, 60));
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+  await page.locator('#qty').focus();
+  await followHash(page, '#card');
+  await expect(page.locator('#card-title')).toBeFocused();
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+  await expect.poll(() => addressHash(page)).toBe(hashFor(METFORMIN, 60));
+  await seen.check();
+});
+
+// SITE-20: a link shared with #utm_source=reddit used to open on the same error.
+const NOT_ADDRESSED_TO_US = ['#main', '#top', '#foo', '#how-to', '#ndc-00093104801', '#utm_source=reddit', '#utm_source=reddit&utm_medium=social', '#fbclid=abc', '#=', '#&', '#%', '#__proto__=1'];
+
+test('a plain fragment or someone else’s parameter opens the default card, never an error', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  for (const fragment of NOT_ADDRESSED_TO_US) {
+    await load(page, PAGE + fragment);
+    await expect(page.locator('#card-title'), fragment).toHaveText(DEFAULT);
+    await expect(page.locator('[data-figure]').first(), fragment).toBeVisible();
+    await expect(page, fragment).toHaveTitle(`${DEFAULT}: OpenBill`);
+  }
+  await seen.check();
+});
+
+test('a plain fragment or someone else’s parameter arriving while a card is open leaves it, and its address, alone', async ({ page }) => {
+  const hash = hashFor(METFORMIN, 60);
+  const seen = await open(page, PAGE + hash);
+  for (const fragment of NOT_ADDRESSED_TO_US) {
+    await followHash(page, fragment);
+    await expect.poll(() => addressHash(page), fragment).toBe(hash);
+    await expect(page.locator('#card-title'), fragment).toHaveText(METFORMIN);
+    await expect(page.locator('#qty'), fragment).toHaveValue('60');
+    await expect(page.locator('[data-figure]').first(), fragment).toBeVisible();
+  }
+  await seen.check();
+});
+
+test('a parameter of ours with no drug in it still says so, and the tab says it too', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  for (const hash of ['#drug=', '#drug=%20', '#drug=+', '#qty=30', '#paid=12', '#qty=30&paid=12', '#utm_source=x&qty=30']) {
+    await load(page, PAGE + hash);
+    await expect(page.locator('#card-title'), hash).toHaveText('That link does not name a drug');
+    await expect(page, hash).toHaveTitle('That link does not name a drug: OpenBill');
+    await expect(page.locator('[data-figure]'), hash).toHaveCount(0);
+  }
+  // And back to a card, the title comes with it.
+  await followHash(page, hashFor(METFORMIN));
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+  await expect(page).toHaveTitle(`${METFORMIN}: OpenBill`);
+  await expect(page.locator('#card-title')).toBeFocused();
+  await seen.check();
+});
+
+test('a name in any case, or with no drug= before it, opens its card and writes the address the page’s way', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const lower = METFORMIN.toLowerCase();
+  for (const hash of [`#drug=${encodeURIComponent(lower)}`, `#drug=${encodeURIComponent(METFORMIN.replace(/ /g, '  '))}`, `#${encodeURIComponent(METFORMIN)}`, `#${encodeURIComponent(lower)}`, `#${lower.replace(/ /g, '+')}`]) {
+    await load(page, PAGE + hash);
+    await expect(page.locator('#card-title'), hash).toHaveText(METFORMIN);
+    await expect(page, hash).toHaveTitle(`${METFORMIN}: OpenBill`);
+    await expect.poll(() => addressHash(page), hash).toBe(hashFor(METFORMIN));
+  }
+  // What the link says about the quantity comes along.
+  await load(page, `${PAGE}#drug=${encodeURIComponent(lower)}&qty=90`);
+  await expect(page.locator('#qty')).toHaveValue('90');
+  await expect.poll(() => addressHash(page)).toBe(hashFor(METFORMIN, 90));
+  // One word is a name only if it is a product's whole name; otherwise it is an anchor.
+  const oneWord = products.find((p) => !/\s/.test(p.name) && p.name !== 'card');
+  if (oneWord) {
+    await load(page, `${PAGE}#${encodeURIComponent(oneWord.name.toLowerCase())}`);
+    await expect(page.locator('#card-title')).toHaveText(oneWord.name);
+  }
+  await seen.check();
+});
+
+// OB-17: a link with a real word in it used to dead-end with an empty search box.
+test('a name that is not in the file goes into the search box, with results and the reason', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const want = search(index, 'metformin er', { limit: 1 })[0].product.name;
+  for (const hash of ['#drug=metformin%20er', '#metformin%20er', '#drug=metformin+er', '#metformin+er']) {
+    await load(page, PAGE + hash);
+    await expect(page.locator('#card-title'), hash).toHaveText('No drug by that name');
+    await expect(page, hash).toHaveTitle('No drug by that name: OpenBill');
+    await expect(page.locator('#card'), hash).toContainText('“metformin er”');
+    await expect(page.locator('#card'), hash).toContainText('in the search box above');
+    await expect(page.locator('#q'), hash).toHaveValue('metformin er');
+    await expect(page.locator('#results button.result').first(), hash).toBeVisible();
+    await expect(page.locator('#search-status'), hash).toContainText(/^No drug by that name\. .*metformin er/);
+  }
+  await settledClick(page, page.locator('#results button.result').first());
+  await expect(page.locator('#card-title')).toHaveText(want);
+  await expect(page).toHaveTitle(`${want}: OpenBill`);
+  // The reason was about the link: typing something else drops it.
+  await page.locator('#q').fill('metformin');
+  await expect(page.locator('#search-status')).toContainText(/^(?!No drug).*metformin/);
+  await seen.check();
+});
+
+test('a link to the same drug at another quantity lands on the title, but never from under someone typing', async ({ page }) => {
+  const seen = await open(page, PAGE + hashFor(METFORMIN, 30));
+  await page.locator('.stamp').focus();
+  await followHash(page, hashFor(METFORMIN, 90));
+  await expect(page.locator('#qty')).toHaveValue('90');
+  await expect(page.locator('#card-title')).toBeFocused();
+  await settledClick(page, page.locator('#qty'));
+  await page.locator('#qty').fill('45');
+  await expect.poll(() => addressHash(page)).toBe(hashFor(METFORMIN, 45));
+  await expect(page.locator('#qty')).toBeFocused();
+  await expect(page.locator('#qty')).toHaveValue('45');
+  await seen.check();
+});
+
+// A17: a fixed offset left the bottom of the link over the masthead at a large default font size.
+test('the skip link stays off the page until focused, at a large font size', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 700 });
+  const seen = await open(page, PAGE);
+  const r = await page.evaluate(() => {
+    document.documentElement.style.fontSize = '32px';
+    document.body.style.fontSize = '32px';
+    const skip = document.querySelector('.skip');
+    skip.style.fontSize = '32px';
+    const box = skip.getBoundingClientRect();
+    const stamp = document.querySelector('.stamp').getBoundingClientRect();
+    return { bottom: box.bottom, height: box.height, hit: document.elementFromPoint(stamp.left + 4, stamp.top + 2).className };
+  });
+  expect(r.height).toBeGreaterThan(44);
+  expect(r.bottom).toBeLessThanOrEqual(0);
+  expect(r.hit).not.toBe('skip');
+  await seen.check();
+});
+
+// A11: the status region's last words used to stay, and be read out, over the next drug's card.
+test('a screen reader never hears the last drug’s prices over the new card', async ({ page }) => {
+  const seen = await open(page, PAGE + hashFor(METFORMIN, 30));
+  const status = page.locator('#card-status');
+  await recordWrites(page, ['card-status']);
+  const namesTheCardOrNothing = async (when) => {
+    const text = await status.textContent();
+    expect(text === '' || text.includes(OTHER), `${when}: "${text}"`).toBe(true);
+  };
+
+  // Still queued when the next card opens.
+  await page.locator('#qty').fill('45');
+  await followHash(page, hashFor(OTHER));
+  await expect(page.locator('#card-title')).toHaveText(OTHER);
+  await namesTheCardOrNothing('straight away');
+  await page.waitForTimeout(900);
+  await namesTheCardOrNothing('after the pause');
+
+  // Already said when the next card opens.
+  await followHash(page, hashFor(METFORMIN, 30));
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+  await page.locator('#qty').fill('45');
+  await expect(status).toHaveText(new RegExp(`^${METFORMIN}\\. At 45 `));
+  await followHash(page, hashFor(OTHER));
+  await expect(page.locator('#card-title')).toHaveText(OTHER);
+  await namesTheCardOrNothing('straight away, once said');
+  await expect(status).toHaveText('');
+
+  // A card with no prices must not keep them either.
+  await followHash(page, hashFor(METFORMIN, 30));
+  await page.locator('#qty').fill('45');
+  await followHash(page, '#drug=NOT%20A%20DRUG');
+  await expect(page.locator('#card-title')).toHaveText('No drug by that name');
+  await expect(status).toHaveText('');
+  await page.waitForTimeout(900);
+  await expect(status).toHaveText('');
+
+  for (const w of await takeWrites(page, 'card-status')) {
+    if (w.text) expect(w.text.startsWith(`${w.card}.`), `"${w.text}" written over "${w.card}"`).toBe(true);
+  }
+  await seen.check();
+});
+
+// A13: three writes to the paid result and one to the status for one typed quantity, and two more
+// for pressing the chip that was already pressed. Each write is one more announcement.
+test('the live regions are written once per change, and not at all when nothing changed', async ({ page }) => {
+  const seen = await open(page, PAGE + hashFor(DEFAULT, 30, '50'));
+  await recordWrites(page, ['card-status', 'paid-result']);
+  // Three keystrokes well inside the pause. On the page's own clock, so that a busy test machine
+  // cannot stretch them past the pause and count as three pauses.
+  await page.evaluate(async () => {
+    const q = document.getElementById('qty');
+    q.focus();
+    for (const v of ['1', '12', '120']) {
+      q.value = v;
+      q.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 60));
+    }
+  });
+  await expect(page.locator('#card-status')).toHaveText(new RegExp(`^${DEFAULT}\\. At 120 `));
+  await page.waitForTimeout(100);
+  const typed = await takeWrites(page);
+  expect(typed.filter((w) => w.id === 'card-status').length, 'status writes').toBe(1);
+  expect(typed.filter((w) => w.id === 'paid-result').length, 'paid result writes').toBe(1);
+  await expect(page.locator('#paid-result')).not.toHaveAttribute('aria-busy', 'true');
+
+  await settledClick(page, page.locator('.qty-chip[data-qty="30"]'));
+  await expect(page.locator('#card-status')).toHaveText(new RegExp(`^${DEFAULT}\\. At 30 `));
+  await page.waitForTimeout(100);
+  await takeWrites(page);
+  await settledClick(page, page.locator('.qty-chip[data-qty="30"]'));
+  await page.waitForTimeout(800);
+  expect(await takeWrites(page), 'the same chip again').toEqual([]);
+  await seen.check();
+});
+
+// A9: the reason was on the card, and neither the field nor the status said so.
+test('an unusable quantity is tied to its field and said in the status; both clear once it is usable', async ({ page }) => {
+  const seen = await open(page, PAGE + hashFor(METFORMIN, 30));
+  const qty = page.locator('#qty');
+  const why = page.locator('#qty-why');
+  const status = page.locator('#card-status');
+  await expect(qty).not.toHaveAttribute('aria-invalid', /.*/);
+  await expect(qty).not.toHaveAttribute('aria-describedby', /.*/);
+  const saysWhy = async (bad) => {
+    await expect(qty, bad).toHaveAttribute('aria-invalid', 'true');
+    await expect(qty, bad).toHaveAttribute('aria-describedby', 'qty-why');
+    await expect(why, bad).toContainText('is not usable');
+    const reason = await why.textContent();
+    await expect(status, bad).toContainText(`${METFORMIN}. ${reason}`);
+  };
+  for (const bad of ['0', '-3', '12000']) {
+    await qty.fill(bad);
+    await saysWhy(bad);
+  }
+  // A number box cannot be typed into with letters, but a link can carry them.
+  await followHash(page, hashFor(METFORMIN, 'abc'));
+  await saysWhy('abc');
+  await qty.fill('60');
+  await expect(qty).not.toHaveAttribute('aria-invalid', /.*/);
+  await expect(qty).not.toHaveAttribute('aria-describedby', /.*/);
+  await expect(why).toHaveCount(0);
+  await expect(status).toHaveText(new RegExp(`^${METFORMIN}\\. At 60 `));
+  // An empty box is not a mistake, and the card still says why it shows no total.
+  await qty.fill('');
+  await expect(qty).toHaveAttribute('aria-describedby', 'qty-why');
+  await expect(qty).not.toHaveAttribute('aria-invalid', /.*/);
+  await expect(why).toContainText('No quantity entered');
+  await seen.check();
+});
+
+// A7: nothing told a screen reader when a wait of seconds ended, either way.
+test('the page says when it is ready', async ({ page }) => {
+  const seen = await open(page, PAGE + hashFor(METFORMIN));
+  await expect(page.locator('#card-status')).toHaveText(`${METFORMIN}. Search is ready.`);
+  await expect(page.locator('#card')).not.toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('#card')).not.toHaveClass(/card-pending/);
+  await seen.check();
+});
+
+// A6, A7, A17: the engine's words on the card, dead controls, nothing announced, and a title that
+// went on saying the page was fine.
+test('when the data cannot load: a plain sentence, announced, no dead controls, and a way to the plain pages', async ({ page }, info) => {
+  for (const [file, descriptor, said] of [
+    ['bad-base64.html', (d) => ({ ...d, data: '$$$$' }), 'could not be read, so it may be damaged'],
+    ['bad-json.html', (d) => ({ ...d, data: 'AAAA' }), 'could not be read, so it may be damaged'],
+    ['bad-sum.html', (d) => ({ ...d, sha256: '0'.repeat(64) }), 'does not match its recorded checksum'],
+  ]) {
+    await page.goto(pageWithData(info, file, { descriptor }));
+    await pageReady(page, 'error');
+    await expect(page.locator('#card-title'), file).toHaveText('The data did not load');
+    await expect(page, file).toHaveTitle('The data did not load: OpenBill');
+    await expect(page.locator('#card-title'), file).toBeFocused();
+    const message = page.locator('#card [role="alert"]');
+    await expect(message, file).toContainText(said);
+    await expect(message, file).toContainText('No figures are shown rather than wrong ones.');
+    await expect(message, file).not.toContainText(/atob|InvalidCharacter|DOMException|TypeError|RangeError|SyntaxError|decod/i);
+    await expect(page.locator('[data-figure]'), file).toHaveCount(0);
+    await expect(page.locator('#card')).not.toHaveAttribute('aria-busy', 'true');
+    await expect(page.locator('.search'), file).toBeHidden();
+    await expect(page.locator('.try'), file).toBeHidden();
+    await expect(message.locator(`a[href="${AZ}"]`), file).toBeVisible();
+    await expect(message.locator('a', { hasText: 'report this' }), file).toHaveAttribute('href', new RegExp(`^${REPO_URL}/issues/new\\?template=bug\\.yml`));
+  }
+});
+
+// OB-11, A18: core checks are in tests/money.test.js; these are the same links in a real page.
+test('a crafted quantity in a link is refused at once, in plain words, and the card still works', async ({ page }) => {
+  const seen = await open(page, PAGE + hashFor(METFORMIN, 30));
+  for (const crafted of CRAFTED_QUANTITIES) {
+    const label = crafted.slice(0, 24);
+    const t = Date.now();
+    await followHash(page, hashFor(METFORMIN, crafted));
+    await expect(page.locator('#qty-why'), label).toContainText('is not usable');
+    const took = Date.now() - t;
+    expect(took, `${label} took ${took} ms`).toBeLessThan(3000);
+    const shown = await page.locator('#qty-why').textContent();
+    expect(shown.length, `${label}: ${shown.length} characters`).toBeLessThanOrEqual(200);
+    await expect(page.locator('#card'), label).not.toContainText(/BigInt|Out of memory|Maximum|RangeError/);
+    const height = (await page.locator('#card').boundingBox()).height;
+    expect(height, label).toBeLessThan(2500);
+    expect((await page.locator('#qty').inputValue()).length, label).toBeLessThanOrEqual(32);
+  }
+  // The same links opened from nothing.
+  for (const crafted of ['1e300000000', '0e-99999999999999']) {
+    await load(page, PAGE + hashFor(METFORMIN, crafted));
+    await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+    await expect(page.locator('#qty-why')).toContainText('is not usable');
+    await expect(page.locator('#qty')).toHaveAttribute('aria-invalid', 'true');
+  }
+  await settledClick(page, page.locator('.qty-chip').first());
+  await expect(page.locator('#qty-why')).toHaveCount(0);
+  await expect(page.locator('[data-figure]').first()).toBeVisible();
+  await seen.check();
+});
+
+test('a very long name in a link stays bounded on the screen and in the search box', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  await expect(page.locator('#q')).toHaveAttribute('maxlength', '200');
+  for (const hash of [`#drug=${'A'.repeat(100000)}`, `#${'metformin '.repeat(10000).replace(/ /g, '%20')}`]) {
+    const label = hash.slice(0, 20);
+    await load(page, PAGE + hash);
+    await expect(page.locator('#card-title'), label).toHaveText('No drug by that name');
+    const r = await page.evaluate(() => ({
+      card: document.getElementById('card').getBoundingClientRect().height,
+      cardText: document.getElementById('card').textContent.length,
+      q: document.getElementById('q').value.length,
+      search: document.getElementById('search-status').textContent.length,
+      wide: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    }));
+    expect(r.card, label).toBeLessThan(1000);
+    expect(r.cardText, label).toBeLessThan(600);
+    expect(r.q, label).toBeLessThanOrEqual(200);
+    expect(r.search, label).toBeLessThan(400);
+    expect(r.wide, label).toBeLessThanOrEqual(0);
+  }
+  await seen.check();
+});
+
+// A5: the box was disabled until the data had unpacked, which on a phone is seconds of tapping on
+// nothing, and what was typed before the script ran was lost.
+test('typing before the page has loaded keeps the text, and shows results when it has', async ({ page, browserName }) => {
+  const held = await pageHeldBack();
+  try {
+    await page.goto(held.url, { waitUntil: 'commit' });
+    const q = page.locator('#q');
+    await q.waitFor({ state: 'attached' });
+    await expect(q).toBeEnabled();
+    await expect(q).toHaveAttribute('placeholder', /Search starts/);
+    // WebKit holds its first paint back until more of the page has arrived, so Playwright's check
+    // that the box has stopped moving, which waits on a frame, would never finish there.
+    if (browserName === 'chromium') await q.click();
+    else await q.focus();
+    await page.keyboard.type('metformin');
+    await expect(q).toHaveValue('metformin');
+    held.release();
+    await pageReady(page);
+    await expect(q).toHaveValue('metformin');
+    await expect(q).toBeFocused();
+    await expect(page.locator('#results button.result').first()).toContainText(/metformin/i);
+    await expect(page.locator('#search-status')).toContainText('metformin');
+    await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  } finally {
+    held.close();
+  }
+});
+
+test('Enter pressed while the data is unpacking opens an exact name once it has', async ({ page }) => {
+  // Between this script's first task and the index being built, as a fast typist on a phone is.
+  await page.addInitScript(() => {
+    document.addEventListener('DOMContentLoaded', () => {
+      const q = document.getElementById('q');
+      q.focus();
+      q.value = 'metformin hcl 500 mg tablet';
+      window.__saidWhileWaiting = document.getElementById('search-status').textContent;
+      q.dispatchEvent(new Event('input', { bubbles: true }));
+      q.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      window.__said = document.getElementById('search-status').textContent;
+    });
+  });
+  await page.goto(PAGE);
+  await pageReady(page);
+  expect(await page.evaluate(() => window.__said)).toBe('Search starts when the data has loaded; keep typing.');
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+});
+
+test('a link’s unknown name found before the search index is built still gets its results', async ({ page }) => {
+  await page.goto(`${PAGE}#drug=metformin%20er`);
+  await pageReady(page);
+  await expect(page.locator('#q')).toHaveValue('metformin er');
+  await expect(page.locator('#results button.result').first()).toBeVisible();
+});
+
+// A3: with scripts off, the page offered a dead search box, Try links that did nothing and a link
+// to a 38 MB JSON file.
+test('with JavaScript off: a heading, a plain sentence and the plain pages, with no dead controls', async ({ browser }, info) => {
+  const ctx = await browser.newContext({ javaScriptEnabled: false, viewport: info.project.use.viewport, colorScheme: info.project.use.colorScheme });
+  const page = await ctx.newPage();
+  await page.goto(PAGE);
+  await expect(page.locator('#card-title')).toBeVisible();
+  await expect(page.locator('#card-title')).toHaveText('Drug prices');
+  // Named directly: Playwright's text matching skips what is inside a <noscript> when asked about its parent.
+  const line = page.locator('#card noscript p');
+  await expect(line).toBeVisible();
+  await expect(line).toContainText('JavaScript');
+  await expect(line.locator(`a[href="${AZ}"]`)).toBeVisible();
+  await expect(page.locator('#card')).not.toHaveAttribute('aria-busy', /.*/);
+  await expect(page.locator('.card-loading-script')).toBeHidden();
+  await expect(page.locator('.search')).toBeHidden();
+  await expect(page.locator('.try')).toBeHidden();
+  await expect(page.locator('#card a[href*="drugs.json"]')).toHaveCount(0);
+  const box = await page.locator('#card').boundingBox();
+  expect(box.height, 'no room is kept for a card that is not coming').toBeLessThan(500);
+  await ctx.close();
+});
+
+test('with the script blocked or unparseable, the loading line itself has the way out', async ({ page }, info) => {
+  const html = readFileSync(path.join(ROOT, 'openbill.html'), 'utf8');
+  const at = html.lastIndexOf('</script>');
+  // One character more, so the script no longer matches its CSP hash: what a filter or an old engine
+  // leaves, a page that never starts.
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), `openbill-${info.project.name}-`)), 'blocked.html');
+  writeFileSync(file, `${html.slice(0, at)};${html.slice(at)}`, 'utf8');
+  await page.goto(pathToFileURL(file).href);
+  await expect(page.locator('#card-title')).toHaveText('Drug prices');
+  await expect(page.locator('.card-loading-script')).toContainText('Loading');
+  await expect(page.locator(`.card-loading-script a[href="${AZ}"]`)).toBeVisible();
+  await expect(page.locator('#card')).not.toHaveAttribute('aria-busy', /.*/);
+  expect(await page.locator('html').getAttribute('data-ready')).toBeNull();
+});
+
+// A20: a page saved from the website, or opened alone, had a dozen links that went nowhere.
+test('a saved copy, alone in a folder, has no link that needs a file beside it', async ({ page }, info) => {
+  const url = pageWithData(info, 'saved.html', {});
+  await page.goto(url);
+  await pageReady(page);
+  await openPanel(page);
+  await expect(page.locator('#panel-body li.ndc').first()).toBeVisible();
+  const relative = (hrefs) => hrefs.filter((h) => !/^(https:\/\/|#)/.test(h));
+  const hrefs = await page.evaluate(() => [...document.querySelectorAll('a[href]')].map((a) => a.getAttribute('href')));
+  expect(relative(hrefs)).toEqual([]);
+  expect(hrefs.some((h) => h.startsWith(`${SITE_URL}methodology.html#`))).toBe(true);
+  expect(hrefs).toContain(`${SITE_URL}methodology.html`);
+  // Figures redrawn later keep to the same rule.
+  await settledClick(page, page.locator('.qty-chip').last());
+  await expect(page.locator('#panel-body li.ndc').first()).toBeVisible();
+  expect(relative(await page.evaluate(() => [...document.querySelectorAll('a[href]')].map((a) => a.getAttribute('href'))))).toEqual([]);
+});
+
+test('on the website the same links stay relative, so they follow the site that serves them', async ({ page }) => {
+  const html = readFileSync(path.join(ROOT, 'openbill.html'), 'utf8');
+  await page.route(`${SITE_URL}**`, (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html }));
+  await page.goto(`${SITE_URL}openbill.html`);
+  await pageReady(page);
+  await openPanel(page);
+  const body = page.locator('#panel-body');
+  await expect(body.locator('ul.rules a[href="methodology.html#spread"]')).toHaveCount(1);
+  await expect(page.locator('a[href="methodology.html"]').first()).toBeAttached();
+});
+
+// A16: the stamp reloaded 1.8 MB, and a reader in a saved copy lost it altogether.
+test('the stamp returns to the default card without loading the page again', async ({ page }) => {
+  const seen = await open(page, PAGE + hashFor(METFORMIN, 60));
+  const stamp = page.locator('.stamp');
+  await expect(stamp).toHaveAttribute('href', '#');
+  await page.evaluate(() => {
+    window.__sameDocument = true;
+  });
+  await settledClick(page, stamp);
+  await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  await expect(page.locator('[data-figure]').first()).toBeVisible();
+  await expect(page).toHaveTitle(`${DEFAULT}: OpenBill`);
+  // On the default card it changes nothing.
+  await settledClick(page, stamp);
+  await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  await expect(page.locator('[data-figure]').first()).toBeVisible();
+  await followHash(page, '#drug=NOT%20A%20DRUG');
+  await expect(page.locator('#card-title')).toHaveText('No drug by that name');
+  await settledClick(page, stamp);
+  await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  expect(await page.evaluate(() => window.__sameDocument)).toBe(true);
+  await seen.check();
+});
+
+// A15: every keystroke rebuilt the panel, which is most of the card on a product with many NDCs.
+test('the panel is built when it opens, kept current while open, and left alone while closed', async ({ page }) => {
+  const seen = await open(page, PAGE + hashFor(DEFAULT, 30));
+  const body = page.locator('#panel-body');
+  const reason = (qty) => expected(DEFAULT, qty).s.cost_plus.min.reason;
+  expect(reason(90)).not.toBe(reason(60));
+  await expect(body).toBeEmpty();
+  await page.evaluate(() => {
+    window.__panelWrites = 0;
+    new MutationObserver(() => {
+      window.__panelWrites += 1;
+    }).observe(document.getElementById('panel-body'), { childList: true, subtree: true });
+  });
+  const writes = () => page.evaluate(() => window.__panelWrites);
+  await settledClick(page, page.locator('.qty-chip[data-qty="90"]'));
+  await expect(page.locator('#card-status')).toContainText('At 90 ');
+  expect(await writes(), 'closed: not written').toBe(0);
+  await expect(body).toBeEmpty();
+  // Opened by a click, it shows the quantity on the card, not the one it opened with.
+  await openPanel(page);
+  await expect(body).toContainText(reason(90));
+  await expect(body.locator('li.ndc').first()).toBeVisible();
+  // While open it keeps up.
+  await settledClick(page, page.locator('.qty-chip[data-qty="60"]'));
+  await expect(body).toContainText(reason(60));
+  // Closed, it is left alone; open again, it has caught up.
+  await openPanel(page);
+  await page.evaluate(() => {
+    window.__panelWrites = 0;
+  });
+  await settledClick(page, page.locator('.qty-chip[data-qty="90"]'));
+  await expect(page.locator('#card-status')).toContainText('At 90 ');
+  expect(await writes(), 'closed again: not written').toBe(0);
+  await openPanel(page);
+  await expect(body).toContainText(reason(90));
+  await seen.check();
+});
+
+test('the panel is also built when it is opened some other way, and for printing', async ({ page }) => {
+  const seen = await open(page, PAGE + hashFor(DEFAULT, 30));
+  const body = page.locator('#panel-body');
+  await expect(body).toBeEmpty();
+  await page.evaluate(() => {
+    document.getElementById('panel').open = true;
+  });
+  await expect(body.locator('li.ndc').first()).toBeVisible();
+  // A new card starts empty, and printing fills it, because print shows it open.
+  await followHash(page, hashFor(METFORMIN, 30));
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+  await expect(body).toBeEmpty();
+  await page.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
+  await expect(body.locator('li.ndc').first()).toBeAttached();
+  await seen.check();
+});
+
+// A8, SITE-05: the figures arriving pushed "Try" and "How to read a card" down the page. The room is
+// kept for a card, so a message or the fatal state, far shorter, gives it back when it arrives: that
+// moves things up, on a link that has already failed (decision 53). Neither state is checked here.
+test('the card arriving does not move the page: layout shift under 0.1, at 6× CPU on slow 4G; reports timings', async ({ page }, info) => {
+  test.skip(info.project.name !== 'mobile-light', 'throttling is Chromium’s, and one phone is enough; the next test has the other sizes');
+  test.setTimeout(120_000);
+  const gz = zlib.gzipSync(readFileSync(path.join(ROOT, 'openbill.html')), { level: 9 });
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-encoding': 'gzip', 'cache-control': 'no-store' });
+    res.end(gz);
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Network.enable');
+    await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 562.5, downloadThroughput: 1.44e6 / 8, uploadThroughput: 675e3 / 8 });
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
+    await page.addInitScript(recordLoadShifts);
+    await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: 'commit' });
+    await expect(page.locator('html')).toHaveAttribute('data-ready', 'true', { timeout: 90_000 });
+    await page.waitForTimeout(500);
+    const r = await page.evaluate(() => ({ cls: window.__cls, longest: window.__longest, timings: JSON.parse(document.documentElement.dataset.timings) }));
+    const line = `CLS ${r.cls.toFixed(4)}; longest task ${r.longest} ms; unpack ${r.timings.unpack_ms} ms; inflate ${r.timings.inflate_ms} ms; first card ${r.timings.first_card_since_navigation_ms} ms; ready ${r.timings.since_navigation_ms} ms`;
+    info.annotations.push({ type: '6x + slow 4G', description: line });
+    console.log(`[6x + slow 4G] ${line}`);
+    expect(r.cls).toBeLessThan(0.1);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+for (const [label, hash] of [
+  ['the default card', ''],
+  ['a drug with no Medicare figure', hashFor(noReference)],
+  ['a drug at a quantity', hashFor(METFORMIN, 90)],
+]) {
+  test(`the card arriving does not move the page: layout shift under 0.1 on ${label}`, async ({ page, browserName }) => {
+    test.skip(browserName !== 'chromium', 'only Chromium reports layout shifts');
+    await page.addInitScript(recordLoadShifts);
+    await page.goto(PAGE + hash);
+    await pageReady(page);
+    await page.waitForTimeout(100);
+    expect(await page.evaluate(() => window.__cls)).toBeLessThan(0.1);
+  });
+}
+
+/** In the page, before anything else runs: layout shifts and long tasks, as they happen. */
+function recordLoadShifts() {
+  window.__cls = 0;
+  window.__longest = 0;
+  new PerformanceObserver((list) => {
+    for (const e of list.getEntries()) if (!e.hadRecentInput) window.__cls += e.value;
+  }).observe({ type: 'layout-shift', buffered: true });
+  new PerformanceObserver((list) => {
+    for (const e of list.getEntries()) window.__longest = Math.max(window.__longest, Math.round(e.duration));
+  }).observe({ type: 'longtask', buffered: true });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Decision 54: what Enter may open, when the list comes and goes, and the NDC a reader came with.
+
+const resultButtons = (page) => page.locator('#results button.result');
+
+/** A query with one result that Enter may open. */
+const soloQuery = products
+  .map((p) => p.name.split(' ').slice(0, 2).join(' ').toLowerCase())
+  .find((q) => {
+    const all = search(index, q, { limit: 1000 });
+    return all.length === 1 && enterChoice(all) && all[0].match !== 'exact';
+  });
+/** The start of a word other than a name's first, where that is all the query finds. */
+const partialQuery = products
+  .flatMap((p) => p.name.split(' ').slice(1, 2))
+  .filter((w) => /^[A-Z]{6,}$/.test(w))
+  .map((w) => w.slice(0, -1).toLowerCase())
+  .find((q) => {
+    const all = search(index, q, { limit: 1000 });
+    return all.length > 0 && all.every((r) => r.match === 'partial');
+  });
+/** A row whose FDA form, without its hyphens, reads as more than one product's NDC. */
+const severalWays = linked.find((r) => {
+  const printed = r.identity && r.identity.package_ndc;
+  return printed && printed.replace(/-/g, '').length === 10 && search(index, printed.replace(/-/g, '')).length > 1;
+});
+const byNdcRow = new Map(linked.map((r) => [r.ndc, r]));
+/** A package NADAC does not have, of a labeler and product it does. */
+const missingPackage = (() => {
+  for (const r of linked) {
+    if (search(index, r.ndc.slice(0, 9)).length !== 1) continue;
+    for (let i = 0; i < 100; i++) {
+      const ndc = r.ndc.slice(0, 9) + String(i).padStart(2, '0');
+      if (!byNdcRow.has(ndc)) return { ndc, name: r.name };
+    }
+  }
+  return null;
+})();
+const mostNdcs = [...products].sort((a, b) => b.rows.length - a.rows.length)[0];
+/** No panel at 360 px should pass this on any product; the audit found 53,961 on mostNdcs. */
+const PANEL_LIMIT = 13000;
+
+test('Enter: a list stays, one result or an exact name opens, and the same text never jumps to another card', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const input = page.locator('#q');
+  const title = page.locator('#card-title');
+  const status = page.locator('#search-status');
+
+  await input.fill('metformin');
+  await expect(resultButtons(page).first().locator('.result-name')).toHaveText(METFORMIN);
+  await expect(status).toContainText('Showing the first 20');
+  await input.press('Enter');
+  await expect(resultButtons(page).first()).toBeFocused();
+  await expect(title).toHaveText(DEFAULT);
+
+  await input.fill(soloQuery);
+  await expect(status).toContainText('Press Enter to open it.');
+  await input.press('Enter');
+  await expect(title).toHaveText(search(index, soloQuery)[0].product.name);
+
+  await input.fill(METFORMIN.toLowerCase());
+  await expect(status).toContainText(`Press Enter to open ${METFORMIN}.`);
+  await input.press('Enter');
+  await expect(title).toHaveText(METFORMIN);
+
+  // A partial match is labelled, and Enter leaves it for the reader.
+  await input.fill(partialQuery);
+  await expect(status).toContainText('partial match');
+  await expect(resultButtons(page).first().locator('.result-partial')).toContainText('Partial match');
+  await input.press('Enter');
+  await expect(input).toBeFocused();
+  await expect(title).toHaveText(METFORMIN);
+
+  // Back in the box after a choice: the same text and Enter never replace the card (J25).
+  await input.fill('lisinopril');
+  await expect(status).toContainText('“lisinopril”');
+  const second = await resultButtons(page).nth(1).locator('.result-name').textContent();
+  await resultButtons(page).nth(1).click();
+  await expect(title).toHaveText(second);
+  await input.click();
+  await expect(resultButtons(page).first()).toBeVisible();
+  await expect(status).not.toContainText('Press Enter');
+  await input.press('Enter');
+  await expect(resultButtons(page).first()).toBeFocused();
+  await expect(title).toHaveText(second);
+  await seen.check();
+});
+
+test('Enter does not guess a number: every reading is listed, with a note about the hyphens', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const input = page.locator('#q');
+  const digits = severalWays.identity.package_ndc.replace(/-/g, '');
+  await input.fill(digits);
+  const readings = search(index, digits);
+  await expect(resultButtons(page)).toHaveCount(readings.length);
+  await expect(page.locator('#search-status')).toContainText('Check the hyphens on your label');
+  await expect(resultButtons(page).first().locator('.result-name')).toHaveText(severalWays.name);
+  await expect(resultButtons(page).first().locator('.result-ndc')).toContainText(`printed ${severalWays.identity.package_ndc} by FDA`);
+  await input.press('Enter');
+  await expect(input).toBeFocused();
+  await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  // The reader chooses, and the address keeps the reading chosen.
+  await resultButtons(page).first().click();
+  await expect(page.locator('#card-title')).toHaveText(severalWays.name);
+  expect((await hashParams(page)).get('ndc')).toBe(severalWays.ndc);
+  // With its hyphens the same number is one package, and Enter opens it.
+  await input.fill(severalWays.identity.package_ndc);
+  await expect(resultButtons(page)).toHaveCount(1);
+  await input.press('Enter');
+  await expect(page.locator('#your-ndc')).toContainText(formatNdc(severalWays.ndc));
+  await seen.check();
+});
+
+test('the list comes back with the box, and leaves on an outside click, a followed link and Back', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const input = page.locator('#q');
+  const list = resultButtons(page);
+  await input.fill('metformin');
+  await expect(list.first()).toBeVisible();
+
+  // A click outside closes it; focus comes back with it; a click in the box does too.
+  await page.locator('#card-title').click();
+  await expect(list).toHaveCount(0);
+  await expect(page.locator('#search-status')).toHaveText('');
+  await input.focus();
+  await expect(list.first()).toBeVisible();
+  await page.locator('.search-label').click();
+  await expect(list.first()).toBeVisible();
+  // Escape closes it (a search box may also clear its own text, as Chromium's does).
+  await input.press('Escape');
+  await expect(list).toHaveCount(0);
+  await input.fill('metformin');
+  await expect(list.first()).toBeVisible();
+
+  // Opening a result closes it, and the box brings the same list back (A10).
+  await list.nth(1).click();
+  await expect(list).toHaveCount(0);
+  await expect(page.locator('#card-title')).not.toHaveText(DEFAULT);
+  await input.click();
+  await expect(list.first()).toBeVisible();
+
+  // A change of address closes it, and so does Back.
+  await followHash(page, hashFor(METFORMIN));
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+  await expect(list).toHaveCount(0);
+  await input.focus();
+  await expect(list.first()).toBeVisible();
+  await page.goBack();
+  await expect(list).toHaveCount(0);
+
+  // A pending keystroke does not bring it back after the click.
+  await page.evaluate(() => {
+    const q = document.getElementById('q');
+    q.value = 'metformin hcl';
+    q.dispatchEvent(new Event('input', { bubbles: true }));
+    document.getElementById('card-title').click();
+  });
+  await page.waitForTimeout(150);
+  await expect(list).toHaveCount(0);
+  await seen.check();
+});
+
+test('arrow keys move through the list and back to the box; typing goes to the box; Escape closes', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const input = page.locator('#q');
+  const list = resultButtons(page);
+  await input.fill('metformin');
+  await expect(list.first()).toBeVisible();
+  await input.press('ArrowDown');
+  await expect(list.nth(0)).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(list.nth(1)).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(list.nth(0)).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(input).toBeFocused();
+  await input.press('ArrowUp');
+  await expect(list.last()).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(list.last()).toBeFocused();
+  await page.keyboard.press(' ');
+  await expect(page.locator('#card-title')).not.toHaveText(DEFAULT);
+  await input.click();
+  await input.press('ArrowDown');
+  await expect(list.nth(0)).toBeFocused();
+  await page.keyboard.press('a');
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue('metformina');
+  await input.fill('metformin');
+  await expect(list.first()).toBeVisible();
+  await input.press('ArrowDown');
+  await page.keyboard.press('Escape');
+  await expect(input).toBeFocused();
+  await expect(list).toHaveCount(0);
+  // With the list closed, the arrow opens it.
+  await input.press('ArrowDown');
+  await expect(list.nth(0)).toBeFocused();
+  await seen.check();
+});
+
+test('an entered NDC stays with the card: named above the figures, in the address, across a reload', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const row = byName.get(METFORMIN).rows.find((r) => r.identity);
+  const input = page.locator('#q');
+  await input.fill(formatNdc(row.ndc));
+  await expect(resultButtons(page).first().locator('.result-ndc')).toHaveText(`NDC ${formatNdc(row.ndc)}`);
+  await input.press('Enter');
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+  expect((await hashParams(page)).get('ndc')).toBe(row.ndc);
+  const line = page.locator('#your-ndc');
+  const check = async () => {
+    await expect(line).toContainText(`Your NDC: ${formatNdc(row.ndc)}`);
+    await expect(line).toContainText(row.identity.labeler);
+    await expect(line).toContainText(row.identity.package_description);
+    await expect(line).toContainText(formatUnitPrice(row.nadac.value));
+    await expect(line).toContainText(`eff. ${row.nadac.effective_date}`);
+    await expect(line.locator('.chip')).toHaveCount(1);
+  };
+  await check();
+  expect(await page.evaluate(() => document.getElementById('your-ndc').nextElementSibling.id)).toBe('figures');
+
+  // A quantity change keeps it in the address, and a reload brings it all back.
+  await page.locator('.qty-chip[data-qty="60"]').click();
+  await expect.poll(async () => (await hashParams(page)).get('ndc')).toBe(row.ndc);
+  await expect.poll(async () => (await hashParams(page)).get('qty')).toBe('60');
+  await page.reload();
+  await pageReady(page);
+  await check();
+  expect((await hashParams(page)).get('qty')).toBe('60');
+
+  // It leads to its own entry in the panel, opened, with the others closed.
+  await page.locator('button.your-ndc-more').click();
+  await expect(page.locator('#panel')).toHaveJSProperty('open', true);
+  const item = page.locator(`#panel-body li#ndc-${row.ndc}`);
+  await expect(item.locator('details')).toHaveJSProperty('open', true);
+  await expect(item.locator('summary')).toBeFocused();
+  await expect(item.locator('.ndc-body')).toBeVisible();
+  await expect(page.locator('#panel-body details.ndc-more[open]')).toHaveCount(1);
+
+  // The same drug without the NDC is the same drug without the line.
+  await followHash(page, hashFor(METFORMIN, 60));
+  await expect(line).toHaveCount(0);
+  await page.goBack();
+  await expect(line).toContainText(formatNdc(row.ndc));
+  await seen.check();
+});
+
+test('a link’s &ndc= is checked: spelled another way it is rewritten, wrong it is dropped and said so', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const row = byName.get(METFORMIN).rows[0];
+  const other = byName.get(DEFAULT).rows[0];
+  const go = async (raw) => {
+    await page.goto('about:blank');
+    await page.goto(`${PAGE}#drug=${encodeURIComponent(METFORMIN)}&qty=30&ndc=${encodeURIComponent(raw)}`);
+    await pageReady(page);
+    await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+  };
+  await go(formatNdc(row.ndc));
+  expect((await hashParams(page)).get('ndc')).toBe(row.ndc);
+  await expect(page.locator('#your-ndc')).toContainText(`Your NDC: ${formatNdc(row.ndc)}`);
+
+  await go(other.ndc);
+  expect((await hashParams(page)).has('ndc')).toBe(false);
+  await expect(page.locator('#your-ndc')).toHaveText(`NDC ${formatNdc(other.ndc)} in this link is not a package of this drug, so it was left out.`);
+
+  const hostile = `<img src=x onerror="window.__xss=1">${'A'.repeat(500)}`;
+  await go(hostile);
+  expect((await hashParams(page)).has('ndc')).toBe(false);
+  await expect(page.locator('#your-ndc')).toContainText('could not be read');
+  expect((await page.locator('#your-ndc').textContent()).length).toBeLessThan(200);
+  await expect(page.locator('#your-ndc img')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__xss)).toBeUndefined();
+
+  await go('');
+  await expect(page.locator('#your-ndc')).toHaveCount(0);
+  expect((await hashParams(page)).has('ndc')).toBe(false);
+  await seen.check();
+});
+
+test('a package NADAC does not list is labelled as a different one, and never opened on Enter', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const input = page.locator('#q');
+  const shown = formatNdc(missingPackage.ndc);
+  await input.fill(shown);
+  await expect(resultButtons(page)).toHaveCount(1);
+  await expect(resultButtons(page).first().locator('.result-name')).toHaveText(missingPackage.name);
+  await expect(resultButtons(page).first().locator('.result-ndc')).toContainText('A different package: NDC');
+  await expect(page.locator('#search-status')).toHaveText(new RegExp(`^No package in the NADAC file has NDC ${shown}\\. This is the same labeler’s product in a different package`));
+  await input.press('Enter');
+  await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  await resultButtons(page).first().click();
+  await expect(page.locator('#card-title')).toHaveText(missingPackage.name);
+  const line = page.locator('#your-ndc');
+  await expect(line).toContainText(`Your NDC: ${shown}`);
+  await expect(line).toContainText('This NDC is not in the NADAC file.');
+  await expect(line).toContainText('not yours');
+  expect((await hashParams(page)).get('ndc')).toBe(missingPackage.ndc);
+  await page.reload();
+  await pageReady(page);
+  await expect(line).toContainText(`Your NDC: ${shown}`);
+  await seen.check();
+});
+
+test('a number with no match says so once, and a 12-digit number is not called an NDC or a barcode', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const input = page.locator('#q');
+  const status = page.locator('#search-status');
+  const help = page.locator('#search-help');
+  await input.fill('99999-9999-99');
+  await expect(status).toHaveText('No drug matches “99999-9999-99”. No product in the NADAC file has NDC 99999-9999-99.');
+  await expect(help).toContainText('most packages on FDA’s list of prescription drugs are not in it');
+  await expect(help).not.toContainText('No product in');
+
+  await input.fill('99999-9999');
+  await expect(status).toContainText('No product in the NADAC file has labeler and product code 99999-9999.');
+
+  await input.fill('399999999999');
+  await expect(status).toHaveText('No drug matches “399999999999”. A 12-digit number is not an NDC.');
+  const row = byName.get(METFORMIN).rows[0];
+  await input.fill(`3${row.ndc}`);
+  await expect(resultButtons(page).first().locator('.result-name')).toHaveText(METFORMIN);
+  await expect(status).toContainText('A 12-digit number is not an NDC.');
+  await expect(resultButtons(page).first().locator('.result-ndc')).toContainText('check your label');
+  await expect(page.locator('.search')).not.toContainText(/bar ?code|UPC/i);
+  await input.press('Enter');
+  await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  await seen.check();
+});
+
+for (const name of [mostNdcs.name, 'NALOXONE 2 MG/2 ML SYRINGE']) {
+  test(`the panel stays under ${PANEL_LIMIT} px at 360 wide: ${name}`, async ({ page }) => {
+    test.skip(!byName.has(name), `${name} is not in this build`);
+    await page.setViewportSize({ width: 360, height: 780 });
+    const seen = await open(page, PAGE + hashFor(name));
+    await openPanel(page);
+    const body = page.locator('#panel-body');
+    await expect(body.locator('li.ndc')).toHaveCount(byName.get(name).rows.length);
+    expect((await body.boundingBox()).height).toBeLessThan(PANEL_LIMIT);
+    await expect(body.locator('details[open]')).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
+    const sizes = await page.evaluate(() => [...document.querySelectorAll('#panel-body summary')].map((s) => s.getBoundingClientRect().height));
+    expect(Math.min(...sizes), 'each summary is a 44px target').toBeGreaterThanOrEqual(44);
+    // A nested details stays open when a new quantity rebuilds the panel.
+    const first = body.locator('details.ndc-more').first();
+    await first.locator('summary').click();
+    await expect(first).toHaveJSProperty('open', true);
+    await page.locator('#qty').fill('45');
+    await expect(body.locator('details.ndc-more').first()).toHaveJSProperty('open', true);
+    await seen.check();
+  });
+}
+
+test('a #ndc- anchor opens that entry on the card that has it, and leaves any other card alone', async ({ page }) => {
+  const seen = await open(page, PAGE + hashFor(METFORMIN, DEFAULT_QTY));
+  const row = byName.get(METFORMIN).rows[0];
+  await followHash(page, `#ndc-${row.ndc}`);
+  await expect(page.locator(`#panel-body li#ndc-${row.ndc} details`)).toHaveJSProperty('open', true);
+  await expect.poll(() => addressHash(page)).toBe(hashFor(METFORMIN, DEFAULT_QTY));
+  await followHash(page, `#ndc-${byName.get(DEFAULT).rows[0].ndc}`);
+  await expect.poll(() => addressHash(page)).toBe(hashFor(METFORMIN, DEFAULT_QTY));
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+  await seen.check();
+});
+
+test('printing opens the panel’s nested details and puts them back', async ({ page }) => {
+  await open(page, PAGE + hashFor(METFORMIN));
+  const nested = page.locator('#panel-body details:not([open])');
+  await page.evaluate(() => window.dispatchEvent(new Event('beforeprint')));
+  await expect(page.locator('#panel-body li.ndc').first()).toBeAttached();
+  await expect(nested).toHaveCount(0);
+  await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+  await expect(page.locator('#panel-body details.ndc-more[open]')).toHaveCount(0);
 });

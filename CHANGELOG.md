@@ -53,6 +53,23 @@ Data refreshes are listed too, with the source dates they bring in.
 
 ### Changed
 
+- Search lists the plain form first: "metformin", "amlodipine" and "naltrexone" start with the
+  plain tablet, and strengths read in number order (sertraline 25, 50, 100). Release forms, vials
+  and combinations follow, and naming one ("metformin er") still finds it first (decision 54).
+- Enter opens a drug only when the search has one answer or you typed its exact name. Otherwise it
+  moves to the list and the next Enter is your choice, and Enter on text you already chose from
+  never replaces the card.
+- Search matches the start of a word, never the middle: "statin" no longer lists NYSTATIN, "lopid"
+  no longer lists CLOPIDOGREL, and "syringe" no longer finds syrups. A match on part of a later word
+  says "Partial match". Brand names NADAC does not use now find nothing rather than another drug.
+- Spelling suggestions no longer offer a word two edits away that starts with a different letter.
+- The search list comes back when you return to the box, closes when you click elsewhere or the
+  address changes, and the arrow keys move through it.
+- A card opened from an NDC names it ("Your NDC") above the figures and keeps it in the address
+  (`&ndc=`), so a reload or a shared link keeps it.
+- "Sources and method" keeps each NDC and each repeated record behind its own summary: on
+  ATORVASTATIN 10 MG at 360 px wide it goes from 53,961 to 9,325 px.
+
 - Drug pages say more about their own product and repeat less (decision 52): a table of the
   product's other strengths, forms and brands with their NADAC and Medicare figures per unit;
   where its NADAC price sits in each FDA class (`classStanding()`); for more than 6 NDCs, a
@@ -88,6 +105,38 @@ Data refreshes are listed too, with the source dates they bring in.
 
 ### Fixed
 
+- A 10-digit NDC without hyphens that fits more than one drug lists them all, FDA's own form first,
+  and says to check the hyphens, instead of opening one (`8330100101` opened gabapentin, not the
+  metformin package FDA prints that way).
+- Search reads NDCs written with dots or slashes, with a lost leading zero (`378-7185-05`), with
+  hyphens in no layout, or as labeler and product only (`0378-7185`).
+- An NDC NADAC does not list, when another package of the same labeler's product is listed, is
+  called a different package instead of silently showing that one. The no-match message says it
+  once, and says most of FDA's prescription packages are not in NADAC.
+- A 12-digit number is treated as a guess and says it is not an NDC.
+- The skip link, and any other `#fragment` or `#utm_source=…` on a link, keeps the card instead
+  of replacing it with "That link does not name a drug" (decision 53).
+- A drug name in a link works in any case, and without `drug=`; a name the file does not have
+  goes into the search box with its results.
+- The browser tab's title says what the card says, on messages and failures too.
+- A screen reader no longer hears the last drug's prices over the next card: the status names the
+  drug, is written once per change, and says when the page is ready.
+- An unusable quantity is tied to its field and said in the status.
+- A crafted quantity in a link, such as `qty=1e300000000`, is refused at once in plain words
+  instead of freezing or crashing the tab.
+- A very long name or quantity in a link is cut short on the screen, and the search box takes 200
+  characters.
+- The search box works while the data loads: what you type is kept, and the results appear when
+  it is ready.
+- The page stops freezing for seconds on a slow phone (longest task at 6x CPU about 2.9 s to about
+  0.6 s), and the card arriving no longer moves the page.
+- With JavaScript off or blocked, or when the data cannot load, the page says so plainly, hides
+  controls that would do nothing, and links the plain A–Z pages.
+- Safari below 16.4 gets the promised message instead of "Loading" forever.
+- The stamp goes back to the default card without downloading the page again.
+- A saved copy of the page links to the website for the method and the data, not to files it does
+  not have.
+- The skip link no longer sits over the masthead at a large font size.
 - A row with no Part D join no longer says "No Medicare Part D spending row matched this drug by
   brand or generic name", which was false where Part D has a row with the name that the builder
   refused (decision 47).
