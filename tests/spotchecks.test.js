@@ -1,10 +1,12 @@
 // Known real-world values, checked against data/drugs.json (docs/DECISIONS.md, decision 12).
 //
-// Each entry in tests/spotchecks.json was verified by a person, outside OpenBill's pipeline,
-// against the government source named in its verified_via, and is pinned to the source file it
-// describes. An entry applies only while that file is the one data/drugs.json was built from;
-// then its value must match exactly. At least ten must apply: a data refresh that changes the
-// source files has to re-verify at least ten facts against the new files and add them.
+// Each entry in tests/spotchecks.json was verified outside OpenBill's pipeline, by a person or by
+// tools/reverify_spotchecks.py, against the government source named in its verified_via, and is
+// pinned to the source file it describes. An entry applies only while that file is the one
+// data/drugs.json was built from; then its value must match exactly. At least ten must apply, and
+// a floor per source must apply (decisions 12 and 53): a data refresh that changes a source's file
+// has to re-verify that source's facts against the new file. tools/reverify_spotchecks.py does
+// NADAC and Part D through their APIs; Part B has no API, so a person does those at the new quarter.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,6 +18,8 @@ const doc = JSON.parse(readFileSync(new URL('../data/drugs.json', import.meta.ur
 const checks = JSON.parse(readFileSync(new URL('./spotchecks.json', import.meta.url), 'utf8'));
 
 const MIN_APPLYING = 10;
+// A total alone passed with no NADAC check at all, on the source that moves every week (INFRA-06).
+const MIN_PER_SOURCE = Object.freeze({ nadac: 5, partd: 5, asp_limits: 3, asp_crosswalk: 2 });
 const WHERE = ['row', 'part_d_names', 'part_b_codes'];
 const FIELDS = ['id', 'where', 'ndc', 'key', 'path', 'value', 'source_file', 'verified_via', 'verified_on', 'note'];
 
@@ -25,7 +29,15 @@ const nonEmpty = (v) => typeof v === 'string' && v.trim() !== '';
 /** source_file -> source id, for the files data/drugs.json was built from. */
 const currentFiles = new Map(Object.entries(doc.sources || {}).map(([id, s]) => [s.source_file, id]));
 const rowsByNdc = new Map((doc.rows || []).map((r) => [r.ndc, r]));
-const applies = (e) => currentFiles.has(e.source_file);
+const here = (e) => (e.where === 'row' ? rowsByNdc.has(e.ndc) : Object.hasOwn(doc[e.where] || {}, e.key));
+const left = (e) => currentFiles.get(e.source_file) !== 'nadac' && !here(e);
+/**
+ * An entry is checked while its file is current. An entry pinned to a Part B or Part D file also needs
+ * its row or table entry in this build: the Part D and Part B tables hold only what this week's NADAC
+ * rows join to, so when the last NDC of a name leaves, the fact in that file has not changed. That is
+ * a normal week. It does not count towards a floor.
+ */
+const applies = (e) => currentFiles.has(e.source_file) && !left(e);
 
 test('tests/spotchecks.json: every entry is well formed and ids are unique', () => {
   assert.ok(Array.isArray(checks) && checks.length > 0, 'spotchecks.json is a non-empty array');
@@ -69,6 +81,10 @@ for (const e of checks) {
   const name = `${e.id} [${e.source_file}]`;
   test(name, (t) => {
     t.diagnostic(`verified ${e.verified_on} via: ${e.verified_via}`);
+    if (left(e)) {
+      t.skip(`${e.where === 'row' ? `NDC ${e.ndc}` : e.key} has left this week's NADAC, so this build does not hold the fact from ${e.source_file}`);
+      return;
+    }
     if (!applies(e)) {
       const files = [...currentFiles].map(([f, id]) => `${id}: ${f}`).join('; ');
       t.skip(`pinned to ${e.source_file}, which data/drugs.json no longer uses (current files: ${files})`);
@@ -111,3 +127,12 @@ test(`at least ${MIN_APPLYING} spot checks apply to the source files data/drugs.
     );
   }
 });
+
+for (const [source, floor] of Object.entries(MIN_PER_SOURCE)) {
+  test(`at least ${floor} spot checks apply to the ${source} file data/drugs.json was built from`, () => {
+    const file = doc.sources[source].source_file;
+    const applying = checks.filter((e) => e.source_file === file && applies(e));
+    const how = source === 'nadac' || source === 'partd' ? 'Run python tools/reverify_spotchecks.py, which reads each fact from the government API and rewrites it' : 'This source has no API: a person re-verifies them against the new file (docs/HAND-CHECK.md)';
+    assert.ok(applying.length >= floor, `Only ${applying.length} spot checks are pinned to ${file}; at least ${floor} must be. ${how} (docs/DECISIONS.md, decisions 12 and 53).`);
+  });
+}

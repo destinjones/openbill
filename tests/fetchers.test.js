@@ -119,10 +119,14 @@ out["real_zips_pass"] = [e["file"] for k, e in real.items() if isinstance(e, dic
 # PY-3: the ASP link scan is linear and finds what the page links.
 page = '<p><a href="/files/zip/october-2026-medicare-part-b-payment-limit-files-final.zip">October 2026 Medicare Part B Payment Limit Files <span>(ZIP)</span></a> 09/17/2026</p><a href="/x.pdf">pdf</a><A HREF="/files/zip/b.zip" class=x>B</A>tail'
 out["links"] = [list(x) for x in fetch_asp.iter_zip_links(page)]
-t = time.perf_counter()
-list(fetch_asp.iter_zip_links('<a href="x.zip">' * 40000))
-list(fetch_asp.iter_zip_links('<a href="x.zip">y</a>' * 40000))
-out["scan_seconds"] = time.perf_counter() - t
+# The fastest of three: the question is whether the scan is linear, not whether the machine paused.
+times = []
+for _ in range(3):
+    t = time.perf_counter()
+    list(fetch_asp.iter_zip_links('<a href="x.zip">' * 40000))
+    list(fetch_asp.iter_zip_links('<a href="x.zip">y</a>' * 40000))
+    times.append(time.perf_counter() - t)
+out["scan_seconds"] = min(times)
 print(json.dumps(out))
 `;
 
