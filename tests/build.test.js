@@ -18,6 +18,8 @@ import {
   cspFor,
   DEFAULT_PRODUCT,
   TRY_PRODUCTS,
+  TRY_FALLBACKS,
+  tryProducts,
   SIZE_LIMIT,
   OG_IMAGE,
   socialMeta,
@@ -177,9 +179,9 @@ test('the build block carries the build id, the source dates, the default card a
   const names = new Set(doc.rows.map((r) => r.name));
   assert.deepEqual(info.default, { drug: DEFAULT_PRODUCT.drug, qty: DEFAULT_PRODUCT.qty });
   assert.ok(names.has(info.default.drug));
-  assert.deepEqual(info.try, [...TRY_PRODUCTS]);
-  assert.equal(TRY_PRODUCTS.length, 4);
-  for (const n of TRY_PRODUCTS) assert.ok(names.has(n), `${n} is a product in the data`);
+  assert.deepEqual(info.try, tryProducts(names, () => {}));
+  assert.equal(info.try.length, 4);
+  for (const n of info.try) assert.ok(names.has(n), `${n} is a product in the data`);
   assert.ok(html.includes(`build ${built.buildId}`), 'the footer shows the build id');
 });
 
@@ -189,6 +191,20 @@ test('the default card is the showcase, ARIPIPRAZOLE 10 MG TABLET at 30; metform
   assert.ok(TRY_PRODUCTS.includes('METFORMIN HCL 500 MG TABLET'));
   assert.ok(!TRY_PRODUCTS.includes(DEFAULT_PRODUCT.drug), 'the Try list does not repeat the default card');
   assert.equal(new Set(TRY_PRODUCTS).size, TRY_PRODUCTS.length);
+});
+
+test('a Try name that has left the data is replaced from the fallbacks with a warning, and never invented', () => {
+  const said = [];
+  const warn = (m) => said.push(m);
+  const all = new Set([...TRY_PRODUCTS, ...TRY_FALLBACKS]);
+  assert.deepEqual(tryProducts(all, warn), [...TRY_PRODUCTS]);
+  assert.deepEqual(said, [], 'nothing to say when every name is there');
+  const lost = new Set(all);
+  lost.delete(TRY_PRODUCTS[1]);
+  assert.deepEqual(tryProducts(lost, warn), [TRY_PRODUCTS[0], TRY_FALLBACKS[0], TRY_PRODUCTS[2], TRY_PRODUCTS[3]]);
+  assert.equal(said.length, 1);
+  assert.match(said[0], /WARNING: the Try link "ELIQUIS 5 MG TABLET" is not in data\/drugs\.json; using "LISINOPRIL 10 MG TABLET" instead/);
+  assert.deepEqual(tryProducts(new Set([TRY_PRODUCTS[0]]), warn), [TRY_PRODUCTS[0]], 'fewer links rather than a name that is not in the data');
 });
 
 function metaContent(html, attr, name) {

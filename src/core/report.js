@@ -10,8 +10,11 @@ export const ISSUE_TEMPLATES = Object.freeze({
   'bug.yml': Object.freeze(['what_happened', 'steps', 'device', 'build_id']),
 });
 
-/** Longest URL issueUrl() returns; longer values are cut with "…". */
-export const ISSUE_URL_MAX = 7500;
+/**
+ * Longest URL issueUrl() returns; longer values are cut with "…". GitHub, logged out, answers 302
+ * up to a title of 6,000 characters and 500 from 6,500 (tested 2026-11; decision 53).
+ */
+export const ISSUE_URL_MAX = 5000;
 
 const ELLIPSIS = '…';
 const ELLIPSIS_ENCODED = encodeURIComponent(ELLIPSIS).length;

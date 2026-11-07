@@ -36,8 +36,9 @@ export const ENTRY = 'src/app/app.js';
 export const DEFAULT_PRODUCT = Object.freeze({ drug: 'ARIPIPRAZOLE 10 MG TABLET', qty: 30 });
 
 /**
- * The "Try:" links under the card. Each must be a product in data/drugs.json, or the build fails.
- * Metformin, the first showcase, stays one tap away.
+ * The "Try:" links under the card. A name that has left data/drugs.json is replaced from
+ * TRY_FALLBACKS with a warning: products leave NADAC most weeks, and that is no reason to stop a
+ * refresh (decision 53). Metformin, the first showcase, stays one tap away.
  */
 export const TRY_PRODUCTS = Object.freeze([
   'METFORMIN HCL 500 MG TABLET',
@@ -45,6 +46,37 @@ export const TRY_PRODUCTS = Object.freeze([
   'ATORVASTATIN 20 MG TABLET',
   'HUMULIN R 100 UNIT/ML VIAL',
 ]);
+
+/** Common products to draw on, in order, when a Try name has left the data. */
+export const TRY_FALLBACKS = Object.freeze([
+  'LISINOPRIL 10 MG TABLET',
+  'SERTRALINE HCL 50 MG TABLET',
+  'LEVOTHYROXINE 50 MCG TABLET',
+  'GABAPENTIN 300 MG CAPSULE',
+  'OMEPRAZOLE DR 20 MG CAPSULE',
+]);
+
+/**
+ * The Try links for this data: TRY_PRODUCTS, with any name not in the data replaced from
+ * TRY_FALLBACKS. Never the default card. Fewer links rather than an invented name.
+ * @param {Set<string>} names the product names in the data
+ * @param {(message: string) => void} [warn]
+ * @returns {string[]}
+ */
+export function tryProducts(names, warn = (m) => console.warn(m)) {
+  const spare = TRY_FALLBACKS.filter((n) => names.has(n) && !TRY_PRODUCTS.includes(n) && n !== DEFAULT_PRODUCT.drug);
+  const out = [];
+  for (const n of TRY_PRODUCTS) {
+    if (names.has(n)) {
+      out.push(n);
+      continue;
+    }
+    const instead = spare.shift();
+    warn(`WARNING: the Try link ${JSON.stringify(n)} is not in data/drugs.json; ${instead ? `using ${JSON.stringify(instead)} instead` : 'no fallback is left, so there is one link fewer'}. Update TRY_PRODUCTS in build.js.`);
+    if (instead) out.push(instead);
+  }
+  return out;
+}
 
 /** The site's preview image (1200×630 PNG, built on deploy by tools/site.mjs, not committed). */
 export const OG_IMAGE = `${SITE_URL}${ogImagePath('site')}`;
@@ -832,9 +864,9 @@ export function buildAll() {
   const doc = JSON.parse(dataText);
   if (!doc || !Array.isArray(doc.rows) || !doc.sources || !doc.sources.nadac) throw new Error('data/drugs.json has no rows or no nadac source');
   const names = new Set(doc.rows.map((r) => r.name));
-  for (const n of [DEFAULT_PRODUCT.drug, ...TRY_PRODUCTS]) {
-    if (!names.has(n)) throw new Error(`build.js names the product ${JSON.stringify(n)}, which is not in data/drugs.json`);
-  }
+  // The default card is the showcase (decision 45): the page has no first screen without it.
+  if (!names.has(DEFAULT_PRODUCT.drug)) throw new Error(`build.js names the default product ${JSON.stringify(DEFAULT_PRODUCT.drug)}, which is not in data/drugs.json. Choose a new showcase (decision 45).`);
+  const tried = tryProducts(names);
   for (const r of RULES) if (!/^[a-z0-9][a-z0-9-]*$/.test(r.id)) throw new Error(`rule id ${JSON.stringify(r.id)} cannot be an anchor`);
 
   const buildId = computeBuildId();
@@ -848,10 +880,10 @@ export function buildAll() {
     schema: doc.schema,
     sources: sourceDates(doc),
     default: { drug: DEFAULT_PRODUCT.drug, qty: DEFAULT_PRODUCT.qty },
-    try: [...TRY_PRODUCTS],
+    try: tried,
   };
 
-  const tryLinks = TRY_PRODUCTS.map((n) => `<li><a href="${esc(hashFor(n))}">${esc(n)}</a></li>`).join('\n');
+  const tryLinks = tried.map((n) => `<li><a href="${esc(hashFor(n))}">${esc(n)}</a></li>`).join('\n');
   const template = readText('src/app/index.html');
   const pageTitle = /<title>([^<]+)<\/title>/.exec(template);
   if (!pageTitle) throw new Error('src/app/index.html has no <title>');
