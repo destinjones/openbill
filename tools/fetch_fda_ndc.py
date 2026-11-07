@@ -18,8 +18,11 @@ docs/DATA_SOURCES.md.
 The members are tab-delimited Windows-1252 text with CRLF line ends (verified: product.txt is not
 valid UTF-8; cp1252 decodes every byte). Zip members are read in memory, never extracted.
 
+A new zip is validated (both members, their headers and field counts) before it replaces the
+cached one.
+
 Usage:
-  python tools/fetch_fda_ndc.py [--offline] [--force]
+  python tools/fetch_fda_ndc.py [--offline | --require-online] [--force]
 """
 
 from __future__ import annotations
@@ -114,7 +117,8 @@ def main(argv: list[str] | None = None) -> int:
     args = cachelib.arg_parser(__doc__.split("\n\n")[0]).parse_args(argv)
     worst = 0
     for key, spec in SOURCES.items():
-        entry, happened, code = cachelib.run_source(key, spec["label"], resolver(key), args.offline, args.force)
+        validate = lambda part, meta, members=spec["members"]: open_tables(part, members)
+        entry, happened, code = cachelib.run_source(key, spec["label"], resolver(key), args.offline, args.force, validate)
         if code:
             worst = worst or code
             continue
@@ -141,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
   products        {len(products):,}   {', '.join(f'{k or "(blank)"} {v:,}' for k, v in types.most_common(4))}
   packages        {len(packages):,}   exclude flags: {', '.join(f'{k or "(none)"} {v:,}' for k, v in sorted(flags.items()))}
 """.rstrip())
-    return worst
+    return cachelib.finish(worst, args)
 
 
 if __name__ == "__main__":

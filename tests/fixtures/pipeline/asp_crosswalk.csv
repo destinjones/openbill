@@ -1,0 +1,6 @@
+October 2026 ASP NDC - HCPCS Crosswalk for Medicare Part B Drugs,,,,,,,,,
+"     Effective October 1, 2026 through December 31, 2026",,,,,,,,,
+
+_2026_CODE,Short Description,LABELER NAME,NDC,Drug Name,HCPCS dosage,PKG SIZE,PKG QTY,BILLUNITS,BILLUNITSPKG
+J1817,Insulin for insulin pump use,Eli Lilly and Company,00002-8215-01,Humulin R,50 UNITS,10,1,20,20
+J2405,Ondansetron hcl injection,Pfizer Inc,00409-0009-25,Ondansetron HCl,1 MG,2,25,4,100
