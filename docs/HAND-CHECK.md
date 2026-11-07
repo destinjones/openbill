@@ -5,6 +5,9 @@ one it gives what the card shows, where to find each number in the raw governmen
 value you should find there, and a box to tick. It does not replace the spot checks in
 `tests/spotchecks.json` ([decision 12](DECISIONS.md#12-spot-checks-are-pinned-to-source-files-every-refresh-re-verifies-at-least-ten)).
 It is the slower check a person does once per data refresh, without trusting any of our code.
+`tools/reverify_spotchecks.py` re-checks the NADAC and Part D spot checks through the government
+APIs and does not replace this: Part B has no API, and it runs our code
+([decision 53](DECISIONS.md#53-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening)).
 
 Every expected value below was read from the cached raw files with a short standard-library
 Python script that does not import OpenBill's code and does not read `data/drugs.json`. The
