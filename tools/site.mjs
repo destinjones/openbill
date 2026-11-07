@@ -44,6 +44,7 @@ import { performance } from 'node:perf_hooks';
 import { buildModel, renderDrugPage, renderClassPage, renderLetterPage, renderNotFoundPage, renderOgHtml, sitemapXml, linkedAnchors, ogImagePath, SHOWCASE, OG_WIDTH, OG_HEIGHT, SITEMAP_CLASS_MIN, PAGES_REWRITTEN } from '../src/build/drugpage.js';
 import { renderPressPage, renderWordmarkHtml, citationDois, PRESS_PATH, PRESS_SHOTS, PRESS_WORDMARKS, WORDMARK } from '../src/build/presspage.js';
 import { slugify, siteSlugs } from '../src/core/slug.js';
+import { quantizePng } from './png.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -228,6 +229,9 @@ async function renderOgImages(model, jobs, out, log) {
   const browser = await chromium.launch();
   const problems = [];
   const times = [];
+  let encodeMs = 0;
+  let screenshotBytes = 0;
+  let writtenBytes = 0;
   try {
     // The card markup is built from data: no script may run in it (it has none, and JavaScript is
     // off here), so a slip in escaping could never execute inside the build job. Every request is
@@ -265,7 +269,12 @@ async function renderOgImages(model, jobs, out, log) {
       if (check.overflow !== 0) problems.push(`${job.file}: the card's content does not fit (${check.overflow}px over)`);
       if (check.scripts !== 0) problems.push(`${job.file}: the card markup has a script`);
       const png = await page.screenshot({ type: 'png', clip: { x: 0, y: 0, width: OG_WIDTH, height: OG_HEIGHT }, animations: 'disabled', caret: 'hide' });
-      writeFile(out, job.file, png);
+      const tEncode = performance.now();
+      const small = quantizePng(png); // 256 colours or fewer: about 40% of the size (decision 53)
+      encodeMs += performance.now() - tEncode;
+      screenshotBytes += png.length;
+      writtenBytes += small.length;
+      writeFile(out, job.file, small);
       times.push(performance.now() - t);
       if (problems.length) throw new Error(`preview card ${job.file}: ${problems.join('; ')}`);
       i += 1;
@@ -275,7 +284,7 @@ async function renderOgImages(model, jobs, out, log) {
   } finally {
     await browser.close();
   }
-  return { count: times.length, times, total: performance.now() - t0 };
+  return { count: times.length, times, total: performance.now() - t0, encodeMs, screenshotBytes, writtenBytes };
 }
 
 // ---------------------------------------------------------------- the press kit's pictures
@@ -489,6 +498,7 @@ function report(r, log) {
     const t = [...r.images.times].sort((a, b) => a - b);
     const mean = t.reduce((a, b) => a + b, 0) / (t.length || 1);
     log(`  images: ${n(r.images.count)} preview cards in ${(r.images.total / 1000).toFixed(1)} s; per image mean ${ms(mean)}, median ${ms(t[Math.floor(t.length / 2)] || 0)}, slowest ${ms(t[t.length - 1] || 0)}`);
+    log(`  images: ${mb(r.images.screenshotBytes)} as screenshots, ${mb(r.images.writtenBytes)} at 256 colours (${((100 * r.images.writtenBytes) / (r.images.screenshotBytes || 1)).toFixed(1)}%), encoding ${ms(r.images.encodeMs / (r.images.count || 1))} per image`);
   } else log('  images: skipped (--no-og)');
   if (r.press.media) log(`  press: ${r.press.media.wordmarks} wordmarks, ${r.press.media.shots} screenshots, ${r.press.media.clips.length} clips in ${(r.press.media.total / 1000).toFixed(1)} s`);
   else log('  press: pictures and clips skipped (--no-og)');
