@@ -41,7 +41,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 
-import { buildModel, renderDrugPage, renderClassPage, renderLetterPage, renderNotFoundPage, renderOgHtml, sitemapXml, linkedAnchors, ogImagePath, SHOWCASE, OG_WIDTH, OG_HEIGHT, SITEMAP_CLASS_MIN } from '../src/build/drugpage.js';
+import { buildModel, renderDrugPage, renderClassPage, renderLetterPage, renderNotFoundPage, renderOgHtml, sitemapXml, linkedAnchors, ogImagePath, SHOWCASE, OG_WIDTH, OG_HEIGHT, SITEMAP_CLASS_MIN, PAGES_REWRITTEN } from '../src/build/drugpage.js';
 import { renderPressPage, renderWordmarkHtml, citationDois, PRESS_PATH, PRESS_SHOTS, PRESS_WORDMARKS, WORDMARK } from '../src/build/presspage.js';
 import { slugify, siteSlugs } from '../src/core/slug.js';
 
@@ -53,11 +53,18 @@ const FONT_DIR = 'src/app/fonts';
 export const MARKER = '.openbill-site';
 const MARKER_TEXT = 'Written by OpenBill tools/site.mjs. This folder is emptied and rebuilt by it.\n';
 
-/** The files a static page is built from: its sitemap lastmod is the newest commit touching any. */
-export const PAGE_INPUTS = Object.freeze(['data/drugs.json', 'src/build/drugpage.js', 'src/build/methodology.js', 'src/core', 'src/site']);
-
-/** The press page also changes with its own renderers and with the DOIs in CITATION.cff. */
-export const PRESS_INPUTS = Object.freeze([...PAGE_INPUTS, 'src/build/presspage.js', 'src/build/reveal.js', 'CITATION.cff']);
+/**
+ * The dates the pages state. `data`, on every page ("Data changed") and behind its stale notes, is
+ * the last commit touching data/drugs.json and nothing else. `pages`, the sitemap's lastmod, adds the
+ * date a person last rewrote the pages (PAGES_REWRITTEN). `press` also moves with the DOIs in
+ * CITATION.cff. No code commit moves any of them (decision 53; ISO dates compare as strings).
+ * @param {(rel: string) => string} lastmod the date of the last commit touching a path
+ */
+export function siteDates(lastmod) {
+  const data = lastmod('data/drugs.json');
+  const pages = [data, PAGES_REWRITTEN].sort().at(-1);
+  return { data, pages, press: [pages, lastmod('CITATION.cff')].sort().at(-1) };
+}
 const LFS_POINTER = 'version https://git-lfs.github.com/spec/';
 
 // The latin subset's unicode-range, as build.js writes it for these files.
@@ -356,14 +363,9 @@ export async function buildSite(opts) {
     notes.push(`lastmod for ${rel}: git history unavailable (${g.why}); used the NADAC as-of date ${doc.sources.nadac.as_of_date} instead`);
     return doc.sources.nadac.as_of_date;
   };
-  // A data page changes when the data or the code that renders it changes: its lastmod is the
-  // newest commit touching any of PAGE_INPUTS (ISO dates compare as strings).
-  const dataDate = PAGE_INPUTS.map(lastmod).sort().at(-1);
-  const pressDate = PRESS_INPUTS.map(lastmod).sort().at(-1);
-  const appDate = lastmod('openbill.html');
-  const methodologyDate = lastmod('methodology.html');
+  const dates = siteDates(lastmod);
 
-  const model = buildModel(doc, { dataDate });
+  const model = buildModel(doc, { dataDate: dates.data });
   const tModel = performance.now();
 
   let chosen;
@@ -393,8 +395,8 @@ export async function buildSite(opts) {
   const dir = prepareOut(out);
   const written = { drug: 0, class: 0, classUnlisted: 0, letter: 0 };
   const sitemap = [
-    { path: '', lastmod: appDate },
-    { path: 'methodology.html', lastmod: methodologyDate },
+    { path: '', lastmod: dates.pages },
+    { path: 'methodology.html', lastmod: dates.pages },
   ];
   writeFile(dir, 'index.html', app);
   writeFile(dir, 'openbill.html', app);
@@ -410,7 +412,7 @@ export async function buildSite(opts) {
     if (titles.has(r.title)) throw new Error(`two drug pages would share the title ${JSON.stringify(r.title)}`);
     titles.set(r.title, r.path);
     writeFile(dir, r.file, r.html);
-    sitemap.push({ path: r.path, lastmod: dataDate });
+    sitemap.push({ path: r.path, lastmod: dates.pages });
     written.drug += 1;
   }
   for (const [key, list] of model.classes) {
@@ -418,21 +420,21 @@ export async function buildSite(opts) {
     writeFile(dir, r.file, r.html);
     // A class of one or two products is mostly shared explanation: published and linked from its
     // drug pages, but not offered to search engines in the sitemap.
-    if (list.length >= SITEMAP_CLASS_MIN) sitemap.push({ path: r.path, lastmod: dataDate });
+    if (list.length >= SITEMAP_CLASS_MIN) sitemap.push({ path: r.path, lastmod: dates.pages });
     else written.classUnlisted += 1;
     written.class += 1;
   }
   for (const letter of model.letterOrder) {
     const r = renderLetterPage(model, letter);
     writeFile(dir, r.file, r.html);
-    sitemap.push({ path: r.path, lastmod: dataDate });
+    sitemap.push({ path: r.path, lastmod: dates.pages });
     written.letter += 1;
   }
   writeFile(dir, '404.html', renderNotFoundPage(model).html);
   // The press kit, after the class and A–Z pages, which have worked out every product's figures.
   const press = renderPressPage(model, showcase, { dois: citationDois(fs.readFileSync(path.join(ROOT, 'CITATION.cff'), 'utf8')) });
   writeFile(dir, press.file, press.html);
-  sitemap.push({ path: press.path, lastmod: pressDate });
+  sitemap.push({ path: press.path, lastmod: dates.press });
   writeFile(dir, 'sitemap.xml', sitemapXml(sitemap));
   const tPages = performance.now();
 
@@ -469,7 +471,7 @@ export async function buildSite(opts) {
     bytes: files.reduce((a, f) => a + f.bytes, 0),
     sizes,
     notes,
-    dates: { data: dataDate, press: pressDate, app: appDate, methodology: methodologyDate },
+    dates,
     anchorsMissing: missing,
     timing: { model: tModel - t0, pages: tPages - tModel, total: performance.now() - t0 },
     model,
@@ -492,7 +494,7 @@ function report(r, log) {
   else log('  press: pictures and clips skipped (--no-og)');
   log(`  files: ${n(r.files)}, ${mb(r.bytes)} in all`);
   for (const [k, v] of Object.entries(r.sizes).sort((a, b) => b[1] - a[1])) log(`    ${k.padEnd(18)} ${mb(v).padStart(9)}  (${n(v)} bytes)`);
-  log(`  sitemap lastmod: data pages ${r.dates.data} (newest of ${PAGE_INPUTS.join(', ')}), press ${r.dates.press}, home ${r.dates.app}, methodology ${r.dates.methodology}`);
+  log(`  dates: data changed ${r.dates.data} (last commit touching data/drugs.json); sitemap lastmod ${r.dates.pages} (the later of that and PAGES_REWRITTEN, ${PAGES_REWRITTEN}), press ${r.dates.press}`);
   for (const note of r.notes) log(`  NOTE ${note}`);
   if (r.anchorsMissing.length) log(`  WARNING methodology.html has no ${r.anchorsMissing.map((a) => `#${a}`).join(', ')} (run node build.js)`);
   log(`  time: model ${(r.timing.model / 1000).toFixed(1)} s, pages ${(r.timing.pages / 1000).toFixed(1)} s, total ${(r.timing.total / 1000).toFixed(1)} s`);
