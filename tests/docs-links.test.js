@@ -594,28 +594,34 @@ async function probe(url) {
   return get.ok ? null : `${head.what}; ${get.what}`;
 }
 
-test(
-  'external links resolve',
-  { skip: CHECK_EXTERNAL ? false : 'external links are checked only with OPENBILL_CHECK_EXTERNAL=1 (decision 13)' },
-  async (t) => {
-    const where = new Map();
-    const files = [...MD_FILES, ...HTML_PAGES.map((p) => join(ROOT, p)).filter((p) => existsExact(p) === 'file')];
-    for (const abs of files) {
-      for (const l of linksOf(abs)) {
-        const t = l.target.trim();
-        if (!/^https?:\/\//i.test(t) || isOwnGitHub(t)) continue;
-        const url = t.replace(/#.*$/, '');
-        if (!where.has(url)) where.set(url, []);
-        where.get(url).push(`${rel(abs)}:${l.line}`);
-      }
+/** Every http(s) link in the documents and pages, without links to this repository: URL -> where. */
+function outsideLinks() {
+  const where = new Map();
+  const files = [...MD_FILES, ...HTML_PAGES.map((p) => join(ROOT, p)).filter((p) => existsExact(p) === 'file')];
+  for (const abs of files) {
+    for (const l of linksOf(abs)) {
+      const t = l.target.trim();
+      if (!/^https?:\/\//i.test(t) || isOwnGitHub(t)) continue;
+      const url = t.replace(/#.*$/, '');
+      if (!where.has(url)) where.set(url, []);
+      where.get(url).push(`${rel(abs)}:${l.line}`);
     }
+  }
+  return where;
+}
+
+// In the required links job: a change can break these by itself, and no outside site is asked.
+test(
+  'links into the website resolve in this commit\'s build',
+  { skip: SITE_DIR ? false : 'set OPENBILL_SITE_DIR to a site built with tools/site.mjs to check them (decision 50)' },
+  (t) => {
+    const where = outsideLinks();
     const failures = [];
     const own = [...where.keys()].filter((u) => u.startsWith(SITE_URL));
     let withImages = false;
-    try { withImages = SITE_DIR !== '' && statSync(join(SITE_DIR, 'og')).isDirectory(); } catch { withImages = false; }
+    try { withImages = statSync(join(SITE_DIR, 'og')).isDirectory(); } catch { withImages = false; }
     let rendered = 0;
     for (const u of own) {
-      if (!SITE_DIR) continue;
       // GitHub Pages serves paths case-sensitively, so compare each segment exactly.
       let cur = SITE_DIR;
       let found = true;
@@ -632,9 +638,18 @@ test(
       }
       if (!found) failures.push(`${u} (not in the site built at ${SITE_DIR}: ${sitePath(u)}) in ${where.get(u).join(', ')}`);
     }
-    t.diagnostic(SITE_DIR
-      ? `checked ${own.length} links into ${SITE_URL} against the local build in ${SITE_DIR}${rendered ? ` (${rendered} to pictures that build has no images for, checked against the press kit's list instead)` : ''}`
-      : `skipped ${own.length} links into ${SITE_URL}: set OPENBILL_SITE_DIR to a site built with tools/site.mjs to check them (decision 50)`);
+    t.diagnostic(`checked ${own.length} links into ${SITE_URL} against the local build in ${SITE_DIR}${rendered ? ` (${rendered} to pictures that build has no images for, checked against the press kit's list instead)` : ''}`);
+    assert.deepEqual(failures, [], `${failures.length} of ${own.length} links into the website failed:\n  ${failures.join('\n  ')}`);
+  },
+);
+
+// Not in a required job: external-links.yml, weekly (decisions 13 and 50).
+test(
+  'external links resolve',
+  { skip: CHECK_EXTERNAL ? false : 'external links are checked only with OPENBILL_CHECK_EXTERNAL=1 (decision 13)' },
+  async (t) => {
+    const where = outsideLinks();
+    const failures = [];
     const urls = [...where.keys()].filter((u) => !u.startsWith(SITE_URL)).sort();
     let next = 0;
     const worker = async () => {
