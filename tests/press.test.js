@@ -20,6 +20,7 @@ import { summarizeProduct, defaultQuantity, partDNameContext, formatSpreadMultip
 import { formatMoney, formatCount } from '../src/core/money.js';
 import { esc } from '../src/core/esc.js';
 import { SITE_URL, REPO_URL } from '../src/core/config.js';
+import { showcaseFigures, readmeCheck, showcaseSummary } from '../tools/showcase.mjs';
 
 const { doc } = readData();
 const rows = linkRows(doc);
@@ -87,6 +88,7 @@ const want = {
   spread: formatSpreadMultiple(s.spread.range.min.value),
   year: s.reference.range.min.period.slice(0, 4),
 };
+const README = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
 
 // ---------------------------------------------------------------- the page
 
@@ -94,8 +96,39 @@ test('the showcase still suits the press kit: one pack total, a Part D figure, a
   assert.ok(!miss(s.pack) && s.pack.same, 'one pack total');
   assert.ok(!miss(s.reference) && s.reference.kind === 'part_d' && s.reference.pack.same, 'one Part D figure');
   assert.ok(!miss(s.spread) && !s.spread.extreme && s.spread.range.min.value === s.spread.range.max.value, 'one spread, not extreme');
-  // The figures decision 45 records; a data refresh that moves them must re-check the showcase.
-  assert.deepEqual(want, { pharmacy: '$3.35', medicare: '$46.50', spread: '13.9×', year: '2024' });
+  // A refresh moves these figures. Their shape is held here, the figures themselves come from the
+  // core, and tools/showcase.mjs prints them into the refresh pull request for a person to re-check
+  // (decisions 45 and 55).
+  assert.match(want.pharmacy, /^\$[\d,]+\.\d{2}$/);
+  assert.match(want.medicare, /^\$[\d,]+\.\d{2}$/);
+  assert.match(want.spread, /^\d+(\.\d)?×$/);
+  assert.match(want.year, /^20\d{2}$/);
+});
+
+test('tools/showcase.mjs reports the core’s figures, the same ones this page shows', () => {
+  const f = showcaseFigures(doc);
+  assert.deepEqual({ pharmacy: f.pharmacy, medicare: f.medicare, spread: f.spread, year: f.year }, want);
+  assert.equal(f.drug, SHOWCASE.drug);
+  assert.equal(f.qty, defaultQuantity(show).qty);
+  assert.equal(f.asOf, doc.sources.nadac.as_of_date);
+  const text = showcaseSummary(doc, README);
+  for (const v of Object.values(want)) assert.ok(text.includes(v), `the pull request summary has ${v}`);
+});
+
+test('the README, when it claims this data’s NADAC week, states this data’s showcase figures', (t) => {
+  const f = showcaseFigures(doc);
+  const c = readmeCheck(README, f);
+  assert.ok(c.week, 'the README says which NADAC week it describes: "NADAC week of YYYY-MM-DD"');
+  if (!c.current) {
+    // A refresh pull request: the README describes the week before, which is true of that week.
+    t.diagnostic(`The README describes NADAC week ${c.week}; this data is ${f.asOf}. Update it for this refresh: ${f.pharmacy}, ${f.medicare}, ${f.spread}.`);
+  } else assert.deepEqual(c.missing, [], `the README says NADAC week ${c.week} but lacks these figures`);
+  // The check itself: a README that claims the week with last week's numbers is caught.
+  const stale = `NADAC week of ${f.asOf}. Pharmacies pay $0.01. Medicare Part D paid $0.02: 2.0×.`;
+  const bad = readmeCheck(stale, f);
+  assert.equal(bad.current, true);
+  assert.deepEqual(bad.missing, [f.pharmacy, f.medicare, f.spread]);
+  assert.equal(readmeCheck('NADAC week of 2001-01-01.', f).current, false);
 });
 
 test('press/index.html: static, no script at all, the site CSP and stylesheet, canonical and preview tags', () => {

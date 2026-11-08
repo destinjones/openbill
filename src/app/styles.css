@@ -39,6 +39,17 @@
   box-sizing: border-box;
 }
 
+/* The search's tap-outside listener would make iOS flash these whole areas on every tap. */
+body > * {
+  -webkit-tap-highlight-color: transparent;
+}
+
+a,
+button,
+summary {
+  -webkit-tap-highlight-color: initial;
+}
+
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
@@ -108,18 +119,22 @@ pre {
   white-space: nowrap;
 }
 
+/* Moved by its own height, not a fixed distance: at a large default font size a fixed offset left
+   its bottom edge over the masthead, on top of the stamp. */
 .skip {
   position: absolute;
   left: 16px;
-  top: -100px;
+  top: 0;
   padding: 10px 14px;
   background: var(--surface);
   border: 1px solid var(--ink);
   z-index: 10;
+  transform: translateY(-110%);
 }
 
 .skip:focus {
   top: 8px;
+  transform: none;
 }
 
 /* ---- Masthead: a stamp, not a logo ---- */
@@ -202,8 +217,9 @@ pre {
   appearance: none;
 }
 
-.search-input:disabled {
-  border-style: dashed;
+.search-input::placeholder {
+  color: var(--ink-2);
+  opacity: 1;
 }
 
 .search-status {
@@ -276,6 +292,11 @@ pre {
   color: var(--ink-2);
 }
 
+.result-partial {
+  font-weight: 600;
+  color: var(--ink);
+}
+
 button.suggest {
   min-height: 44px;
   min-width: 44px;
@@ -285,6 +306,36 @@ button.suggest {
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--rule-strong);
+  cursor: pointer;
+}
+
+/* ---- The NDC the reader came with ---- */
+
+.your-ndc {
+  margin: 8px 0;
+  padding: 8px 10px;
+  font-size: 0.875rem;
+  border-left: 3px solid var(--rule-strong);
+  overflow-wrap: anywhere;
+}
+
+.your-ndc p {
+  margin: 2px 0;
+}
+
+.your-ndc-title {
+  font-weight: 600;
+}
+
+button.your-ndc-more {
+  min-height: 44px;
+  padding: 0;
+  font: inherit;
+  color: var(--ink);
+  text-align: left;
+  text-decoration: underline;
+  background: transparent;
+  border: 0;
   cursor: pointer;
 }
 
@@ -303,9 +354,31 @@ button.suggest {
   outline: none;
 }
 
+/* Near the height of the card to come, so the arrival of the figures does not push "Try" and "How
+   to read a card" down the page (cumulative layout shift 0.63 before this). Nothing is drawn in the
+   space: the figures come only from the data, once it has been checked. */
+.card-pending {
+  min-height: 1640px;
+}
+
 .card-loading {
   margin: 24px 0;
   color: var(--ink-2);
+}
+
+/* A link in a sentence stays inline, so the sentence keeps even lines: as `.card a` makes it, a
+   44 px box, it pushed its own line apart. Padding gives it the same 44 px target without growing
+   the line it is on. */
+.card .card-loading a,
+.card .card-message a {
+  display: inline;
+  padding-block: calc((44px - 1em) / 2);
+}
+
+/* The data did not load: the same controls would look live and do nothing. */
+html[data-ready="error"] .search,
+html[data-ready="error"] .try {
+  display: none;
 }
 
 .card-kicker {
@@ -682,6 +755,11 @@ button.suggest {
   border: 2px dashed var(--rule-strong);
 }
 
+/* Its quantity has changed and the new result is waiting for the typing to pause. */
+.paid-result[aria-busy="true"] {
+  opacity: 0.5;
+}
+
 .paid-result:empty {
   display: none;
 }
@@ -917,12 +995,63 @@ button.suggest {
 }
 
 .ndc {
-  padding: 10px 0;
   border-bottom: 1px dashed var(--rule);
 }
 
+.rec-more > summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 4px 24px 4px 0;
+  position: relative;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.ndc-more > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 10px;
+  min-height: 44px;
+  padding: 4px 24px 4px 0;
+  position: relative;
+  cursor: pointer;
+  list-style: none;
+}
+
+.rec-more > summary::-webkit-details-marker,
+.ndc-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.rec-more > summary::after,
+.ndc-more > summary::after {
+  content: '+';
+  position: absolute;
+  right: 4px;
+  top: 8px;
+  font-family: var(--mono);
+}
+
+.rec-more[open] > summary::after,
+.ndc-more[open] > summary::after {
+  content: '\2212';
+}
+
+.ndc-labeler {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+}
+
+.ndc-body {
+  padding-bottom: 10px;
+}
+
 .ndc-id {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 0.875rem;
 }
 
@@ -1116,6 +1245,10 @@ button.suggest {
     padding: 20px 28px 20px;
   }
 
+  .card-pending {
+    min-height: 1290px;
+  }
+
   .card-title {
     font-size: 1.625rem;
   }
@@ -1167,6 +1300,24 @@ button.suggest {
 
   .panel-body {
     display: block;
+  }
+
+  details::details-content {
+    content-visibility: visible;
+  }
+}
+
+/* No script to wait for: no "Loading", no card to make room for, and no search box or Try links,
+   which only the script can answer. The <noscript> line says where to go instead. */
+@media (scripting: none) {
+  .search,
+  .try,
+  .card-loading-script {
+    display: none;
+  }
+
+  .card-pending {
+    min-height: 0;
   }
 }
 

@@ -71,6 +71,9 @@ SOURCE_NAMES = {
     "asp_crosswalk": "Medicare Part B crosswalk",
 }
 STALE_AFTER_DAYS = 14  # NADAC is weekly; two missed weeks means something is wrong upstream.
+# A share of NADAC rows rejected above this stops the build, before data/drugs.json is touched: a
+# unit or column change upstream looks like this, and every real file so far has rejected none.
+MAX_REJECT_SHARE = 0.005
 
 # From the NADAC data dictionary, "Explanation Code" (data.medicaid.gov data dictionary
 # de58d5ec-4515-494e-ae3f-620200f72989, read 2026-10-17).
@@ -1608,6 +1611,16 @@ def write_samples(out_rows: list[dict], pd_reasons: dict, pb_rows: list[dict], f
     return [str(d / "part_d_sample.tsv"), str(d / "part_b_sample.tsv")]
 
 
+def check_reject_share(rejected: list[tuple[str, str]], total: int) -> None:
+    """Stop the build when more than MAX_REJECT_SHARE of the week's NADAC rows were rejected."""
+    if len(rejected) <= MAX_REJECT_SHARE * total:
+        return
+    why = Counter(reason for _, reason in rejected)
+    lines = "\n".join(f"  {n:>7,}  {reason}" for reason, n in why.most_common(10))
+    sys.exit(f"{len(rejected):,} of {total:,} NADAC rows were rejected ({100 * len(rejected) / total:.1f}%, the limit is {100 * MAX_REJECT_SHARE:.1f}%). "
+             f"Not building data/drugs.json from this file. The most common reasons:\n{lines}")
+
+
 def build() -> int:
     S = load_sources()
     nadac_src = S["nadac"]
@@ -1616,6 +1629,7 @@ def build() -> int:
         sys.exit(f"Manifest says NADAC as of {nadac_src.get('as_of_date')}, the file's newest week is {as_of}. Re-run fetch_nadac.py.")
     nadac_src = S["nadac"] = {**nadac_src, "as_of_date": as_of}
     rows, rejected, duplicates = build_nadac_rows(raw, nadac_src)
+    check_reject_share(rejected, len(raw))
 
     identities, fda_raw, fda_info = load_identities(S["fda_ndc"]["path"])
     pd = PartD(S["partd"], fda_info["rx_forms"], fda_info["rx_name_forms"])
@@ -1862,6 +1876,8 @@ data/drugs.json  ({OUT.stat().st_size / 1e6:,.1f} MB, schema {SCHEMA})
         print(f"    Part B unmatched  {k:>6,}  {why}")
     for ndc, why in rejected[:20]:
         print(f"  rejected {ndc}: {why}")
+    if len(rejected) > 20:
+        print(f"  ... and {len(rejected) - 20:,} more rejected rows")
     for s in samples:
         print(f"  sample          {s}")
     if age > STALE_AFTER_DAYS:

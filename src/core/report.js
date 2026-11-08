@@ -10,15 +10,20 @@ export const ISSUE_TEMPLATES = Object.freeze({
   'bug.yml': Object.freeze(['what_happened', 'steps', 'device', 'build_id']),
 });
 
-/** Longest URL issueUrl() returns; longer values are cut with "…". */
-export const ISSUE_URL_MAX = 7500;
+/**
+ * Longest URL issueUrl() returns; longer values are cut with "…". GitHub, logged out, answers 302
+ * up to a title of 6,000 characters and 500 from 6,500 (tested 2026-11; decision 55).
+ */
+export const ISSUE_URL_MAX = 5000;
 
 const ELLIPSIS = '…';
 const ELLIPSIS_ENCODED = encodeURIComponent(ELLIPSIS).length;
 
 function wellFormed(s) {
-  // encodeURIComponent throws on a lone surrogate; replace it with U+FFFD.
-  return s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '�');
+  // encodeURIComponent throws on a lone surrogate; replace it with U+FFFD. Pairs are matched first
+  // and kept. No lookbehind: Safari below 16.4 cannot parse one, and that stops the whole page
+  // before it can show its message (build.js refuses them).
+  return s.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, (m) => (m.length === 2 ? m : '�'));
 }
 
 function cut(value, maxEncoded) {

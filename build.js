@@ -19,6 +19,7 @@ import { REPO_URL, APP_NAME, SITE_URL } from './src/core/config.js';
 import { STATE_INFO, PRICE_STATES } from './src/core/provenance.js';
 import { HONESTY, RULES, summarizeProduct, partDNameContext } from './src/core/rules.js';
 import { formatMoney, formatCount } from './src/core/money.js';
+import { hashFor } from './src/core/hash.js';
 import { SOURCE_INFO } from './src/core/sources.js';
 import { renderMethodology } from './src/build/methodology.js';
 import { ogImagePath, OG_IMAGE_TYPE, OG_WIDTH, OG_HEIGHT } from './src/build/drugpage.js';
@@ -36,8 +37,9 @@ export const ENTRY = 'src/app/app.js';
 export const DEFAULT_PRODUCT = Object.freeze({ drug: 'ARIPIPRAZOLE 10 MG TABLET', qty: 30 });
 
 /**
- * The "Try:" links under the card. Each must be a product in data/drugs.json, or the build fails.
- * Metformin, the first showcase, stays one tap away.
+ * The "Try:" links under the card. A name that has left data/drugs.json is replaced from
+ * TRY_FALLBACKS with a warning: products leave NADAC most weeks, and that is no reason to stop a
+ * refresh (decision 55). Metformin, the first showcase, stays one tap away.
  */
 export const TRY_PRODUCTS = Object.freeze([
   'METFORMIN HCL 500 MG TABLET',
@@ -45,6 +47,37 @@ export const TRY_PRODUCTS = Object.freeze([
   'ATORVASTATIN 20 MG TABLET',
   'HUMULIN R 100 UNIT/ML VIAL',
 ]);
+
+/** Common products to draw on, in order, when a Try name has left the data. */
+export const TRY_FALLBACKS = Object.freeze([
+  'LISINOPRIL 10 MG TABLET',
+  'SERTRALINE HCL 50 MG TABLET',
+  'LEVOTHYROXINE 50 MCG TABLET',
+  'GABAPENTIN 300 MG CAPSULE',
+  'OMEPRAZOLE DR 20 MG CAPSULE',
+]);
+
+/**
+ * The Try links for this data: TRY_PRODUCTS, with any name not in the data replaced from
+ * TRY_FALLBACKS. Never the default card. Fewer links rather than an invented name.
+ * @param {Set<string>} names the product names in the data
+ * @param {(message: string) => void} [warn]
+ * @returns {string[]}
+ */
+export function tryProducts(names, warn = (m) => console.warn(m)) {
+  const spare = TRY_FALLBACKS.filter((n) => names.has(n) && !TRY_PRODUCTS.includes(n) && n !== DEFAULT_PRODUCT.drug);
+  const out = [];
+  for (const n of TRY_PRODUCTS) {
+    if (names.has(n)) {
+      out.push(n);
+      continue;
+    }
+    const instead = spare.shift();
+    warn(`WARNING: the Try link ${JSON.stringify(n)} is not in data/drugs.json; ${instead ? `using ${JSON.stringify(instead)} instead` : 'no fallback is left, so there is one link fewer'}. Update TRY_PRODUCTS in build.js.`);
+    if (instead) out.push(instead);
+  }
+  return out;
+}
 
 /** The site's preview image (1200×630 PNG, built on deploy by tools/site.mjs, not committed). */
 export const OG_IMAGE = `${SITE_URL}${ogImagePath('site')}`;
@@ -354,6 +387,10 @@ export function bundle(entry = ENTRY, read = readText) {
   parts.push('})();\n');
   const code = parts.join('');
   if (/<\/script|<!--/i.test(code)) throw new Error('the bundle contains "</script" or "<!--", which would end the inline script early');
+  // One lookbehind stops the whole script from parsing in Safari below 16.4, before the page can
+  // say it cannot unpack its data (decision 53). Text in a comment counts too, on purpose: the
+  // check does not try to read JavaScript.
+  if (/\(\?<[=!]/.test(code)) throw new Error('the bundle contains a regular expression lookbehind, (?<= or (?<!, which Safari below 16.4 cannot parse');
   // Compile the bundle, so a name clash between an import and a declaration fails here, then run
   // it once against an empty page: every module's top level runs, so an export that names no
   // declaration (a ReferenceError) fails the build instead of the page. The page code finds no
@@ -598,10 +635,6 @@ function fill(template, values, what) {
   return out;
 }
 
-function hashFor(drug, qty) {
-  return `#drug=${encodeURIComponent(drug)}${qty === undefined ? '' : `&qty=${encodeURIComponent(String(qty))}`}`;
-}
-
 function honestyText(id) {
   const line = HONESTY.find((h) => h.id === id);
   if (!line) throw new Error(`HONESTY has no line ${id}`);
@@ -679,12 +712,27 @@ ${items}
 </section>`;
 }
 
-function stampHtml(doc, buildId) {
+/**
+ * The masthead. On the page itself the stamp links to # (the default card, with nothing to
+ * download again, and it works from file: too); on any other page, to the page.
+ */
+function stampHtml(doc, buildId, { home }) {
   const nadac = doc.sources.nadac;
   return `<header class="masthead">
-<a class="stamp" href="openbill.html" aria-label="${esc(APP_NAME)} drug price receipt, home"><span class="stamp-name">${esc(APP_NAME)}</span><span class="stamp-sub">drug price receipt</span></a>
+<a class="stamp" href="${home ? '#' : 'openbill.html'}" aria-label="${esc(APP_NAME)} drug price receipt, home"><span class="stamp-name">${esc(APP_NAME)}</span><span class="stamp-sub">drug price receipt</span></a>
 <p class="mono masthead-line">NADAC week of ${esc(nadac.as_of_date)}</p>
 </header>`;
+}
+
+/**
+ * The card before the script has drawn one. Its way out needs no script, because this may be all a
+ * reader ever gets: scripts turned off or blocked, or a browser that cannot parse the bundle.
+ */
+function cardLoadingHtml() {
+  const az = esc(`${SITE_URL}drugs/a/`);
+  return `<header class="card-head"><h1 id="card-title" class="card-title" tabindex="-1">Drug prices</h1></header>
+<p class="card-loading card-loading-script">Loading this week’s NADAC file… Or <a href="${az}">browse every drug as a plain page</a>.</p>
+<noscript><p class="card-loading">The search and the cards here need JavaScript, which is turned off. Every drug also has a plain page that needs none: <a href="${az}">browse every drug A–Z</a> on the website.</p></noscript>`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -832,9 +880,9 @@ export function buildAll() {
   const doc = JSON.parse(dataText);
   if (!doc || !Array.isArray(doc.rows) || !doc.sources || !doc.sources.nadac) throw new Error('data/drugs.json has no rows or no nadac source');
   const names = new Set(doc.rows.map((r) => r.name));
-  for (const n of [DEFAULT_PRODUCT.drug, ...TRY_PRODUCTS]) {
-    if (!names.has(n)) throw new Error(`build.js names the product ${JSON.stringify(n)}, which is not in data/drugs.json`);
-  }
+  // The default card is the showcase (decision 45): the page has no first screen without it.
+  if (!names.has(DEFAULT_PRODUCT.drug)) throw new Error(`build.js names the default product ${JSON.stringify(DEFAULT_PRODUCT.drug)}, which is not in data/drugs.json. Choose a new showcase (decision 45).`);
+  const tried = tryProducts(names);
   for (const r of RULES) if (!/^[a-z0-9][a-z0-9-]*$/.test(r.id)) throw new Error(`rule id ${JSON.stringify(r.id)} cannot be an anchor`);
 
   const buildId = computeBuildId();
@@ -848,10 +896,10 @@ export function buildAll() {
     schema: doc.schema,
     sources: sourceDates(doc),
     default: { drug: DEFAULT_PRODUCT.drug, qty: DEFAULT_PRODUCT.qty },
-    try: [...TRY_PRODUCTS],
+    try: tried,
   };
 
-  const tryLinks = TRY_PRODUCTS.map((n) => `<li><a href="${esc(hashFor(n))}">${esc(n)}</a></li>`).join('\n');
+  const tryLinks = tried.map((n) => `<li><a href="${esc(hashFor(n))}">${esc(n)}</a></li>`).join('\n');
   const template = readText('src/app/index.html');
   const pageTitle = /<title>([^<]+)<\/title>/.exec(template);
   if (!pageTitle) throw new Error('src/app/index.html has no <title>');
@@ -861,7 +909,8 @@ export function buildAll() {
       CSP: esc(cspFor([code], [css])),
       STYLE: css,
       SOCIAL: socialMeta({ title: pageTitle[1], description: showcaseDescription(doc), url: SITE_URL }),
-      MASTHEAD: stampHtml(doc, buildId),
+      MASTHEAD: stampHtml(doc, buildId, { home: true }),
+      CARD_LOADING: cardLoadingHtml(),
       TRY_LINKS: tryLinks,
       HOWTO: howToReadHtml(),
       FOOTER: footerHtml(doc, buildId, { home: true }),
@@ -886,7 +935,7 @@ export function buildAll() {
     description: m.description || '',
     social: socialMeta({ title: m.title, description: m.description || m.title, url: `${SITE_URL}methodology.html` }),
     css,
-    bodyHtml: `${stampHtml(doc, buildId)}\n<main id="main" class="doc">\n${m.bodyHtml}\n</main>\n${footerHtml(doc, buildId, { home: false })}`,
+    bodyHtml: `${stampHtml(doc, buildId, { home: false })}\n<main id="main" class="doc">\n${m.bodyHtml}\n</main>\n${footerHtml(doc, buildId, { home: false })}`,
   });
 
   let quality = renderDataQuality(doc);

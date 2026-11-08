@@ -9,7 +9,7 @@ test('issue templates carry the contract field ids', () => {
   assert.deepEqual([...ISSUE_TEMPLATES['wrong-price.yml']], ['product', 'ndc', 'figure', 'shown_value', 'source_file', 'what_is_wrong', 'evidence', 'build_id']);
   assert.deepEqual([...ISSUE_TEMPLATES['missing-drug.yml']], ['drug_name', 'ndc', 'where_seen', 'notes']);
   assert.deepEqual([...ISSUE_TEMPLATES['bug.yml']], ['what_happened', 'steps', 'device', 'build_id']);
-  assert.equal(ISSUE_URL_MAX, 7500);
+  assert.equal(ISSUE_URL_MAX, 5000); // GitHub errors between 6,000 and 7,000 characters (decision 55)
 });
 
 test('issueUrl builds a prefilled issue-form URL', () => {
@@ -50,9 +50,9 @@ test('issueUrl rejects unknown templates and field ids', () => {
   assert.throws(() => issueUrl(), /unknown issue template/);
 });
 
-test('issueUrl keeps URLs under 7,500 characters by cutting the longest fields with "…"', () => {
+test('issueUrl keeps URLs under ISSUE_URL_MAX characters by cutting the longest fields with "…"', () => {
   const evidence = 'E'.repeat(20000);
-  const what = 'W'.repeat(3000);
+  const what = 'W'.repeat(2000);
   const url = issueUrl({ template: 'wrong-price.yml', title: 'T', fields: { product: 'P', evidence, what_is_wrong: what } });
   assert.ok(url.length <= ISSUE_URL_MAX, `${url.length}`);
   assert.ok(url.length > ISSUE_URL_MAX - 20, 'uses the room it has');
@@ -74,6 +74,19 @@ test('issueUrl truncation: several long fields, multi-byte text, lone surrogates
   assert.equal(q.get('device'), 'phone');
   const lone = issueUrl({ template: 'bug.yml', fields: { what_happened: 'a\ud800b' } });
   assert.equal(query(lone).get('what_happened'), 'a�b');
+  // Decision 53: the form without a lookbehind treats every case as the old one did.
+  for (const [input, output] of [
+    ['\ud83d\ude00', '\ud83d\ude00'],
+    ['\ude00', '�'],
+    ['\ud83d', '�'],
+    ['\ude00\ud83d', '��'],
+    ['\ud83d\ud83d\ude00', '�\ud83d\ude00'],
+    ['\ud83d\ude00\ude00', '\ud83d\ude00�'],
+    ['a\ud83d\ude00b\ude00c\ud83dd', 'a\ud83d\ude00b�c�d'],
+    ['plain é', 'plain é'],
+  ]) {
+    assert.equal(query(issueUrl({ template: 'bug.yml', fields: { what_happened: input } })).get('what_happened'), output, JSON.stringify(input));
+  }
 });
 
 // Review regressions: the longest field was cut all the way down to "…" while shorter long

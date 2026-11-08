@@ -509,6 +509,32 @@ test('nameOutlier: a product 20× the others under its Part D name says so', () 
   assert.equal(nameOutlier(cheap('DEAR', '90001000301', 0.399), partDNameContext([...rows.slice(0, 3), cheap('DEAR', '90001000301', 0.399)])), null);
 });
 
+// INFRA-20: the exact values. `>=` to `>` on either rule changes what a reader is told.
+test('nameOutlier: exactly the factor is flagged', () => {
+  const row = (name, ndc, v) => {
+    const r = clone(METFORMIN);
+    r.name = name;
+    r.ndc = ndc;
+    r.nadac = { ...r.nadac, value: v };
+    return r;
+  };
+  const other = row('CHEAP A', '90001000101', 0.02);
+  const dear = (v) => row('DEAR', '90001000301', v);
+  const flagged = (v) => nameOutlier(dear(v), partDNameContext([other, dear(v)]));
+  assert.equal(flagged(0.4).ratio, NAME_OUTLIER_FACTOR, 'exactly 20× is an outlier');
+  assert.equal(flagged(0.39998), null, 'just under is not');
+});
+
+test('what you paid: exactly 1.05× is a multiple, exactly 0.95× is "about"', () => {
+  const base = summarizeProduct(rowsNamed('ELIQUIS'), 60).pack;
+  const pack = { ...base, min: { ...base.min, value: 100 }, max: { ...base.max, value: 100 }, same: true };
+  const at = (paid) => paidComparison(paid, pack, { missing: true, reason: 'none' }).sentence;
+  assert.match(at(105), /× what pharmacies pay for this pack/, 'exactly 1.05 is stated as a multiple');
+  assert.match(at(104.99), /about what pharmacies pay for this pack/, 'just under is "about"');
+  assert.match(at(95), /about what pharmacies pay for this pack/, 'exactly 0.95 is "about"');
+  assert.match(at(94.99), /5% less than what pharmacies pay for this pack/, 'just under 0.95 is a percentage');
+});
+
 test('spreadForRow: Part D is always estimated with the caveats, quoting the Part D reason', () => {
   const s = spreadForRow(METFORMIN);
   assert.equal(s.kind, 'part_d');
@@ -644,15 +670,27 @@ test('freshness: Part D from the end of the data year, Part B from the start of 
   assert.equal(freshness(FIXTURE.sources.asp_limits, SOURCE_INFO.asp_limits, '2026-10-17').date, '2026-10-01');
 });
 
-test('freshness: a date after today counts as 0 days and is never stale', () => {
+test('freshness: a date after today counts as 0 days and is never stale; the clock is blamed only for a day', () => {
   const future = freshness({ ...METFORMIN.nadac, as_of_date: '2026-10-20' }, SOURCE_INFO.nadac, '2026-10-17');
   assert.equal(future.age_days, 0);
   assert.equal(future.stale, false);
   assert.equal(future.date, '2026-10-20');
-  assert.match(future.message, /0 days old\. The date is after today \(2026-10-17\)/);
+  assert.match(future.message, /0 days old\. That is 3 days after today \(2026-10-17\)\. It is counted as 0 days\./);
+  assert.doesNotMatch(future.message, /clock/);
+  // Exactly a day ahead: a device's clock or time zone can do that.
+  const dayAhead = freshness({ ...METFORMIN.nadac, as_of_date: '2026-10-18' }, SOURCE_INFO.nadac, '2026-10-17');
+  assert.match(dayAhead.message, /0 days old\. The date is after today \(2026-10-17\), which a device’s clock or time zone can cause, so it is counted as 0 days\./);
+  const twoAhead = freshness({ ...METFORMIN.nadac, as_of_date: '2026-10-19' }, SOURCE_INFO.nadac, '2026-10-17');
+  assert.doesNotMatch(twoAhead.message, /clock/);
   // A viewer a day behind UTC, on the first day of the quarter.
   const early = freshness(ONDANSETRON.part_b.payment_limit, SOURCE_INFO.asp_limits, '2026-09-30');
   assert.deepEqual([early.age_days, early.stale], [0, false]);
+  assert.match(early.message, /clock or time zone/);
+  // INFRA-09: a quarter that really has not started is not the device's fault.
+  const posted = freshness(ONDANSETRON.part_b.payment_limit, SOURCE_INFO.asp_limits, '2026-09-20');
+  assert.deepEqual([posted.age_days, posted.stale], [0, false]);
+  assert.match(posted.message, /quarter starting 2026-10-01: 0 days old\. This quarter has not started: today is 2026-09-20\. It is counted as 0 days\./);
+  assert.doesNotMatch(posted.message, /clock/);
 });
 
 test('freshness: no usable date is reported, not hidden; bad today throws', () => {
@@ -1649,12 +1687,18 @@ test('parsePaid: a crafted, very long amount (e.g. a link’s &paid=) is refused
   // Regression: '9'.repeat(1e6) used to reach the decimal maths, which took ~1 s in V8 and threw a
   // BigInt RangeError in WebKit and Firefox, taking the whole card and search box down.
   for (const x of ['9'.repeat(1e6), '0'.repeat(1e6) + '1', `${'1'.repeat(400000)}.00`, `$${' '.repeat(5e5)}1`, '0'.repeat(PAID_MAX_CHARS) + '1']) {
-    const t = performance.now();
-    const r = parsePaid(x);
-    const took = performance.now() - t;
+    // The fastest of three: the question is whether the parse is linear, not whether the machine paused.
+    const times = [];
+    let r;
+    for (let i = 0; i < 3; i += 1) {
+      const t = performance.now();
+      r = parsePaid(x);
+      times.push(performance.now() - t);
+    }
+    const took = Math.min(...times);
     assert.equal(r.valid, false, `${x.length} characters`);
     assert.match(r.problem, /too long to be an amount|up to \$100,000\.00/);
-    assert.ok(took < 50, `${x.length} characters took ${took.toFixed(1)} ms`);
+    assert.ok(took < 50, `${x.length} characters took ${took.toFixed(1)} ms at best of 3`);
   }
   // Zero-padding cannot slip a value past the limit or be read as an amount it is not.
   assert.equal(parsePaid('0000001').value, 1);
@@ -1902,9 +1946,12 @@ test('defaultQuantity on the real data: kits, pens and syringes priced per EA no
   }
   const products = groupProducts(linkRows(JSON.parse(text)));
   const byName = new Map(products.map((p) => [p.name, p]));
-  const avonex = defaultQuantity(byName.get('AVONEX 30 MCG/0.5 ML SYRINGE KIT (4 PACK)'));
-  assert.deepEqual([avonex.qty, avonex.form.oral_solid], [1, false]);
-  assert.match(avonex.reason, /dosage form “KIT”/);
+  const kit = byName.get('AVONEX 30 MCG/0.5 ML SYRINGE KIT (4 PACK)');
+  if (kit) {
+    const avonex = defaultQuantity(kit);
+    assert.deepEqual([avonex.qty, avonex.form.oral_solid], [1, false]);
+    assert.match(avonex.reason, /dosage form “KIT”/);
+  } else t.diagnostic('AVONEX 30 MCG/0.5 ML SYRINGE KIT (4 PACK) has left the data, so its check did not run');
   assert.equal(defaultQuantity(byName.get('ARIPIPRAZOLE 10 MG TABLET')).qty, 30);
   for (const p of products) {
     const d = defaultQuantity(p);
@@ -1915,35 +1962,43 @@ test('defaultQuantity on the real data: kits, pens and syringes priced per EA no
   }
 });
 
-test('decision 49 states the starting-quantity counts of the 2026-10-14 build correctly', (t) => {
-  // A regression for the counts decision 49 records (decision 48's were once "The 1,715 products
-  // priced per ML or GM", which counted the 12 mixed-unit products twice). Runs only on the build
-  // the decision describes.
+// What decision 49 records of the 2026-10-14 build, kept here so this does not stop being checked
+// when the data moves on (INFRA-06). The full recount runs while that build is the data.
+const DECISION_49_COUNTS = { ea30: 3565, eaFda30: 3503, eaName30: 62, ea1: 656, mlgm: 1703, mixed: 12, ML: { pkg: 890, inner: 85, one: 281 }, GM: { pkg: 227, inner: 6, one: 214 } };
+// The rows of that build's products the decision names, trimmed to what defaultQuantity reads.
+const DECISION_49 = JSON.parse(readFileSync(new URL('./fixtures/decision49.rows.json', import.meta.url), 'utf8'));
+
+/** data/drugs.json when it is the build decision 49 describes, else null. */
+function decision49Build() {
   const file = new URL('../data/drugs.json', import.meta.url);
   const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
-  if (!text || text.startsWith('version https://git-lfs')) {
-    t.skip('data/drugs.json is not here (or is a Git LFS pointer)');
-    return;
-  }
+  if (!text || text.startsWith('version https://git-lfs')) return null;
   const doc = JSON.parse(text);
-  if (doc.sources.nadac.as_of_date !== '2026-10-14') {
-    t.skip('decision 49 records the 2026-10-14 build; this data is newer');
-    return;
-  }
-  const count = { ea30: 0, eaFda30: 0, eaName30: 0, ea1: 0, mlgm: 0, mixed: 0, ML: { pkg: 0, inner: 0, one: 0 }, GM: { pkg: 0, inner: 0, one: 0 } };
-  for (const p of groupProducts(linkRows(doc))) {
-    const d = defaultQuantity(p);
-    if (d.unit === 'EA') {
-      if (d.qty === 30) {
-        count.ea30 += 1;
-        count[d.form.basis === 'fda' ? 'eaFda30' : 'eaName30'] += 1;
-      } else count.ea1 += 1;
-    } else if (d.unit === 'ML' || d.unit === 'GM') {
-      count.mlgm += 1;
-      const kind = /wholesale pack/.test(d.reason) ? 'inner' : /So the card starts at 1 (ML|GM); change it/.test(d.reason) ? 'one' : 'pkg';
-      count[d.unit][kind] += 1;
-    } else if (d.unit === null) count.mixed += 1;
-  }
+  return doc.sources.nadac.as_of_date === DECISION_49.build ? doc : null;
+}
+
+test('decision 49 states the starting-quantity counts of the 2026-10-14 build correctly', (t) => {
+  // A regression for the counts decision 49 records (decision 48's were once "The 1,715 products
+  // priced per ML or GM", which counted the 12 mixed-unit products twice).
+  const count = DECISION_49_COUNTS;
+  const build = decision49Build();
+  if (build) {
+    const live = { ea30: 0, eaFda30: 0, eaName30: 0, ea1: 0, mlgm: 0, mixed: 0, ML: { pkg: 0, inner: 0, one: 0 }, GM: { pkg: 0, inner: 0, one: 0 } };
+    for (const p of groupProducts(linkRows(build))) {
+      const d = defaultQuantity(p);
+      if (d.unit === 'EA') {
+        if (d.qty === 30) {
+          live.ea30 += 1;
+          live[d.form.basis === 'fda' ? 'eaFda30' : 'eaName30'] += 1;
+        } else live.ea1 += 1;
+      } else if (d.unit === 'ML' || d.unit === 'GM') {
+        live.mlgm += 1;
+        const kind = /wholesale pack/.test(d.reason) ? 'inner' : /So the card starts at 1 (ML|GM); change it/.test(d.reason) ? 'one' : 'pkg';
+        live[d.unit][kind] += 1;
+      } else if (d.unit === null) live.mixed += 1;
+    }
+    assert.deepEqual(live, count, 'the stored counts are that build\'s');
+  } else t.diagnostic('The data has moved on from the 2026-10-14 build: checking the decision against the stored counts');
   const decisions = readFileSync(new URL('../docs/DECISIONS.md', import.meta.url), 'utf8');
   const d49 = decisions.slice(decisions.indexOf('## 49. ')).replace(/\s+/g, ' ');
   const fmt = (n) => n.toLocaleString('en-US');
@@ -2095,21 +2150,22 @@ const DECISION_49_CHANGES = [
   ['ZUBSOLV 8.6-2.1 MG TABLET SL', 'EA', 1, 30],
 ];
 
-test('defaultQuantity on the real data: the products decision 49 changes, before and after', (t) => {
-  const file = new URL('../data/drugs.json', import.meta.url);
-  const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
-  if (!text || text.startsWith('version https://git-lfs')) {
-    t.skip('data/drugs.json is not here (or is a Git LFS pointer)');
-    return;
-  }
-  const doc = JSON.parse(text);
-  if (doc.sources.nadac.as_of_date !== '2026-10-14') {
-    t.skip('decision 49 lists the changes in the 2026-10-14 build; this data is newer');
-    return;
-  }
+test('defaultQuantity on real rows: the products decision 49 changes, before and after', (t) => {
   assert.equal(DECISION_49_CHANGES.length, 132);
   assert.equal(DECISION_49_CHANGES.filter((x) => x[1] === 'EA').length, 45);
-  const byName = new Map(groupProducts(linkRows(doc)).map((p) => [p.name, p]));
+  const byName = new Map(Object.entries(DECISION_49.rows).map(([name, rows]) => [name, { name, rows }]));
+  // The stored rows are that build's, field for field, while it is the data.
+  const build = decision49Build();
+  if (build) {
+    const live = new Map(groupProducts(linkRows(build)).map((p) => [p.name, p]));
+    for (const [name, { rows }] of byName) {
+      assert.deepEqual(
+        rows.map((r) => [r.ndc, r.unit, r.identity ? r.identity.dosage_form : undefined, r.identity ? r.identity.route : undefined, r.identity ? r.identity.package_description : undefined]),
+        live.get(name).rows.map((r) => [r.ndc, r.unit, r.identity ? r.identity.dosage_form ?? null : undefined, r.identity ? r.identity.route ?? null : undefined, r.identity ? r.identity.package_description ?? null : undefined]),
+        name,
+      );
+    }
+  } else t.diagnostic('The data has moved on from the 2026-10-14 build: checking decision 49 on its stored rows');
   for (const [name, unit, before, after] of DECISION_49_CHANGES) {
     assert.ok(byName.has(name), name);
     const d = defaultQuantity(byName.get(name));
@@ -2140,12 +2196,8 @@ test('defaultQuantity on the real data: the products decision 49 changes, before
   const sev = defaultQuantity(byName.get('SEVELAMER HCL 800 MG TABLET'));
   assert.deepEqual([sev.qty, sev.form.outliers.map((o) => o.route)], [30, ['PARENTERAL', 'PARENTERAL']]);
   // Vaginal tablets still start at 1; the patient packs stay whole.
-  for (const p of byName.values()) {
-    const d = defaultQuantity(p);
-    if (d.unit !== 'EA') continue;
-    const routes = p.rows.filter((r) => r.identity).map((r) => String(r.identity.route || ''));
-    if (routes.length && routes.every((r) => /VAGINAL/.test(r))) assert.equal(d.qty, 1, p.name);
-  }
+  assert.ok(DECISION_49.vaginal.length > 0);
+  for (const name of DECISION_49.vaginal) assert.equal(defaultQuantity(byName.get(name)).qty, 1, name);
   assert.equal(defaultQuantity(byName.get('SUPREP BOWEL PREP KIT')).qty, 354.8, 'two bottles in a carton: one prep, not a wholesale pack');
   assert.equal(defaultQuantity(byName.get('LANTUS SOLOSTAR 100 UNIT/ML')).qty, 15, 'a carton of five pens stays whole');
 });

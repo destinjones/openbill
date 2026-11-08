@@ -864,23 +864,34 @@ test('counts.identity_with_pharm_classes and counts.epc_classes are present; amb
   assert.ok(c.epc_classes >= 250, `only ${c.epc_classes} distinct [EPC] classes`);
 });
 
-test('identity.pharm_classes spot checks (FDA NDC Directory product.txt, PHARM_CLASSES, file of this build)', () => {
+test('identity.pharm_classes spot checks (FDA NDC Directory product.txt, PHARM_CLASSES, file of this build)', (t) => {
   const byNdc = new Map(rows.map((r) => [r.ndc, r]));
   const classes = (ndc) => {
     const r = byNdc.get(ndc);
     assert.ok(r && isObj(r.identity), `row ${ndc} has an FDA identity`);
     return r.identity.pharm_classes;
   };
+  // An NDC can leave NADAC in any week. Each is checked while it is here, and at least one must be.
+  let checked = 0;
+  const pinned = (ndc, want) => {
+    if (!byNdc.has(ndc)) {
+      t.diagnostic(`${ndc} has left the data, so its check did not run`);
+      return;
+    }
+    assert.deepEqual(classes(ndc), want);
+    checked += 1;
+  };
   // The contract's example: ELIQUIS 5 MG TABLET, 0003-0894-21, "Factor Xa Inhibitor [EPC], Factor Xa Inhibitors [MoA]".
-  assert.deepEqual(classes('00003089421'), ['Factor Xa Inhibitor [EPC]', 'Factor Xa Inhibitors [MoA]']);
+  pinned('00003089421', ['Factor Xa Inhibitor [EPC]', 'Factor Xa Inhibitors [MoA]']);
   // The showcase product: ARIPIPRAZOLE 10 MG TABLET, 0904-7368-06, "Atypical Antipsychotic [EPC]".
-  assert.deepEqual(classes('00904736806'), ['Atypical Antipsychotic [EPC]']);
+  pinned('00904736806', ['Atypical Antipsychotic [EPC]']);
   // A class name holding ", " stays one entry: IBUPROFEN 800 MG TABLET, 0904-5855-40,
   // "Anti-Inflammatory Agents, Non-Steroidal [CS], Cyclooxygenase Inhibitors [MoA], Nonsteroidal Anti-inflammatory Drug [EPC]".
-  assert.deepEqual(classes('00904585540'), ['Anti-Inflammatory Agents, Non-Steroidal [CS]', 'Cyclooxygenase Inhibitors [MoA]', 'Nonsteroidal Anti-inflammatory Drug [EPC]']);
+  pinned('00904585540', ['Anti-Inflammatory Agents, Non-Steroidal [CS]', 'Cyclooxygenase Inhibitors [MoA]', 'Nonsteroidal Anti-inflammatory Drug [EPC]']);
   // FDA repeats an entry once per active ingredient; each is kept once, in FDA's order:
   // DEXTROAMPH-AMPHET ER 50 MG CAP, 57664-953-88, "Central Nervous System Stimulant [EPC]" x4, "Central Nervous System Stimulation [PE]" x4.
-  assert.deepEqual(classes('57664095388'), ['Central Nervous System Stimulant [EPC]', 'Central Nervous System Stimulation [PE]']);
+  pinned('57664095388', ['Central Nervous System Stimulant [EPC]', 'Central Nervous System Stimulation [PE]']);
+  assert.ok(checked >= 1, 'at least one pinned NDC is still in the data; pin others');
   // No row without an FDA identity carries classes (they belong to the identity object).
   assert.ok(rows.every((r) => !hasOwn(r, 'pharm_classes')), 'pharm_classes is only ever inside identity');
 });

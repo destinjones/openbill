@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { validateRecord } from '../src/core/provenance.js';
 import { isoDate } from '../src/core/dates.js';
-import { EXTREME_HEADLINE, HONESTY, COST_PLUS, COST_PLUS_CAVEATS, PAID_MAX_USD, PAID_PRIVACY, distinctLabelers, formatSpreadMultiple } from '../src/core/rules.js';
+import { EXTREME_HEADLINE, HONESTY, COST_PLUS, COST_PLUS_CAVEATS, PAID_MAX_USD, PAID_PRIVACY, distinctLabelers, formatSpreadMultiple, summarizeProduct, defaultQuantity, paidComparison } from '../src/core/rules.js';
 import { formatMoney, formatPercent } from '../src/core/money.js';
 import { renderMethodology, BROWSER_FLOOR } from '../src/build/methodology.js';
 import {
@@ -33,6 +33,14 @@ const METHODOLOGY_RE = /^methodology\.html#[a-z0-9][a-z0-9-]*$/;
 
 // Every record position the schema defines (ARCHITECTURE.md, schema openbill.drugs/3), listed
 // by hand, so a record in an unexpected place shows up as a count mismatch with collectRecords.
+// The worked examples' product, computed the way methodology.js does: the showcase, at the
+// quantity its card starts at. A refresh moves the numbers; the sentences around them stay.
+function showcaseExample(doc) {
+  const product = analyzeDoc(doc).productList.find((p) => p.name === 'ARIPIPRAZOLE 10 MG TABLET');
+  const dq = defaultQuantity(product.rows);
+  return { dq, s: summarizeProduct(product.rows, dq.qty) };
+}
+
 function schemaRecords(doc) {
   const out = [];
   const put = (path, rec) => {
@@ -265,8 +273,15 @@ test('methodology.html describes the cost-plus estimate from COST_PLUS, with its
   // The owner's decision: never call it a typical cash price; no spread against it.
   assert.doesNotMatch(text, /typical cash price/i);
   assert.match(text, /It is not compared with NADAC as a spread/);
-  // The showcase is the worked example, with the numbers decision 45 records.
-  assert.match(text, /for 30 EA of ARIPIPRAZOLE 10 MG TABLET: pharmacies pay \$3\.35; 15% of that, rounded to the cent, is \$0\.50; with the \$5\.00 fee the estimate is \$8\.85\./);
+  // The showcase is the worked example, with this data's numbers from the core.
+  const { dq, s } = showcaseExample(DOC);
+  const [pack, total, fee] = [s.pack.min.value, s.cost_plus.min.value, COST_PLUS.fee_usd].map((v) => Math.round(v * 100));
+  const markup = total - pack - fee;
+  assert.equal(markup, Math.round(pack * (COST_PLUS.markup_pct / 100)), 'the markup is the stated share of the pack, to the cent');
+  assert.ok(
+    text.includes(`for ${dq.qty} ${dq.unit} of ARIPIPRAZOLE 10 MG TABLET: pharmacies pay ${formatMoney(pack / 100)}; ${formatPercent(COST_PLUS.markup_pct)} of that, rounded to the cent, is ${formatMoney(markup / 100)}; with the ${formatMoney(COST_PLUS.fee_usd)} fee the estimate is ${formatMoney(total / 100)}.`),
+    'the worked example',
+  );
 });
 
 test('methodology.html says what happens to what you paid, and gives the honesty lines verbatim', () => {
@@ -277,7 +292,10 @@ test('methodology.html says what happens to what you paid, and gives the honesty
   assert.match(text, /your browser’s history keeps it/);
   assert.doesNotMatch(text, /stored, logged or sent|stays only in/, 'no claim that the amount leaves no trace');
   assert.match(text, /A link you share carries your amount/);
-  assert.ok(text.includes('“You paid 3.6× what pharmacies pay for this pack, and 1.4× the cost-plus estimate.”'), 'the worked example sentence');
+  const { s } = showcaseExample(DOC);
+  const paid = paidComparison(12, s.pack, s.cost_plus);
+  assert.match(paid.sentence, /^You paid .*what pharmacies pay for this pack, and .*the cost-plus estimate\.$/);
+  assert.ok(text.includes(`“${paid.sentence}”`), 'the worked example sentence, from the core');
   for (const h of HONESTY) assert.ok(text.includes(h.text), `honesty line: ${h.text}`);
 });
 

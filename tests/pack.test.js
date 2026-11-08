@@ -69,6 +69,18 @@ test('pack round trip: awkward shapes', () => {
   assert.deepEqual(Object.keys(back.rows[0]), ['__proto__', 'x']);
   assert.deepEqual(Object.keys(back.part_b_codes), ['__proto__']);
   assert.equal({}.polluted, undefined);
+  // setOwn() assigns every other key directly (decision 53): keys Object.prototype also has stay
+  // plain data, at the top of an item and nested inside one, in rows, tables and the doc.
+  const inherited = JSON.parse('{"rows":[{"constructor":"c","toString":1,"hasOwnProperty":{"valueOf":"v","__proto__":{"deep":true}},"__defineGetter__":null,"x":{"__proto__":2}}],"part_d_names":{"constructor":{"valueOf":3}},"toString":"top"}');
+  const again = roundTrip(inherited);
+  assert.equal(JSON.stringify(again), JSON.stringify(inherited));
+  assert.deepEqual(Object.keys(again.rows[0]), ['constructor', 'toString', 'hasOwnProperty', '__defineGetter__', 'x']);
+  assert.equal(Object.getPrototypeOf(again.rows[0].hasOwnProperty), Object.prototype);
+  assert.deepEqual(Object.keys(again.rows[0].hasOwnProperty), ['valueOf', '__proto__']);
+  assert.equal(again.rows[0].hasOwnProperty.deep, undefined);
+  assert.equal(Object.getPrototypeOf(again.rows[0].x), Object.prototype);
+  assert.deepEqual(Object.keys(again.part_d_names), ['constructor']);
+  assert.equal({}.deep, undefined);
   assert.deepStrictEqual(roundTrip({ rows: [] }), { rows: [] });
 });
 

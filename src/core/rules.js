@@ -1239,6 +1239,9 @@ export function describeSpreadRange(min, max, opts = {}) {
 
 const CADENCE_PHRASE = Object.freeze({ daily: 'every day', weekly: 'every week', quarterly: 'every quarter', annual: 'once a year' });
 
+/** How far ahead of today a date can be and still be explained by a device's clock or time zone. */
+const CLOCK_SKEW_DAYS = 1;
+
 /**
  * How old a record (or a `sources` entry of data/drugs.json) is, against its source's
  * threshold. The date measured from is set by sourceInfo.age_from (SOURCE_INFO in sources.js):
@@ -1285,12 +1288,18 @@ export function freshness(record, sourceInfo, todayIso) {
   }
   const age = daysBetween(date, todayIso);
   if (age < 0) {
+    // A day is a device's clock or time zone; more is a date really ahead of today, such as a
+    // quarter whose prices are posted before it starts (decision 55).
+    const clock = age >= -CLOCK_SKEW_DAYS;
+    const ahead = basis === 'period_start' ? `This ${span} has not started: today is ${todayIso}.` : `That is ${days(-age)} after today (${todayIso}).`;
     return {
       stale: false,
       age_days: 0,
       date,
       basis,
-      message: `${what}: 0 days old. The date is after today (${todayIso}), which a device’s clock or time zone can cause, so it is counted as 0 days.`,
+      message: clock
+        ? `${what}: 0 days old. The date is after today (${todayIso}), which a device’s clock or time zone can cause, so it is counted as 0 days.`
+        : `${what}: 0 days old. ${ahead} It is counted as 0 days.`,
     };
   }
   const stale = age > sourceInfo.stale_after_days;

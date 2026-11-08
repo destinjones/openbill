@@ -4,7 +4,8 @@ A numbered log of the choices behind OpenBill: context, decision, consequences. 
 not rewritten; a later entry supersedes or amends an earlier one by number, and the earlier
 entry carries a one-line note pointing at it. Entries 1 to 23 were recorded on 2026-10-17,
 during phase 1; entries 24 to 32 were recorded later the same day, after a review and a
-rebuild of `data/drugs.json`, entries 33 to 48 on 2026-10-18, and entries 49 onward on 2026-10-19.
+rebuild of `data/drugs.json`, entries 33 to 48 on 2026-10-18, entries 49 to 52 on 2026-10-19,
+entries 53 to 55 on 2026-11-06, and entry 56 on 2026-11-08.
 Entries 39 to 49 are phase 2: the cost-plus estimate, "what you were charged" and the drug
 pages. The contract
 they produce is [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -197,6 +198,8 @@ when forking.
 
 ## 12. Spot checks are pinned to source files; every refresh re-verifies at least ten
 
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): a floor per source as well as the total, and a tool that re-verifies NADAC and Part D through the government APIs.*
+
 **Context.** Unit tests show the code does what we meant. They can't show the number matches
 the government file.
 
@@ -210,6 +213,8 @@ file stops counting toward the ten instead of passing quietly.
 ## 13. External link checks are opt-in
 
 *Amended by [decision 50](#50-links-into-openbills-own-website-are-checked-against-this-commits-build): links into OpenBill's own website are checked against a local build, not the network.*
+
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): external links are checked by their own weekly workflow, and the required `links` job no longer goes to the network or uses `continue-on-error`.*
 
 **Context.** The docs link to the project's own GitHub pages (the CI badge, the issue forms,
 security advisories), which can't resolve before the first push. Some government sites also
@@ -546,6 +551,9 @@ test is made before rounding.
 *Amended by
 [decision 33](#33-the-page-checks-the-inline-datas-sha256-browser-checks-run-in-chromium-firefox-and-webkit):
 the page now checks the sha256, and the browser checks run in Firefox and WebKit too.*
+*Amended by
+[decision 53](#53-the-address-the-live-regions-and-the-time-before-the-data-arrives):
+the script no longer fails to parse below Safari 16.4, and the message links the plain pages.*
 
 **Context.** Decision 6 inlined the JSON text of `packDrugs(doc)` in the page. That text is 6.5
 MB (6,502,204 bytes for the first build, 6,515,285 for the rebuilt data), which is a lot to put
@@ -604,6 +612,8 @@ size with its unit, and 89 have a quantity with no unit. Those 89 cannot be conv
 per NADAC unit, so they have no Part B spread.
 
 ## 29. Today, for ages on the page, is the UTC date
+
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): an age more than a day below zero is no longer put down to the clock; the note says the period has not started, or how far ahead of today it is.*
 
 **Context.** Decision 21 says the page counts ages "against the viewer's own today" and that an
 age can come out negative when "a viewer's clock or time zone is behind UTC". The page takes
@@ -1047,6 +1057,8 @@ domain, it should add a `robots.txt` then.
 
 ## 45. The showcase: aripiprazole 10 mg tablets, 30
 
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): a refresh prints the showcase's figures and re-checks these reasons (`tools/showcase.mjs`); no test pins the figures.*
+
 **Context.** The default card, the README, the screenshots and the site's preview image need one
 product. It should be a real, widely used drug with a gap that is large enough to matter, and
 it must not be an extreme case where the two figures may not measure the same thing
@@ -1098,6 +1110,8 @@ separately.
 
 ## 47. Corrections from the phase 2 review
 
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): `lastmod` no longer follows the templates' git history; it follows the data and a date a person moves.*
+
 *See [decision 52](#52-drug-pages-link-the-explanations-they-share-and-add-their-own-comparisons): drug pages no longer quote the five honesty lines; they link to them on methodology.html, which settles for drug pages the question left open below.*
 
 *Amended by [decision 48](#48-starting-quantity-by-dosage-form-preview-images-stay-png): kits and the other products priced per EA that are not oral tablets or capsules start at 1, so titles, descriptions and preview alt text quote the card's own 1-unit pack total instead of the unit price, and the starting-quantity question this entry left open is settled.*
@@ -1145,6 +1159,8 @@ which the page bodies and preview cards still use, and whether reader-facing pag
 the brief's house-rule sentences at all.
 
 ## 48. Starting quantity by dosage form; preview images stay PNG
+
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): the preview images stay PNG and are now written with a palette of up to 255 colours, about 40% of the size.*
 
 *Amended by [decision 49](#49-starting-quantity-case-packs-tablets-and-films-under-the-tongue-fda-listing-outliers): tablets and films taken under the tongue or against the cheek start at 30, a product whose NDCs are mostly oral tablets or capsules (and whose NADAC name says so) starts at 30 despite an outlier FDA listing, and a wholesale case or multi-pack priced per ML or GM starts at one inner unit.*
 
@@ -1300,6 +1316,8 @@ for `SL` above. None of the ten products in [HAND-CHECK.md](HAND-CHECK.md) chang
 
 ## 50. Links into OpenBill's own website are checked against this commit's build
 
+*Amended by [decision 55](#55-the-refresh-harness-page-dates-smaller-preview-images-and-ci-hardening): the required `links` job now checks only this repository's links and its own build; external links have their own weekly workflow.*
+
 *Amended by [decision 51](#51-launch-assets-a-press-kit-and-a-reveal-clip-built-on-every-deploy): a link to one of the press kit's pictures, which a `--no-og` build does not render, is checked against the list of files the image step writes.*
 
 **Context.** [Decision 13](#13-external-link-checks-are-opt-in) checks external links over the
@@ -1448,3 +1466,515 @@ explanations it shares. The five honesty lines are no longer quoted on drug page
 still list them. The drug pages' HTML is about the same size (134.8 MB against 134.3 MB), and
 `node --test` renders every drug page once more for the floor, about 10 seconds. A data refresh
 that pulls the share below a floor fails the tests rather than shipping thinner pages.
+
+## 53. The address, the live regions, and the time before the data arrives
+
+*Amended by [decision 56](#56-corrections-from-the-foundations-review): the boxes follow the address wherever the focus is, Back lands on the title in view, and Enter, Escape and focus during the load are handled as the reader left them.*
+
+**Context.** An audit recorded on 2026-11-06 reproduced these on the live page. The skip link's
+`#card`, like `#main`, `#top` or `#utm_source=reddit`, was read as a card link with no drug in
+it and replaced the card with an error, and a reload stayed broken. A quantity of `1e300000000`
+in a link held the tab for about 21 seconds, and `0e-99999999999999` crashed it. A screen reader
+could be left with one drug's prices under another drug's heading. At 6x CPU on slow 4G the
+search box stayed disabled for the whole load, the longest task was about 2.9 seconds, and the
+card's arrival moved the page by a cumulative layout shift of 0.63. One lookbehind stopped the
+script from parsing in Safari below 16.4, before it could give the message decision 26 promises.
+
+**Decision.**
+
+- **One reader of the hash.** `parseHash(hash, { isName })` in `src/core/hash.js` is DOM-free and
+  returns one of `default`, `card`, `anchor` or `bad`. Every value is text the caller still has to
+  check. To add a key that goes with a drug, add it to `HASH_KEYS` and read it off the result. A
+  key that means something without a drug (a list, an NDC) needs its own kind, ahead of the
+  no-drug check, or it will read as a broken link.
+- **What is addressed to OpenBill.** A single word is an anchor unless it is a product's whole
+  name. Text holding whitespace cannot be an HTML id, so it is a name, and a name the file does
+  not have goes into the search box and runs. Parameters with none of our keys are someone
+  else's and are ignored. One of our keys with no drug (`#drug=`, and `#qty=30`) still says "That
+  link does not name a drug": the audit asked for that only on an empty `drug=`, but `#qty=30` is
+  our link with its drug lost, and an existing test pins it. Names match whatever their case or
+  spacing; if two products differed only in those, neither would be guessed.
+- **A fragment leaves the card alone and puts the address back.** So a reload or a shared link
+  still opens the card. The skip link is handled on click with no hash change at all, and `#card`
+  from elsewhere does the same as the skip link. `#ndc-…` no longer breaks the card, but it does
+  not open the panel either; the panel's anchors are for a later change.
+- **A quantity is refused from its text, before any BigInt.** At most 32 characters
+  (`QTY_MAX_CHARS`) and an exponent of at most 32 (`QTY_MAX_EXPONENT`), which still reads `1e3`,
+  `30000e-1` and `0.0001e1`. `toDecimal()` refuses exponents past 1000, which no JavaScript number
+  reaches. Anything the engine still throws becomes "that number could not be read". Reflected
+  text is cut at 80 characters and search text at 200; `tests/hash.test.js` checks that no product
+  name reaches 200, so the cut cannot turn one name into another.
+- **The live regions say one true thing, once.** The status starts with the drug's name, then
+  what is wrong with the quantity, and is written only when its text changes. It is emptied, with
+  anything queued, before any other card, message or failure is drawn. The paid result is a live
+  region too, so it waits for the same 500 ms pause; until then it is `aria-busy` and dimmed, so
+  it is not read as the answer for the new quantity. Ready is said as "<card>. Search is ready.";
+  failure uses `role="alert"` and moves focus to the title.
+- **The panel is built when it opens.** On its click, on `toggle` (for any other way of opening
+  it) and on `beforeprint`, because print shows it open. While open it is kept current. The cost:
+  a closed panel is empty, so a browser's find-in-page no longer opens it to find an NDC.
+- **The search box is live from the start.** It says "Search starts when the data loads" as a
+  placeholder, because a line of its own would itself move the page. Text typed early is kept and
+  run when the index is ready. Enter pressed meanwhile acts then as Enter does (decision 54): it
+  opens an exact name or NDC, and otherwise moves to the first result. Decision 56 says what takes
+  that back.
+- **Room is reserved; nothing is drawn in it.** `.card-pending` has a minimum height of 1640 px on
+  a phone and 1290 px from 640 px up, near the real card (1643 and 1290). No figure is
+  pre-rendered, because no figure may appear before the data's checksum is checked (decision 33).
+  A message or the failure state is far shorter and gives the room back, which moves things up
+  (0.35 on a 1280 px desktop): accepted, since that link has already failed, and a shorter
+  reservation would bring the shift back for every working card.
+- **With no script: a heading, a sentence and the plain pages.** The static card has an `h1`, so
+  its `aria-labelledby` resolves from the start, and absolute links to the A–Z index, never the
+  38 MB JSON. `@media (scripting: none)` hides the search and Try links, because the page has
+  exactly one inline style and one inline script and tests hold it to that, so a `<noscript><style>`
+  is not available. A browser without that media feature (Chrome below 120, Firefox below 113,
+  Safari below 17) with scripts off still shows them, and the `<noscript>` line still says where
+  to go. `aria-busy` is set by the script, so it cannot stick when the script never runs.
+- **The failure state speaks to readers.** `PlainError` marks a sentence written for them;
+  anything else becomes "The price data built into this page could not be read". The engine's text
+  goes only in the report link. Search and Try are hidden there, since they would do nothing.
+- **From `file:`, `methodology.html` and `data/` links go to the website.** A file: page cannot
+  tell whether those files are beside it, and in the saved copy the README describes they are not.
+  A clone's copy goes to the website too; that is the cost. Four assertions in
+  `tests/browser/openbill.spec.js` pinned the relative links from `file:`, which are the dead ones;
+  they now expect the website's, and a new test pins the relative form on the website itself.
+- **The stamp is `#` on the page itself,** which draws the default card with nothing to download.
+- **No lookbehind, by build check.** `bundle()` refuses `(?<=` and `(?<!` anywhere in the code, a
+  comment included, because the check does not read JavaScript. On WebKit 16.0 the old page stays
+  on "Loading" with a parse error; the new one runs, and gives the plain message when
+  `DecompressionStream` is absent, which is what Safari below 16.4 lacks.
+- **`setOwn()` assigns directly, except for `__proto__`,** and `start()` yields between its stages,
+  so the card can paint and a keystroke can land between them.
+
+Measured with Playwright in Chromium, median of 5, the page gzipped over local HTTP, on one
+machine. Slow 4G is 1.44 Mb/s and 562.5 ms of latency.
+
+| | 6x, slow 4G, 360 px | 6x, no network limit, 360 px | 1x, 1280 px |
+|---|---|---|---|
+| Longest task, ms | 2,850 → 588 | 2,123 → 375 | 243 → none over 50 |
+| Unpack, ms | 1,615 → 580 | 976 → 365 | 127 → 48 |
+| Cumulative layout shift | 0.63 → 0.00 | 0.63 → 0.00 | 0.36 → 0.00 |
+| Search ready, ms | 11,121 → 9,848 | 3,714 → 2,658 | 403 → 293 |
+| Largest contentful paint, ms | 10,544 → 9,268 | 3,172 → 2,264 | 64 → 260 |
+
+**Consequences.** Largest contentful paint stays about 9 seconds on slow 4G: the download dominates,
+and the content that counts is the card, which cannot be drawn sooner without pre-rendering a
+figure. On a 1280 px desktop it moves from 64 ms, which was the loading line, to the card itself.
+The page grows by about 19 KB. This amends decision 26: Safari below 16.4 now reaches the promised
+message, and a browser in that message also gets a way to the plain pages.
+
+## 54. What a search lists first, what Enter opens, and the NDC a reader came with
+
+**Context.** An audit recorded on 2026-11-06 reproduced these on the live page, and each was
+reproduced again in Chromium before this change. Typing "amlodipine" and pressing Enter opened
+KATERZIA at $630.48, "meloxicam" a capsule at $337.39, "diazepam" a rectal gel, "naltrexone"
+VIVITROL, because an exact FDA name beat a product's own name and the first of any list opened.
+Sertraline listed 100, 25, 50. "lopid" found CLOPIDOGREL and "statin" found NYSTATIN, as matches
+inside a word; "syringe" found SENNA SYRUP. A bare `8330100101` opened GABAPENTIN when FDA's own
+form of those digits is a metformin package. A package NADAC does not have silently showed
+another one, a card forgot which NDC opened it, and the panel reached 53,961 px on ATORVASTATIN
+10 MG at 360 px (the whole page 57,526 px).
+
+**Decision.**
+
+- **Order, using no displayed figure.** First, how the product meets the query, best first: its
+  own name exactly; its own name starting with a query word and holding them all; its own name
+  starting with a query word while another name holds them all; its own name holding them with
+  none at its start; only another name; a partial match. So a product's own name beats an FDA or
+  Part D name, even an exact one. Then, inside that, whether every word was whole, what to hold
+  back, and a fixed rank.
+- **The fixed rank reconciles two requests.** The brief says NDC count, then Part D claims, then
+  numeric strength, and also that sertraline lists 25, 50, 100. Sorted strictly by NDC count,
+  sertraline lists 50, 100, 25. So the count ranks families, not strengths: a family is a name
+  without its numbers and units, and families sort by their most-listed strength's NDC count, then
+  by claims. Inside a family the common strengths come first in numeric order, and a rare one
+  waits behind them. Rare is listed by under a quarter as many NDCs as the family's most-listed
+  strength (`COMMON_SHARE`): that is what keeps METFORMIN HCL 625 and 750 MG, at about 500 times
+  the price per tablet of 500 MG, from sitting between 500 and 850.
+- **What is held back, inside its tier.** An injected form, when the words also find a tablet or
+  capsule. A combination, when the same query finds the ingredient alone, listed by at least a
+  quarter as many NDCs (`oxycodone` starts with OXYCODONE HCL, `hydrocodone` with the combination,
+  because there is no plain single). A release form, when the query names none and an
+  immediate-release form is there, not a rare one (`omeprazole` still starts with OMEPRAZOLE DR). A
+  release-form tablet gives way only to another tablet or capsule: POTASSIUM CHLORIDE's 10% liquid
+  does not push the ER tablet away for being immediate-release. Anything else, when tablets and
+  capsules are at least half as widely listed.
+- **Never inside a word.** A word matches when it is a word of the name or starts one. A synonym
+  counts only as a whole word, so SYRINGE (SYR) no longer starts SYRUP. A number or single letter
+  before the last word must be whole, so "b12" no longer reaches BIKTARVY through a B-word and the
+  strength 120-something. 37 of the 5,471 one-word FDA names were reachable only by a match inside
+  a word, among them LOPID, OXACILLIN and CORTISONE; these now say "No drug matches" rather than
+  list another drug, until FX-09's table of names.
+- **Partial matches are labelled.** The letters only start a word that is not the name's first
+  ("besyl"), or start another name with nothing of the product's own ("ultram" is griseofulvin
+  ULTRAMicrosize; "apix" on the way to apixaban). They sort last, say "Partial match", and a list
+  of nothing else says no drug has that name.
+- **Enter (`enterChoice`, DOM-free).** It opens the one result, or a product's own exact name, and
+  nothing else: not the top of a list, an ambiguous NDC, a partial match, another package, a
+  12-digit guess, or a product reached only through a list of ingredients ("ferrous sulfate" finds
+  one multivitamin). If two names read the same without punctuation, the name typed does not settle
+  it. On a plain list Enter moves focus to the first row, so the phone keyboard closes and the next
+  Enter is a choice the reader can see. Lists that need reading first keep focus on the box.
+- **"Unchanged typed state" is read as a limit, not a third way to open.** The brief says Enter
+  opens with "one result or an exact name or unchanged typed state". Read as permission, it would
+  be J25's bug: choose 2.5 mg, return to the box, press Enter, and be sent to whatever is first.
+  So text unchanged since a result was opened from it never opens anything. If the owner meant
+  the other reading, it is one condition in `enterTarget()`.
+- **The list.** It returns when the box takes focus or a click with text in it, closes on a click
+  outside the search section and on any hash change, and a pending keystroke cannot bring it back.
+  ArrowDown and ArrowUp move between the box and the rows; a printable key goes back to the box.
+  iOS reports a tap on plain text only to a listener below `<body>`, so the outside-click listener
+  sits on each child of `<body>` too, with their tap highlight off. A close on `pointerup` was
+  rejected: moving the page under a finger before the click lands can make the click hit
+  something else.
+- **Reading an NDC (`readNdc`).** Dots and slashes count as hyphens, a three-digit labeler
+  (378-7185-05) gets its zeros back, hyphens in no layout (00378-718-505) are read by the digits,
+  and 5-4, 4-4, 5-3, 3-4, 9 or 8 digits read as labeler and product. A bare 10-digit number lists
+  every reading, FDA's own printed form first, and says to check the hyphens. Of the 27,083 rows
+  with FDA's 10-digit form, 92 read several ways without hyphens, and 15 listed the wrong drug
+  first; now none does.
+- **A different package is called one.** When the exact NDC is not in the file but its first 9
+  digits are (16714-611-02 finds 16714-611-01), the result says "A different package" and Enter
+  stays. The audit counted 9,617 of FDA's 219,166 packages in that position; that count was not
+  repeated here. "Not in the file" is the common answer: of FDA's 120,758 distinct human
+  prescription packages (`ndctext.zip`, the build's copy in `tools/cache`), 96,128 are not in this
+  build's `data/drugs.json`. The page says "most packages on FDA's list of prescription drugs are
+  not in it" rather than the figures, which would go stale without a source line. The two
+  sentences that said the same thing in the status and the help are now one, in the status.
+- **Twelve digits are never called a barcode or an NDC.** 300378718505, the form the audit saw,
+  is not a true barcode: a real UPC-A holds a 10-digit NDC and a check digit (303787185053). A
+  number starting with 3 is tried both ways, only as a guess beside a name, and packages carry
+  12-digit numbers of other kinds, so the screen says "A 12-digit number is not an NDC" and "check
+  your label".
+- **`&ndc=` goes through `parseHash`.** It is one more of `HASH_KEYS`, read with a drug, and checked
+  with `normalizeNdc()` where it is used. A real NDC of this product stays and is rewritten as 11
+  digits; another package of its labeler and product stays and is labelled; anything else leaves
+  the address, with a sentence showing at most `clipText()` of it. `#ndc=X` alone stays a link with
+  no drug: resolving an NDC with no drug is a feature nobody asked for at this stage.
+- **"Your NDC" above the figures** names the NDC, its labeler and package, and that row's NADAC
+  line exactly as the panel prints it, with chip and date. It is the one new place a figure
+  appears, it is a figure the panel already showed, and the three figures below it do not change.
+  The quantity does not start at the package's size (J16 suggested it): FX-16 leaves it out, and
+  this stage does not change what figures show.
+- **The panel's limit is 13,000 px at 360 px wide on every product.** Each NDC, each record after
+  the first of a group, and a "without this Medicare figure" list of more than 3 sit behind a
+  44 px summary. The reader's own NDC starts open, and what is open stays open when a new quantity
+  rebuilds the panel. Printing opens them all and puts them back. Measured on all 5,936 products:
+  the tallest is 11,545 px (NALOXONE 2 MG/2 ML SYRINGE, 20 records), and ATORVASTATIN 10 MG goes from
+  53,961 to 9,325 px. A spec pins the limit on that product and the product with most NDCs. NDCs
+  alone were not enough: closing only them left 21,628 px on the naloxone.
+- **`buildIndex(products, { aliases })` is where FX-09 plugs in.** Rows of `{ name, generic, source }`
+  answer a query nothing else fits, and the results carry the row, because a generic's price is not
+  the brand's. Enter does not open them. Nothing passes a table yet, and the page has no label for
+  those results; FX-09 adds the data and the label.
+- **Suggestions narrowed once.** Ending matches inside words newly sent "lopid" to the suggester,
+  which offered RAPID. Two edits must now keep the first letter. "statin" still gets STARTING or
+  STRAIN and "ranexa" RYNEX, and those stay FX-09's to fix.
+
+**Tests that pinned the wrong thing, changed here.**
+
+- `tests/search.test.js`, "search ranks exact > prefix > ...": pinned ZABC and XABCX as substring
+  matches, the cause of OB-06.
+- `tests/search.test.js`, "within a rank, ...": its last line pinned an exact alias over a product's
+  own name, the cause of OB-04.
+- `tests/search.test.js`, "tokens rank across products": pinned alphabetical order over NDC count.
+- `tests/ndc.test.js`, "Unicode dashes": pinned dots as junk, which OB-12 asks to read.
+- `tests/browser/openbill.spec.js`, "Enter opens the first result" and the `&paid=` test's Enter:
+  pinned Enter opening the first of several, OB-13 and J25. The first now checks that the card
+  stays and the next Enter chooses; the second clicks the result.
+- `tests/hash.test.js` and `#panel summary` in the spec only follow the new key and the nested
+  summaries; nothing they checked was removed.
+
+**Measured.** First result of the 150 most prescribed names (ClinCalc DrugStats, "The Top 300 of
+2024", ranks 1 to 150, semicolons as spaces), on this build's data, before → after:
+
+| First result is... | Before | After |
+|---|---|---|
+| a release form, with a plain form to prefer | 6 | 0 |
+| rare beside the most-listed result (under a quarter) | 28 | 3 |
+| at least 5 times the unit price of the most-listed result | 16 | 2 |
+| outside the most-listed result's family | 61 | 25 |
+| injected, with an oral solid in the list | 2 | 1 |
+| a product not named for the query's first word | 14 | 12 |
+| the most-listed result is past the 20 shown | 7 | 1 |
+
+The 12 are mostly brands whose generic has no NADAC name of its own. What remains: `potassium
+chloride` starts with the 10% liquid, because the ER tablets are named POTASSIUM CL and do not hold
+"chloride"; `cholecalciferol` with FOSAMAX PLUS D, because no product is named for it; `diclofenac`
+with the 25 MG potassium tablet, about 74 times the unit price of the most-listed result, since
+price is not used to sort; and `mirtazapine` with the 7.5 MG, about 5.5 times.
+
+Search over 26 queries in Node on the real data: median 1.95 → 0.81 ms, slowest query's median 3.25
+→ 2.25 ms. The limits in `search.test.js` are unchanged. In Chromium at 6x, input to list written
+less the debounce, median of three alternating rounds of 11: "m" 778 → 931 ms, "in" 969 → 886,
+"met" 222 → 162, "metformin" 167 → 192, "tablet" 188 → 202, "sertraline" 206 → 221, "metformin 500"
+189 → 190. These move both ways and are noisy; a profile puts the search code near 20 ms a keystroke
+at 6x in both builds. Building the index costs more: 96 → 131 ms in Node, `index_ms` 35 → 61 at 1x in
+Chromium.
+
+**Consequences.** Names NADAC does not use, such as LOPID and RANEXA, now find nothing until FX-09,
+where before they found the wrong drug. A reader pressing Enter on "metformin" presses it twice. The
+page grows by about 30 KB.
+
+## 55. The refresh harness, page dates, smaller preview images and CI hardening
+
+*Amended by [decision 56](#56-corrections-from-the-foundations-review): `check_refresh.py` also checks the shared NDCs, the week, the reject count, a partial shift and each value, and the deploy gate fails when it cannot ask GitHub about `main`.*
+
+**Context.** Recorded on 2026-11-06, after an audit of the repository. The audit refreshed the data
+to the NADAC of 2026-11-04 in a scratch copy and ran everything against it. `node --test` gave 3
+failures and 22 skips, all of them tests that had pinned one week's figures. It also found that a
+fetcher could keep an old file without saying so, that the Part B fetcher could adopt a quarter
+before it started, that nothing compared new data with old, that a code-only commit moved every
+page's date, that the preview images would approach GitHub's limit on a site, and that CI ran twice
+for each pull request commit and deployed before its browser checks had finished. The next stage
+rewrites the page templates, so this comes first.
+
+**Decision.**
+
+*Tests compute weekly figures.* A test that needs a price takes it from `src/core` on the same data
+and keeps its assertion about the shape of what is shown. A test of a named product says so and
+stops when that product has left the data, with the exception of the showcase, whose loss needs a
+person. The sentences in the press and quality tests are built from the core too. Decision 49's
+counts and the 151 products it names are stored in `tests/fixtures/decision49.rows.json`, so those
+tests keep running after a refresh instead of skipping. The default product still stops the build if
+it is gone; a "Try" suggestion falls back to another product (`TRY_FALLBACKS` in `build.js`), since
+one generic leaving NADAC is a normal week.
+
+*The showcase is printed, not pinned.* `tools/showcase.mjs` prints the showcase's figures and whether
+decision 45's reasons still hold, for the refresh pull request. The README's figures are only checked
+when it claims this data's NADAC week: until the refresh updates it, it describes the week before,
+which is true of that week.
+
+*The Python rules have fixtures and mutants.* `tests/pipeline.test.js` runs every fetcher and
+`build_drugs.py` on tiny files in `tests/fixtures/pipeline/`, with the network stubbed and the cache in
+a temporary folder. `tools/mutate_pipeline.mjs` breaks 40 of those rules one at a time and fails if the
+suite still passes. It takes about 40 seconds, so `node --test` does not run it; run it when you change
+a fetcher's rule. Its rule texts must match the code, so it also fails when a rule is rewritten.
+
+*Fetchers fail loudly and keep the last good file.* A new download is validated before it replaces the
+cached file; if it is malformed, the new file is dropped and the cache and manifest stay as they were.
+A publisher that renames a file, or stops publishing the data a fetcher expects, is an error rather
+than a quiet use of last year's. NADAC fails when its as-of date is more than 10 days old. Part D warns,
+and does not fail, past 913 days, because that source runs about two years behind by design. Its check
+for a renamed dataset compares the period too and is narrower than "any title with Spending or Drug",
+because "Medicare Part D Prescribers - by Provider and Drug" is a real dataset that is not this one.
+
+*`--require-online`.* A source that falls back to its cache exits 5, and `fetch_all.py` exits 1 and
+says NOT REFRESHED. Plain `fetch_all.py` still exits 0 with that line in its summary, because a person
+without network should still be able to build. A refresh job passes `--require-online`.
+
+*Part B: the newest quarter already started.* CMS posts a quarter's files before it starts, and the
+fetcher adopted them on sight, showing a limit not yet in effect (`fetch_asp.py`, `find_quarter`). It
+now takes the newest quarter that has started, and fails when no complete quarter covers today,
+allowing 10 days after the quarter ends. The freshness rule no longer blames the reader's clock for a
+quarter that has not started: an age below zero by more than `CLOCK_SKEW_DAYS` (1) says what it is.
+
+*Two gates on a refresh.* `build_drugs.py` exits non-zero when more than 0.5% of a week's rows are
+rejected. `tools/check_refresh.py` compares the new file with the previous one and fails below 97% of
+the previous rows, above 0.5% rejected, above 20 NDCs moving 5× or more either way, or a median ratio
+outside 0.9 to 1.1. Those limits rest on one three-week diff (2026-10-14 to 2026-11-04: 0.353× to 1.965×,
+none at 5×, median 1.000, 176 NDCs added and 105 removed), so they are starting points. A real market
+event passes with `--accept-movers`, which a person has to choose.
+
+*A floor per source, and a tool to re-verify.* Decision 12's total of ten let a refresh pass with no
+NADAC check at all, on the source that moves every week. At least 5 must now apply to the NADAC file,
+5 to Part D, 3 to the Part B limits and 2 to the crosswalk. A row entry pinned to a Part B or Part D file
+whose NDC has left this week's NADAC is skipped and does not count: the fact in that file did not
+change, the row is gone. `tools/reverify_spotchecks.py` reads each NADAC and Part D value from the
+publisher's API, a different route from the CSV the pipeline parsed, and rewrites an entry only if every
+value agrees. The APIs come from the same publisher, so this catches our parsing and joining, not the
+publisher's mistake. It reads Part D by pages rather than the API's filters: on 2026-11-06 a filter took most
+of a minute or answered 503 on every try, while all 14,536 rows came in three pages in under a second each.
+Part B has no API, so a person does those at the new quarter, and a person still
+does the slower [hand check](HAND-CHECK.md).
+
+*Timing tests use the median.* The search, parse and scan limits assert the median or the best of three
+runs and report the slowest as a diagnostic. One slow run on a shared machine says nothing about the code.
+
+*Page dates move with what the page says.* "Data changed" is the last commit touching `data/drugs.json`
+and nothing else. A data page's `lastmod` is the later of that and `PAGES_REWRITTEN`, a date in
+`src/build/drugpage.js` that a person moves when a change rewrites what the pages say across the
+site. The press kit also follows `CITATION.cff`. Git history of the templates is no longer read: a
+refactor, a test or a stylesheet fix tells a search engine nothing and tells a reader something false.
+A later change that rewrites the templates must move the constant in the same change.
+
+*Preview images keep PNG with a palette.* Each card is decoded, reduced with the median cut `tools/gif.mjs`
+already has and written as an 8-bit palette PNG by `tools/png.mjs`, with no dithering and no randomness,
+so the same screenshot gives the same bytes. There are at most 255 entries because the palette code
+keeps the GIF's transparent index free. Measured on 26 real cards: 1.9 MB to 0.8 MB (40.5%), about 30 KB
+each. Against one truecolour card: 75,636 to 30,365 bytes, 50.9 dB, and 0.059% of pixels more than 16 levels
+off in any channel, with no visible change. That is roughly 180 MB of images for 5,936 cards rather
+than 445 MB (scaled from those 26 cards, not a full build). Encoding adds about 60 ms per card in Node,
+about 6 minutes over a full build, which fits the build job's 30 minutes. zlib level 9 is 29,521 bytes in
+28.6 ms; level 7 is 30,638 bytes in 4.5 ms. Level 9 stays, since bytes are what the site is short of, and
+level 7 is the first thing to change if the build gets tight. `pages.yml` fails above 900 MB, before the
+upload. Decision 48's reason for PNG over JPEG still holds.
+
+*CI.* Each Action is pinned by full commit SHA with its version in a comment, and
+`.github/dependabot.yml` proposes updates monthly for Actions and npm. The required checks keep the
+names `test` and `links`. `links` now checks only what this commit can break: relative links, anchors and
+links into this commit's build of the site, with no `continue-on-error`, because that setting turned the
+workflow green while the required check still read failure. External links move to
+`.github/workflows/external-links.yml`, weekly and when the docs change. It is not a required check, and
+it has no `continue-on-error` either, because a red run there is the signal and blocks nothing. Pushes
+run CI on `main` only and pull request commits run as pull requests, so a commit runs once; a newer push
+to a pull request cancels the run before it, and a run on `main` is never cancelled. `npm ci` stops at 3
+minutes and retries once, since one install took 7 of the job's 20 minutes. The website deploys on
+`workflow_run` after CI succeeds for a push to `main`, and the build checks out that exact commit, so
+what deploys has passed the browser checks. It skips the deploy when a newer commit has reached `main`.
+`workflow_dispatch` still deploys by hand.
+
+*Report links stop at 5,000 characters.* A logged-out request to GitHub's new-issue form answered with a
+redirect at up to 6,000 characters of title and an error from 6,500. The longest real report link is 1,929.
+
+**Consequences.** A refresh has a written order: `fetch_all.py --require-online`, `build_drugs.py`,
+`check_refresh.py`, `reverify_spotchecks.py`, `node build.js`, `node --test` with the cache present,
+`showcase.mjs` into the pull request, and the hand check for a person. A real refresh no longer needs a
+test edit, so a failing test after one means something. Against the 2026-11-04 data the whole suite gives
+no failures. The site's pages keep their dates through code changes, so the templates can be rewritten
+without telling a search engine that 6,000 pages changed, until the constant moves. Deploys start about
+ten minutes later than they did, because they wait for CI. Three settings are the owner's to turn on,
+because a repository file cannot: Dependabot alerts and security updates, the allowed-actions policy, and
+branch protection, whose contexts stay `test` and `links`.
+
+## 56. Corrections from the foundations review
+
+**Context.** Recorded on 2026-11-08. A review of decisions 53 to 55 reported 31 findings, 12 by using
+the page (BEH-01 to BEH-12) and 19 by reading the code and breaking its rules one at a time (R01 to
+R19). Each was reproduced before it was fixed. Before this change, 38 of the new or changed browser
+tests failed on the previous commit in both Chromium and WebKit. The others pin behaviour that was
+already right, or that shows only in one engine or at a phone's width. The changes stay within
+decisions 53 to 55. Nothing about how prices are labelled or what figures are shown changed, and the
+data was not refreshed.
+
+**Decision.**
+
+*Back lands on the title, in view.* The page sets `history.scrollRestoration = 'manual'`. Every way back
+to an entry already lands on its card's title. The browser's own restoring ran after that, smoothly
+where motion is allowed, and left the focused title about a screen above the view. That was in every
+engine on the way back to the default card, under either motion setting (BEH-01). Only the stamp's own
+click is not scrolled, because the browser is already taking the page to its top. The cost: a reload
+also opens at the top, not where the reader had scrolled to.
+
+*The boxes follow the address wherever the focus is.* On Back, Forward or a link to the same drug at
+another quantity or amount paid, the quantity box was written only when the focus was elsewhere. With
+the focus in it, the figures changed and the box did not, and it stayed wrong after the reader left it
+(R01, BEH-06). Now the address decides, and focus does not. A box that already says the same number
+in its own words ("1.50" says 1.5, `boxSays`) is not written, so it keeps its caret. There is one
+exception. When `replaceState` fails, the reader's own typing reaches this code. A box they have
+emptied, or filled with what is not a number, is then left as it is, because an address with no
+quantity must not fill it again. The paid box follows the address in the same way. A link's "5." or
+"+5" goes into the box as "5", because a number box empties itself on those and the figures read them as 5.
+
+*A quantity that is not a number is said, not taken as empty.* A number box holding "1e" reports its
+value as "", the same as an empty box (BEH-10). The page reads the box's `validity.badInput` and stands
+`QTY_UNREADABLE` in for its text. The reason then says "not a number", the box is marked invalid, and
+the quantity drops out of the address. A link whose quantity is literally `unreadable` reads the same
+way, which is true of it.
+
+*What happens while the data unpacks.*
+- Enter pressed in the search box before the index is ready acts when the index is ready, as decision
+  54's Enter does. It no longer acts after the reader has moved elsewhere, pressed Escape or kept
+  typing (BEH-03). It counts only for words the reader typed. A box that was empty may yet be filled by
+  a link's unknown name, which the reader never asked to open. Once the reader is elsewhere or has
+  pressed Escape, no list opens; going back to the box brings it. Decision 53's sentence about this was
+  wrong and now says what Enter does (BEH-04).
+- "Search is ready" is said once, in the card's status (BEH-08). A link's unknown name filled in before
+  the index exists no longer tells someone who typed nothing to wait. Its results come when the index
+  does.
+- Focus that is already in the card when the card arrives stays there and goes to the title, in place.
+  This covers the skip link and the loading line's link (BEH-02, R04). The card is `aria-busy` until
+  then, and a test now checks that.
+- When the data fails, focus in the search box or on a Try link goes to the message, scrolled into
+  view, because those controls go with the data (BEH-09).
+
+*Messages and the address.*
+- "No drug by that name" in the search status belongs to the link. It stops once a real card opens
+  (BEH-05, R14).
+- A plain fragment over a message, such as `#top`, puts the message's own address back, as it already
+  did for a card. A reload then opens the same thing (R16).
+- A link to the drug already open, with a different note (a wrong NDC, for example), redraws the card,
+  so the note comes and goes with the link (R15).
+- `#NAME&qty=45` reads as a bare name with a quantity. Before, it was refused (BEH-12). Control
+  characters are taken out of a name, and a name of nothing else is "That link does not name a drug",
+  not empty quotes.
+- A 12-digit number's guessed NDC is a guess. Opening its result no longer carries it as the reader's
+  own NDC (BEH-07).
+
+*Links inside a sentence stay inline.* A 44 px box around a link in a message pushed its line apart
+(BEH-11). The link is now inline with `padding-block: calc((44px - 1em) / 2)`. That gives a 44 px target
+without changing the line height. Because it does not grow its line, a link's target can overlap the
+lines above and below it by a few pixels. Nothing there is clickable.
+
+*Two search bugs found while testing.* An arrow key in the 60 to 200 ms after a keystroke went to a
+list that the waiting search then replaced, and the focus was lost. The arrow now runs that search
+first. A drag that selects the box's text and ends outside the search area counted as a click
+outside and closed the list. A press that begins in the search area no longer does that.
+
+*Lines that did nothing were removed.* The review found three rules no test could break. Each was
+covered by another rule. `QUERY_MAX_CHARS` was applied in prefill and in the search, but `parseHash`
+already bounds a link's name and the box bounds typing (A77, A78). Typing cleared the miss in the
+input handler, and the status already compares the text with the miss (A46). The panel's fill on a
+click on its summary stays (A27): `toggle` fires after the panel has opened, so without that fill one
+frame could be painted empty.
+
+*The refresh gate checks what it was missing.* `check_refresh.py` passed six kinds of file it exists to
+stop (R05). It now also fails in these cases:
+- fewer than 90% of the previous NDCs are in the new file;
+- the new NADAC as-of date is missing, or older than the previous one;
+- `counts.rejected` is missing (it was read as 0);
+- more than 5% of the shared NDCs moved 1.5× or more either way. `--accept-movers` overrides this,
+  because it is the same kind of signal as the big movers;
+- a row's NADAC value in either file is not a positive, finite number. Such a row is reported, never a
+  traceback (R13).
+
+The real diff from 2026-10-14 to 2026-11-04 passes. 99.65% of its NDCs were shared, and 55 of 29,926
+(0.18%) moved 1.5× or more. The limits are as much starting points as decision 55's. A file whose
+units all changed, EA to ML for example, still passes, because the check does not compare units.
+Whether it should is the owner's call.
+
+*The fetchers and the re-verifier.*
+- A zip whose directory reads but whose deflate stream is broken raises `zlib.error`. That is now a
+  reason (exit 4), with the cached file kept (R13).
+- The NADAC check in `reverify_spotchecks.py`, and the CMS catalog read, ask again on a 503 or 504, as
+  Part D's pages already did (R11). Any other error is not asked again.
+- `verified_via` names the result it used, `results[i]`, the newest effective date, not
+  `results[0]` (R12). A dry run says "Agreed with the API", without "and rewritten".
+
+The pipeline harness now covers every case R06 and R10 listed:
+- `--require-online` on every fetcher;
+- a cached NADAC week past its age limit, kept because the network failed, is NOT REFRESHED and not
+  FAILED;
+- the other NADAC datasets with a year in their titles;
+- a renamed link for a quarter already complete, or older;
+- a broken stream, new and cached;
+- the re-verifier's second result, second page, a 404, a non-API distribution, `5.521440`, and an NDC
+  missing from the data.
+
+`tools/mutate_pipeline.mjs` now holds 73 rules. Each one, broken, fails the suite, 12 of them by
+stopping the harness rather than at an assertion. A run takes about two minutes.
+
+*The deploy gate fails red.* When `git ls-remote` failed, or named no commit for `main`, the gate read
+that as "main has moved on". It skipped the deploy and the run stayed green (R03). It now stops with
+an error, so the run can be re-run. `tests/workflows.test.js` runs the gate's own script under bash
+with a stand-in `git`. It also checks the rules the workflows' comments state (R07), such as the
+permissions, the deploy's dependency on the build, `persist-credentials: false` and one SHA per Action.
+Broken one at a time, each of 37 workflow rules fails a test.
+
+*Tests that could not fail now can.* The J25 test's query gave Enter nothing to open, so it passed
+whatever the rule did. It now uses an exact name that has other results (R02). The browser tests now
+pin the rules R08 listed. The long-name test checks the exact `clipText` output. Search timing takes
+each query's best of three and requires the slowest of those to be under 50 ms (R18). One slow query
+fails; one slow run does not. The search rules R09 listed have unit cases, including the doc comment's
+own "sertraline 5". Five references to decision 53 that meant 55 were corrected (R17), and
+`SITE_CSP`'s comment is back on its constant (R19). Each new browser test was checked by breaking its
+rule. Of 36 such mutants, 35 fail a test. The one left, `&& inBox` on the Enter acted on at ready,
+cannot be reached since Enter on an empty box is not kept. It stays as a statement of the rule.
+
+**Consequences.** The address, the boxes and the figures agree in every engine, whatever has the
+focus. A reload opens at the top of the page. A refresh that replaces most NDCs, steps back a week,
+drops its counts or shifts part of the file stops at `check_refresh.py`, not in review. A deploy gate
+that cannot reach GitHub is red. The review's other surviving mutants were outside its fix list and
+were not checked again here: A33, A34, A44, A49 and A54 in the page, and C5 to C7 in the styles
+(print, wide screens and the busy paid result).

@@ -34,9 +34,12 @@ const T_EMPTY_OBJECT = 5;
 const T_JSON = 6; // arrays and anything else: JSON text, interned
 const T_UNDEFINED = 7;
 
-// Plain assignment would treat a "__proto__" key as the prototype; define it as data instead.
+// Plain assignment would treat a "__proto__" key as the prototype, so that one key is defined as
+// data instead. Only that one: Object.defineProperty on every key was a quarter of the page's
+// start-up at 6x CPU throttling (decision 53).
 function setOwn(obj, key, value) {
-  Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
+  if (key === '__proto__') Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
+  else obj[key] = value;
 }
 
 function hasOwn(obj, key) {

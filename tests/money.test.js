@@ -10,6 +10,8 @@ import {
   formatMoney,
   formatUnitPrice,
   quantityProblem,
+  QTY_MAX_CHARS,
+  QTY_UNREADABLE,
   multiplyMoney,
   multiplyDecimal,
   subtractDecimal,
@@ -165,6 +167,107 @@ test('quantityProblem explains unusable quantities', () => {
   assert.match(quantityProblem(1.0001), /more than 3 decimals/);
   assert.match(quantityProblem('x'), /not usable/);
   assert.match(quantityProblem(Infinity), /finite/);
+});
+
+// BEH-10: a number box holding "1e" reports "", which read as "No quantity entered".
+test('a box that cannot be read is its own problem, in words that do not echo the stand-in', () => {
+  const said = quantityProblem(QTY_UNREADABLE);
+  assert.equal(said, 'The quantity in the box is not a number, so it was not used.');
+  assert.doesNotMatch(said, new RegExp(QTY_UNREADABLE));
+  assert.throws(() => multiplyMoney(1, QTY_UNREADABLE));
+  // The stand-in is no quantity in any other spelling either.
+  assert.match(quantityProblem(QTY_UNREADABLE.toUpperCase()), /is not usable/);
+});
+
+// Decision 53: a crafted link's quantity is refused from its text, before any BigInt maths.
+// qty=1e300000000 took about 21 seconds, 0e-999999999 about 6 (18 in WebKit), and
+// 0e-99999999999999 crashed the tab; WebKit showed its own "Out of memory: BigInt" text.
+const CRAFTED_QUANTITIES = [
+  '1e300000000',
+  '1e999999999',
+  '1e10000000',
+  '1E+300000000',
+  '0e-999999999',
+  '0e-99999999999999',
+  '1e-999999999',
+  '0.0e999999999',
+  '-1e300000000',
+  '1e99999999999999999999',
+  '1e300000000 ',
+  ' 0e-999999999',
+  '9'.repeat(400000),
+  `0.${'0'.repeat(400000)}1`,
+  `1e${'9'.repeat(400000)}`,
+  ' '.repeat(1000000),
+];
+
+test('quantityProblem refuses every crafted quantity within 5 ms, in plain words', () => {
+  for (const q of CRAFTED_QUANTITIES) {
+    // The best of five, so a garbage collection in the test runner cannot fail it.
+    let best = Infinity;
+    let out;
+    for (let i = 0; i < 5; i++) {
+      const t = performance.now();
+      out = quantityProblem(q);
+      best = Math.min(best, performance.now() - t);
+    }
+    const label = `${q.slice(0, 20)} (${q.length} characters)`;
+    assert.equal(typeof out, 'string', label);
+    assert.ok(best < 5, `${label} took ${best} ms`);
+    assert.match(out, /^Quantity .* is not usable: (quantity (must be|has|is)|not a decimal).*\.$/su, label);
+    assert.doesNotMatch(out, /BigInt|Maximum|Out of memory|RangeError|TypeError/, label);
+    // At most 80 characters of the value, and its own words again only when it is short.
+    assert.ok(out.length <= 200, `${label}: ${out.length} characters`);
+  }
+});
+
+test('the same quantities throw just as fast where a quantity is used, and toDecimal bounds its exponent', () => {
+  for (const q of CRAFTED_QUANTITIES) {
+    const t = performance.now();
+    assert.throws(() => multiplyMoney(1, q), Error, q.slice(0, 20));
+    assert.ok(performance.now() - t < 50, q.slice(0, 20));
+  }
+  for (const s of ['1e999999999', '1e-999999999', '0e-99999999999999', '0e99999999999999']) {
+    const t = performance.now();
+    assert.throws(() => toDecimal(s), /exponent/);
+    assert.ok(performance.now() - t < 50, s);
+  }
+  // Every JavaScript number still reads.
+  assert.deepEqual(toDecimal(Number.MAX_VALUE).scale, 0);
+  assert.ok(toDecimal(Number.MIN_VALUE).scale > 300);
+  assert.deepEqual(toDecimal('0e-1000'), { int: 0n, scale: 0 });
+  // The bound is 1000, not merely "under a billion": past it, refused at once.
+  for (const s of ['1e1001', '1e-1001', '1e9999999']) {
+    const t = performance.now();
+    assert.throws(() => toDecimal(s), /exponent/, s);
+    assert.ok(performance.now() - t < 50, s);
+  }
+});
+
+test('the guard refuses nothing usable', () => {
+  for (const q of [1, 30, 9999, 0.001, 2.5, '30', '030', ' 30 ', '30.000', '0.001', '9999', '1e3', '1E3', '1e+3', '2.5e1', '0.0001e1', '30000e-1', '1e-3', `${'0'.repeat(QTY_MAX_CHARS - 1)}1`, '10000000000000000000000000e-22']) {
+    assert.equal(quantityProblem(q), null, String(q));
+  }
+  assert.equal(multiplyMoney(1, '1e3'), 1000);
+  assert.equal(multiplyMoney(1, '30000e-1'), 3000);
+  // Over the limits, with the existing words.
+  assert.match(quantityProblem(`${'0'.repeat(QTY_MAX_CHARS)}1`), /too long/);
+  assert.match(quantityProblem('1e33'), /at most 9999/);
+  assert.match(quantityProblem('1e-33'), /more than 3 decimals/);
+  assert.match(quantityProblem(1e300), /at most 9999/);
+  assert.match(quantityProblem(5e-324), /more than 3 decimals/);
+});
+
+test('an engine error while reading a quantity becomes a plain sentence', () => {
+  const real = globalThis.BigInt;
+  globalThis.BigInt = () => {
+    throw new RangeError('Out of memory: BigInt generated from this operation is too big');
+  };
+  try {
+    assert.equal(quantityProblem('30'), 'Quantity 30 is not usable: that number could not be read.');
+  } finally {
+    globalThis.BigInt = real;
+  }
 });
 
 test('multiplyDecimal, subtractDecimal and divideMoney are exact', () => {

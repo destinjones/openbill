@@ -18,6 +18,8 @@ import {
   cspFor,
   DEFAULT_PRODUCT,
   TRY_PRODUCTS,
+  TRY_FALLBACKS,
+  tryProducts,
   SIZE_LIMIT,
   OG_IMAGE,
   socialMeta,
@@ -177,9 +179,9 @@ test('the build block carries the build id, the source dates, the default card a
   const names = new Set(doc.rows.map((r) => r.name));
   assert.deepEqual(info.default, { drug: DEFAULT_PRODUCT.drug, qty: DEFAULT_PRODUCT.qty });
   assert.ok(names.has(info.default.drug));
-  assert.deepEqual(info.try, [...TRY_PRODUCTS]);
-  assert.equal(TRY_PRODUCTS.length, 4);
-  for (const n of TRY_PRODUCTS) assert.ok(names.has(n), `${n} is a product in the data`);
+  assert.deepEqual(info.try, tryProducts(names, () => {}));
+  assert.equal(info.try.length, 4);
+  for (const n of info.try) assert.ok(names.has(n), `${n} is a product in the data`);
   assert.ok(html.includes(`build ${built.buildId}`), 'the footer shows the build id');
 });
 
@@ -189,6 +191,20 @@ test('the default card is the showcase, ARIPIPRAZOLE 10 MG TABLET at 30; metform
   assert.ok(TRY_PRODUCTS.includes('METFORMIN HCL 500 MG TABLET'));
   assert.ok(!TRY_PRODUCTS.includes(DEFAULT_PRODUCT.drug), 'the Try list does not repeat the default card');
   assert.equal(new Set(TRY_PRODUCTS).size, TRY_PRODUCTS.length);
+});
+
+test('a Try name that has left the data is replaced from the fallbacks with a warning, and never invented', () => {
+  const said = [];
+  const warn = (m) => said.push(m);
+  const all = new Set([...TRY_PRODUCTS, ...TRY_FALLBACKS]);
+  assert.deepEqual(tryProducts(all, warn), [...TRY_PRODUCTS]);
+  assert.deepEqual(said, [], 'nothing to say when every name is there');
+  const lost = new Set(all);
+  lost.delete(TRY_PRODUCTS[1]);
+  assert.deepEqual(tryProducts(lost, warn), [TRY_PRODUCTS[0], TRY_FALLBACKS[0], TRY_PRODUCTS[2], TRY_PRODUCTS[3]]);
+  assert.equal(said.length, 1);
+  assert.match(said[0], /WARNING: the Try link "ELIQUIS 5 MG TABLET" is not in data\/drugs\.json; using "LISINOPRIL 10 MG TABLET" instead/);
+  assert.deepEqual(tryProducts(new Set([TRY_PRODUCTS[0]]), warn), [TRY_PRODUCTS[0]], 'fewer links rather than a name that is not in the data');
 });
 
 function metaContent(html, attr, name) {
@@ -391,4 +407,40 @@ test('the bundler refuses imports outside the entry folder and a bundle that fai
   assert.throws(() => bundle('a/entry.js', reader({ 'a/entry.js': 'undefinedName();\n' })), /the bundle fails when it runs: .*undefinedName/);
   // The real page bundle runs against an empty page without throwing.
   assert.ok(bundle().code.length > 1000);
+});
+
+// Decision 53: one lookbehind stopped the whole page from parsing in Safari below 16.4, which then
+// sat on "Loading" instead of saying it cannot unpack the data.
+test('the bundle refuses a regular expression lookbehind', () => {
+  const reader = (map) => (rel) => map[rel];
+  for (const planted of ['const r = /(?<=a)b/;\n', 'const r = /(?<!a)b/;\n', "const r = new RegExp('(?<=a)b');\n"]) {
+    assert.throws(() => bundle('a/entry.js', reader({ 'a/entry.js': planted })), /lookbehind/, planted);
+  }
+  // A named group is not one, and every engine this page can run in reads it.
+  assert.ok(bundle('a/entry.js', reader({ 'a/entry.js': 'const r = /(?<year>a)b/;\n' })).code.length > 0);
+  assert.doesNotMatch(bundle().code, /\(\?<[=!]/, 'the page has none');
+  assert.doesNotMatch(built.files['openbill.html'], /\(\?<[=!]/, 'nor has the built page');
+});
+
+// Decision 53: what the page says before, and instead of, the script drawing a card.
+test('the static card has a way out that needs no script, and the search box is not disabled', () => {
+  const html = built.files['openbill.html'];
+  const az = `${SITE_URL}drugs/a/`;
+  const static_ = withoutScriptsAndStyles(html);
+  const card = /<article id="card"[^>]*>([\s\S]*?)<\/article>/.exec(static_);
+  assert.ok(card, 'the card is in the page');
+  assert.match(card[0], /^<article id="card" class="card card-pending" aria-labelledby="card-title">/, 'aria-busy comes from the script, so it cannot stick');
+  assert.match(card[1], /<h1 id="card-title"[^>]*tabindex="-1"/, 'aria-labelledby points at a heading from the start');
+  assert.match(card[1], new RegExp(`card-loading-script">Loading[^<]*<a href="${az}">`), 'the loading line links the plain pages');
+  assert.match(card[1], new RegExp(`<noscript><p class="card-loading">[^<]*<a href="${az}">`), 'so does the no-script line');
+  assert.doesNotMatch(card[1], /data\/drugs\.json/, 'never the 38 MB file');
+  assert.doesNotMatch(card[1], /data-figure|\$\d/, 'no figure before the data is checked');
+  const q = /<input id="q"[^>]*>/.exec(static_)[0];
+  assert.doesNotMatch(q, /\bdisabled\b/);
+  assert.match(q, /placeholder="[^"]+"/);
+});
+
+test('the stamp stays on the page from the page, and goes to it from anywhere else', () => {
+  assert.match(built.files['openbill.html'], /<a class="stamp" href="#"/);
+  assert.match(built.files['methodology.html'], /<a class="stamp" href="openbill\.html"/);
 });

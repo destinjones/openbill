@@ -22,6 +22,14 @@ import { parsePeriod } from '../core/dates.js';
 import { issueUrl } from '../core/report.js';
 import { SECTIONS } from './methodology.js';
 
+/**
+ * The date a person last rewrote what the static pages say. A page's sitemap lastmod is the later of
+ * this and the last commit touching data/drugs.json (tools/site.mjs, siteDates). Bump it by hand in
+ * a commit that changes the pages' content; a commit that only tidies code leaves it, so it does not
+ * tell search engines every page changed (decision 55).
+ */
+export const PAGES_REWRITTEN = '2026-10-19';
+
 /** The CSP of every static page (docs/ARCHITECTURE.md): no script at all, styles and fonts from the site. */
 export const SITE_CSP = "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'";
 
