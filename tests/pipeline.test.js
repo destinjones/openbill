@@ -50,6 +50,7 @@ pipelineTest('NADAC: the newest year of the weekly dataset, never the other NADA
   assert.equal(o.nadac_year_title, 'NADAC (National Average Drug Acquisition Cost) 2026');
   assert.equal(o.nadac_retitled_year, 2027, 'a retitled next year is still found: "NADAC" and a year');
   assert.match(o.nadac_two_for_a_year, /more than one NADAC dataset for 2026/);
+  assert.equal(o.nadac_lookalike_titles, 'NADAC (National Average Drug Acquisition Cost) 2026', 'not "NADAC Comparison 2026" or "First Time NADAC Rates 2026"');
 });
 
 pipelineTest('build_drugs: only the newest week of the stacked CSV', () => {
@@ -85,6 +86,9 @@ pipelineTest('Part B: missing or renamed files fail loudly, within a short grace
   assert.match(o.asp_crosswalk_renamed.error, /may have renamed them.*January 2027 HCPCS-NDC Crosswalk/);
   // Another file for a newer quarter is not a rename.
   assert.deepEqual(o.asp_noc_only.quarter, [2026, 10]);
+  // Nor is an unmatched link for a quarter whose files are both already found, or for an older one.
+  assert.deepEqual(o.asp_renamed_but_complete.quarter, [2026, 10]);
+  assert.deepEqual(o.asp_renamed_older.quarter, [2026, 10]);
 });
 
 pipelineTest('Part D: the newest period; a look-alike dataset for a newer period is a failure (INFRA-05)', () => {
@@ -204,6 +208,14 @@ pipelineTest('a malformed new file leaves the last good cache and the manifest u
   assert.match(o.asp_no_rows.err, /a header but no rows/);
   assert.equal(o.asp_bad_zip.code, 4);
   assert.match(o.asp_bad_zip.err, /not a readable zip/);
+  // A zip whose directory reads but whose deflate stream does not (decision 56): a reason, not a traceback.
+  assert.equal(o.asp_broken_stream.code, 4);
+  assert.match(o.asp_broken_stream.err, /not readable as expected \(error: Error -3 while decompressing/);
+  assert.match(o.asp_broken_stream.err, /The new file was not kept/);
+  assert.doesNotMatch(o.asp_broken_stream.err, /Traceback/);
+  assert.equal(o.asp_broken_stream_cached.code, 4);
+  assert.match(o.asp_broken_stream_cached.err, /FAILED: Error -3 while decompressing/);
+  assert.doesNotMatch(o.asp_broken_stream_cached.err, /Traceback/);
 });
 
 pipelineTest('fetch_nadac: an old as-of date is a failure online, not offline (INFRA-05)', () => {
@@ -239,6 +251,18 @@ pipelineTest('--require-online: a fallback to the cache says NOT REFRESHED, and 
   assert.equal(o.offline_flag, 0);
   assert.equal(o.offline_and_required_refused, 2, 'argparse refuses both');
   assert.equal(o.no_cache_no_network, 2);
+  // Every fetcher, not only NADAC's: the fallback passes plainly and fails when required.
+  for (const name of ['asp_required', 'partd_required', 'fda_required']) {
+    assert.equal(o[name].online, 0, `${name} online`);
+    assert.equal(o[name].plain, 0, `${name} plain`);
+    assert.equal(o[name].code, 5, `${name} required`);
+    assert.match(o[name].err, NO_NETWORK, name);
+  }
+  // A cached NADAC week past the age limit, kept because the network failed, is NOT REFRESHED, not FAILED.
+  assert.equal(o.nadac_old_fallback.code, 0);
+  assert.match(o.nadac_old_fallback.err, NO_NETWORK);
+  assert.doesNotMatch(o.nadac_old_fallback.err, /FAILED/);
+  assert.equal(o.nadac_old_fallback_required.code, 5);
 });
 
 pipelineTest('fetch_all: the summary names what was not refreshed; only --require-online or a real failure is non-zero', () => {
@@ -308,6 +332,42 @@ pipelineTest('check_refresh: the row, reject, mover and median limits, each at i
   assert.match(o.refresh_nothing_shared.problems.join(' '), /no NDC is in both files/);
 });
 
+pipelineTest('check_refresh: the shared, week, count and shift limits, each at its boundary (decision 56)', () => {
+  const ok = (name) => assert.equal(o[name].code, 0, `${name} should pass:\n${o[name].out}`);
+  const bad = (name, re) => {
+    assert.equal(o[name].code, 1, `${name} should fail:\n${o[name].out}`);
+    assert.match(o[name].out, re, name);
+  };
+  // Same row count, other NDCs: the row limit alone let 990 of 1,000 be replaced.
+  ok('refresh_shared_900');
+  bad('refresh_shared_899', /only 899 of the previous 1,000 NDCs are in the new file, below 90%/);
+  bad('refresh_990_replaced', /only 10 of the previous 1,000 NDCs/);
+  bad('refresh_older_week', /NADAC is as of 2026-10-28, older than the previous file's 2026-11-04/);
+  bad('refresh_no_week', /names no NADAC as-of date/);
+  bad('refresh_empty_week', /names no NADAC as-of date/);
+  bad('refresh_no_counts', /no count of rejected rows/);
+  assert.match(o.refresh_no_counts.out, /rejected not counted\./);
+  // Under 21 NDCs at 5×, over 5% of them at 1.5×: a shifted part of the file.
+  ok('refresh_shift_50');
+  bad('refresh_shift_51', /51 of 1,000 shared NDCs \(5\.1%\) moved 1\.5× or more, over 5%/);
+  bad('refresh_shift_51_down', /51 of 1,000 shared NDCs/);
+  ok('refresh_shift_51_under');
+  ok('refresh_shift_51_accepted');
+  bad('refresh_499_at_4x', /499 of 1,000 shared NDCs/);
+  assert.doesNotMatch(o.refresh_499_at_4x.out, /NDCs moved 5×/, 'under the 5× limit');
+});
+
+pipelineTest('check_refresh: a NADAC value that is not a positive number is a reason, never a traceback', () => {
+  for (const label of ['zero', 'negative', 'null', 'text', 'nan', 'infinite', 'true', 'missing']) {
+    const r = o[`refresh_value_${label}`];
+    assert.equal(r.code, 1, `${label}:\n${r.out}`);
+    assert.match(r.out, /1 row of the new file has no NADAC value that is a positive number, the first 00000000000; it is left out of the comparison/, label);
+    assert.doesNotMatch(r.out, /Traceback/, label);
+  }
+  assert.match(o.refresh_value_old_summary, /^## Data refresh check\n\n\*\*FAILED:\*\*\n- 1 row of the previous file has no NADAC value/);
+  assert.match(o.refresh_value_old_summary, /NADAC as of 2026-11-04 → 2026-11-04; 999 NDCs in both\./);
+});
+
 pipelineTest('check_refresh: the summary is ready for a pull request body, biggest moves first', () => {
   assert.match(o.refresh_summary_file, /^## Data refresh check\n\n\*\*FAILED:\*\*\n- 21 NDCs moved/);
   assert.match(o.refresh_summary_file, /\| 00000000000 \| DRUG 0 \| 1\.0 \| 100\.0 \| 100\.000 \|/);
@@ -342,6 +402,22 @@ pipelineTest('reverify_spotchecks: agreement rewrites the value, file, method an
   assert.equal(o.reverify_current_untouched.asked.length, 0);
   assert.equal(o.reverify_all.checks.n1.verified_on, '2026-11-06', '--all re-reads it');
   assert.equal(o.reverify_all.checks['pd-current'].verified_on, '2026-11-06');
+  // The newest result is the one compared and the one named, wherever it is in the answer.
+  const newest = o.reverify_newest_second;
+  assert.equal(newest.code, 0, newest.err);
+  assert.equal(newest.checks.n1.value, 5.52144);
+  assert.match(newest.checks.n1.verified_via, /-> results\[1\]: .*nadac_per_unit "5\.52144", .*effective_date "2026-10-21"/);
+  assert.equal(o.reverify_same_decimal.code, 0, '"5.521440" is the same number as 5.52144');
+  // Part D's second page, asked at the page size; a Part B entry pinned to the current file is not listed.
+  const pages = o.reverify_partd_two_pages;
+  assert.equal(pages.code, 0, pages.err);
+  assert.match(pages.checks.pd.verified_via, /size=3&offset=3/);
+  assert.ok(pages.asked.includes('https://data.cms.gov/data-api/v1/dataset/da5ff50b-e5da-42de-b68b-6cfac1f64f35/data?size=3&offset=0'));
+  assert.equal(o.reverify_current_part_b.code, 0);
+  assert.doesNotMatch(o.reverify_current_part_b.out, /limit-current/);
+  // A dry run says it agreed, not that it rewrote.
+  assert.match(o.reverify_dry_run.out, /^Agreed with the API: 4$/m);
+  assert.match(o.reverify_ok.out, /^Agreed with the API and rewritten: 4$/m);
 });
 
 pipelineTest('reverify_spotchecks: a disagreement or an unreadable API writes nothing and fails', () => {
@@ -358,6 +434,15 @@ pipelineTest('reverify_spotchecks: a disagreement or an unreadable API writes no
   assert.equal(o.reverify_partd_busy_once.code, 0, 'a busy answer is asked again');
   assert.equal(o.reverify_partd_busy_once.written, true);
   assert.match(o.reverify_partd_busy_once.err, /HTTP 503 .*asking again/);
+  assert.equal(o.reverify_nadac_busy_once.code, 0, 'and so is NADAC’s');
+  assert.equal(o.reverify_nadac_busy_once.written, true);
+  assert.match(o.reverify_nadac_busy_once.err, /HTTP 503 .*data\.medicaid\.gov.*asking again/);
+  assert.equal(o.reverify_nadac_404.code, 2, 'a 404 is not asked again');
+  assert.equal(o.reverify_nadac_404.nadac_asks, 1);
+  // An entry whose NDC is not in data/drugs.json disagrees; it is never taken as agreeing.
+  assert.equal(o.reverify_not_in_data.code, 1);
+  assert.equal(o.reverify_not_in_data.written, false);
+  assert.match(o.reverify_not_in_data.err, /DISAGREES elsewhere: the API says '5\.52144', data\/drugs\.json has None/);
   for (const name of ['reverify_api_down', 'reverify_api_refuses', 'reverify_api_shape', 'reverify_partd_busy_always']) {
     assert.equal(o[name].code, 2, name);
     assert.equal(o[name].written, false, name);

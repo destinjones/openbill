@@ -43,6 +43,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+import zlib
 from pathlib import Path
 
 CACHE = Path(__file__).resolve().parent / "cache"
@@ -102,8 +103,9 @@ EXIT_NOT_REFRESHED = 5
 FELL_BACK: set[str] = set()
 
 # What a resolver or a validator raises when a response or file is not the shape it expected.
-# (json.JSONDecodeError and UnicodeDecodeError are ValueErrors; network errors are OSErrors.)
-SHAPE_ERRORS = (KeyError, AttributeError, TypeError, IndexError, ValueError, csv.Error, zipfile.BadZipFile)
+# (json.JSONDecodeError and UnicodeDecodeError are ValueErrors; network errors are OSErrors.) A zip
+# member whose compressed stream is broken raises zlib.error, or EOFError when it ends too soon.
+SHAPE_ERRORS = (KeyError, AttributeError, TypeError, IndexError, ValueError, csv.Error, zipfile.BadZipFile, zlib.error, EOFError)
 
 _last_url: str | None = None
 

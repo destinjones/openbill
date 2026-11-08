@@ -85,6 +85,34 @@ test('a bare name: a drug when it holds whitespace or is a product, in any case'
   assert.equal(parseHash('#%20%20', { isName }).kind, 'anchor', 'only whitespace names nothing');
 });
 
+// BEH-12: #NAME alone opened its card, and #NAME&qty=45 said "That link does not name a drug".
+test('a bare name followed by OpenBill’s keys is the same card at that quantity', () => {
+  assert.deepEqual(parseHash('#ELIQUIS%205%20MG%20TABLET&qty=45', { isName }), { kind: 'card', bare: true, drug: 'ELIQUIS 5 MG TABLET', qty: '45', paid: null, ndc: null });
+  assert.deepEqual(parseHash('#eliquis+5+mg+tablet&qty=45&paid=12.50', { isName }), { kind: 'card', bare: true, drug: 'eliquis 5 mg tablet', qty: '45', paid: '12.50', ndc: null });
+  assert.equal(parseHash('#LANSOPRAZOL-AMOXICIL-CLARITHRO&qty=2', { isName }).drug, 'LANSOPRAZOL-AMOXICIL-CLARITHRO');
+  // A name the file does not have still goes on to the search box, as #metformin%20er does.
+  assert.equal(parseHash('#metformin%20er&qty=30', { isName }).drug, 'metformin er');
+  // A word that is no product, a part with a value of its own, or a name after a key: still no drug.
+  for (const h of ['#card&qty=30', '#utm_source=x&qty=30', '#qty=30&ELIQUIS%205%20MG%20TABLET', '#%20&qty=30']) {
+    assert.equal(parseHash(h, { isName }).kind, 'bad', h);
+  }
+  // drug= still wins, and a name after it is someone else's.
+  assert.deepEqual(parseHash('#drug=X&ELIQUIS%205%20MG%20TABLET&qty=1', { isName }), { kind: 'card', bare: false, drug: 'X', qty: '1', paid: null, ndc: null });
+});
+
+test('control characters are no part of a name, and a name of nothing else is no name', () => {
+  for (const h of ['#drug=%00%00', '#drug=%00%7F%C2%9F', '#drug=%01%20%1F']) {
+    const r = parseHash(h, { isName });
+    assert.equal(r.kind, 'bad', h);
+    assert.match(r.problem, /names no drug/, h);
+  }
+  assert.equal(parseHash('#drug=%00ELIQUIS%205%20MG%20TABLET%7F').drug, 'ELIQUIS 5 MG TABLET');
+  assert.equal(parseHash('#%00ELIQUIS%205%20MG%20TABLET', { isName }).drug, 'ELIQUIS 5 MG TABLET');
+  assert.equal(parseHash('#%00%00', { isName }).kind, 'anchor');
+  // Whitespace is folded by nameKey(), not dropped: a tab still separates two words.
+  assert.equal(parseHash('#drug=ELIQUIS%095%20MG%20TABLET').drug, 'ELIQUIS\t5 MG TABLET');
+});
+
 test('a name’s # and % survive when they are escaped, and a bad escape does not throw', () => {
   assert.equal(parseHash(hashFor('ACETAMINOPHEN-COD #2 TABLET')).drug, 'ACETAMINOPHEN-COD #2 TABLET');
   assert.equal(parseHash(hashFor('ACETIC ACID 2% EAR SOLUTION')).drug, 'ACETIC ACID 2% EAR SOLUTION');

@@ -134,14 +134,19 @@ function timeSearches(idx, queries) {
   // its first calls, slowed further by the other test files node --test runs in parallel (a
   // cold median of 13 ms under load, about 2.5 ms warm), rather than how fast search is.
   for (const q of queries) search(idx, q);
-  const times = [];
-  for (const q of queries) {
-    const t0 = performance.now();
-    search(idx, q);
-    times.push(performance.now() - t0);
-  }
-  times.sort((a, b) => a - b);
-  return { median: times[Math.floor(times.length / 2)], max: times[times.length - 1] };
+  // Three rounds. The median is of the first; the slowest is each query's best of three, so one
+  // pause on a shared machine is not counted, and a query that is slow every time is (decision 55).
+  const rounds = [0, 1, 2].map(() =>
+    queries.map((q) => {
+      const t0 = performance.now();
+      search(idx, q);
+      return performance.now() - t0;
+    }),
+  );
+  const first = [...rounds[0]].sort((a, b) => a - b);
+  const best = queries.map((_, i) => Math.min(...rounds.map((r) => r[i])));
+  const slowest = Math.max(...best);
+  return { median: first[Math.floor(first.length / 2)], max: slowest, slowestQuery: queries[best.indexOf(slowest)] };
 }
 
 const QUERIES = ['a', 'al', 'alpha', 'alphabeta', 'betagamma hcl', 'hydrochloride 50', '25 mg tab', 'xyz', 'brand12', 'generic', 'omega 100 mg er', 'lambda', 'cream', 'zzzzzz', '00000012345', 'ine hcl', 'mg', 'tablet'];
@@ -153,11 +158,10 @@ test('search is fast on ~6,000 products / 30,000 rows', (t) => {
   const build = performance.now() - t0;
   assert.equal(idx.products.length, 6000);
   search(idx, 'warm up');
-  const { median, max } = timeSearches(idx, QUERIES);
-  // Wall-clock on a shared machine: the median is asserted, the slowest run only reported
-  // (one slow run under load failed this with nothing wrong: decision 55).
+  const { median, max, slowestQuery } = timeSearches(idx, QUERIES);
   assert.ok(median < 10, `median search ${median.toFixed(2)} ms`);
-  t.diagnostic(`slowest search ${max.toFixed(2)} ms, median ${median.toFixed(2)} ms`);
+  assert.ok(max < 50, `slowest query "${slowestQuery}", best of three: ${max.toFixed(2)} ms`);
+  t.diagnostic(`slowest query's best of three ${max.toFixed(2)} ms, median ${median.toFixed(2)} ms`);
   assert.ok(build < 2000, `index build ${build.toFixed(0)} ms`);
   assert.equal(search(idx, '00000012345')[0].product.ndcs.includes('00000012345'), true);
 });
@@ -346,6 +350,61 @@ test('a word started somewhere other than the name’s start is labelled partial
   assert.equal(match('besylate'), 'tokens');
 });
 
+// R09: rules of search.js that no test reached. Each case is built so that the rule, and only it,
+// decides the answer.
+test('isPartial: a loose word before the last is partial; a strength still being typed is not', () => {
+  const idx = buildIndex(groupProducts([row('AMLO BESYLATE 5 MG TAB', 1), row('SERTRALINE HCL 50 MG TABLET', 2)]));
+  // "besyl" only starts a word other than the name's first, and is not the word being typed.
+  assert.equal(search(idx, 'besyl 5')[0].match, 'partial');
+  // The doc comment's own example: someone still typing "sertraline 5", which Enter opens.
+  const typing = search(idx, 'sertraline 5');
+  assert.equal(typing[0].match, 'tokens');
+  assert.equal(enterChoice(typing).product.name, 'SERTRALINE HCL 50 MG TABLET');
+});
+
+test('within a tier a whole-word match comes first, and among other names the closer match', () => {
+  // SERT 5 is listed by fewer NDCs, so only "every word whole" puts it before SERT 50 for "sert 5".
+  assert.deepEqual(named([...listed('SERT 50 MG TABLET', 40, 100), ...listed('SERT 5 MG TABLET', 2, 200)], 'sert 5'), ['SERT 5 MG TABLET', 'SERT 50 MG TABLET']);
+  // Found only through FDA's names: "zeta" exactly beats a name that starts with it, whatever the rank.
+  const rows = [...listed('AAA 5 MG TABLET', 10, 100).map((r) => ({ ...r, identity: { nonproprietary_name: 'zeta drug' } })), row('BBB 5 MG TABLET', 200, { identity: { nonproprietary_name: 'zeta' } })];
+  assert.deepEqual(named(rows, 'zeta'), ['BBB 5 MG TABLET', 'AAA 5 MG TABLET']);
+});
+
+test('a family is one family however NADAC shortens its form, and fewer strength numbers come first', () => {
+  // TB is TABLET in a family's key: ABC 25 MG TB is a rare strength of the ABC tablets, after them.
+  const rows = [...listed('ABC 25 MG TB', 2, 100), ...listed('ABC 50 MG TABLET', 40, 200), ...listed('ABD 10 MG TABLET', 20, 300)];
+  assert.deepEqual(named(rows, 'mg'), ['ABC 50 MG TABLET', 'ABC 25 MG TB', 'ABD 10 MG TABLET']);
+  // [10] before [10, 5], although "X 10 5" sorts before "X 10 M" by name.
+  assert.deepEqual(named([...listed('X 10 5 MG TABLET', 5, 100), ...listed('X 10 MG TABLET', 5, 200)], 'x'), ['X 10 MG TABLET', 'X 10 5 MG TABLET']);
+});
+
+test('a query that names a release form keeps release forms level; an injectable by FDA’s route alone is held back', () => {
+  // Both found only through FDA's name "drug er"; ZZZ ER is listed more, so it leads when the
+  // query's own ER is honoured. Were it ignored, the plain YYY would be preferred.
+  const fda = { identity: { nonproprietary_name: 'drug er' } };
+  const rows = [...listed('ZZZ ER 5 MG TABLET', 10, 100).map((r) => ({ ...r, ...fda })), ...listed('YYY 5 MG TABLET', 5, 200).map((r) => ({ ...r, ...fda }))];
+  assert.deepEqual(named(rows, 'drug er'), ['ZZZ ER 5 MG TABLET', 'YYY 5 MG TABLET']);
+  // No vial or INJ in the name, only FDA's route: still behind the tablet and the release tablet.
+  const im = { identity: { route: 'INTRAMUSCULAR', dosage_form: 'SOLUTION' } };
+  const forms = [...listed('DRUGX 40 MG/ML', 10, 100).map((r) => ({ ...r, ...im })), ...listed('DRUGX 10 MG TABLET', 10, 200), ...listed('DRUGX ER 20 MG TABLET', 10, 300)];
+  assert.deepEqual(named(forms, 'drugx'), ['DRUGX 10 MG TABLET', 'DRUGX ER 20 MG TABLET', 'DRUGX 40 MG/ML']);
+});
+
+test('a synonym starts a name only as a whole word, and the word being typed counts as typed', () => {
+  // SYRINGE is SYR, which ENOX SYRUP starts with only as letters.
+  assert.deepEqual(named([row('ENOX SYRUP 5 MG/5 ML', 1)], 'enox syringe'), []);
+  // "cap" is still being typed: CAPLET starts with it, though its synonym CAPSULE does not.
+  assert.equal(search(buildIndex(groupProducts([row('DRUG HYDROCHLORIDE 5 MG CAPLET', 1)])), 'drug hcl 5 mg cap')[0].match, 'prefix');
+});
+
+test('a package NDC that is not in the file is never read as a name, and suggest() leaves an NDC alone', () => {
+  const idx = buildIndex(groupProducts([row('ZZ 12345 6789 01 TABLET', 1), row('ADC 12345 6789 01 TABLET', 2)]));
+  assert.ok(search(idx, 'zz 12345 6789 01').length, 'the name itself is found');
+  assert.deepEqual(search(idx, '12345-6789-01'), []);
+  // NDC is one edit from ADC, and "ADC 12345 6789 01" finds something: an NDC is still not corrected.
+  assert.deepEqual(suggest(idx, 'NDC 12345-6789-01'), []);
+});
+
 test('enterChoice opens only one result or an exact name', () => {
   const rows = [row('ABC 5 MG TABLET', 1), row('ABC 10 MG TABLET', 2), row('XYZ 1 MG TABLET', 3), row('MULTI 1 MG TABLET', 4, { identity: { nonproprietary_name: 'Vitamin A, Iron Sulfate, Zinc' } }), row('ULT 1 MG TABLET', 5, { identity: { nonproprietary_name: 'Ultramicrosize ult' } })];
   const idx = buildIndex(groupProducts(rows));
@@ -446,6 +505,11 @@ function realIndex(t) {
   return real;
 }
 
+// A product or a package can leave NADAC in any week, and a refresh must not need a test edit
+// (decision 55). A check about one named thing says so and steps aside; the others still run.
+const hasName = (idx, name) => idx.products.some((p) => p.name === name);
+const hasNdc = (idx, ndc) => idx.products.some((p) => p.rows.some((r) => r.ndc === ndc));
+
 test('real data: the first result of a plain name is the plain tablet', (t) => {
   const idx = realIndex(t);
   if (!idx) return;
@@ -467,11 +531,20 @@ test('real data: the first result of a plain name is the plain tablet', (t) => {
     ['oxycodone', /^OXYCODONE HCL /],
     ['estradiol', /^ESTRADIOL [\d.]+ MG TABLET$/],
   ]) {
+    if (!idx.products.some((p) => want.test(p.name))) {
+      t.diagnostic(`${q}: no product named ${want} in this data`);
+      continue;
+    }
     assert.match(first(q), want, q);
   }
   // The rows those lists held at the top before, still found, further down.
-  assert.ok(names(search(idx, 'naltrexone')).includes('VIVITROL 380 MG VIAL-DILUENT'));
-  assert.ok(names(search(idx, 'metformin')).includes('METFORMIN ER 1,000 MG OSM-TAB'));
+  for (const [q, name] of [
+    ['naltrexone', 'VIVITROL 380 MG VIAL-DILUENT'],
+    ['metformin', 'METFORMIN ER 1,000 MG OSM-TAB'],
+  ]) {
+    if (hasName(idx, name)) assert.ok(names(search(idx, q)).includes(name), q);
+    else t.diagnostic(`${name}: not in this data`);
+  }
 });
 
 test('real data: strengths in natural order', (t) => {
@@ -479,8 +552,10 @@ test('real data: strengths in natural order', (t) => {
   if (!idx) return;
   const strengths = (q, re) => names(search(idx, q, { limit: 100 })).map((n) => re.exec(n)).filter(Boolean).map((m) => Number(m[1].replace(',', '')));
   const ascending = (list) => list.every((v, i) => i === 0 || list[i - 1] < v);
-  assert.deepEqual(strengths('sertraline', /^SERTRALINE HCL ([\d,]+) MG TABLET$/), [25, 50, 100]);
-  assert.deepEqual(strengths('metformin', /^METFORMIN HCL (500|850|1,000) MG TABLET$/), [500, 850, 1000]);
+  // Every strength still listed, in this order: an ascending check alone would miss one dropped.
+  const listed = (make, list) => list.filter((n) => hasName(idx, make(n)));
+  assert.deepEqual(strengths('sertraline', /^SERTRALINE HCL ([\d,]+) MG TABLET$/), listed((n) => `SERTRALINE HCL ${n} MG TABLET`, [25, 50, 100]));
+  assert.deepEqual(strengths('metformin', /^METFORMIN HCL (500|850|1,000) MG TABLET$/), listed((n) => `METFORMIN HCL ${n.toLocaleString('en-US')} MG TABLET`, [500, 850, 1000]));
   assert.ok(ascending(strengths('atorvastatin', /^ATORVASTATIN ([\d,]+) MG TABLET$/)));
 });
 
@@ -537,17 +612,25 @@ test('real data: the audit’s NDC forms', (t) => {
   const idx = realIndex(t);
   if (!idx) return;
   // J15: not in NADAC; its sibling is, and the result says it is a different package.
-  const other = search(idx, '16714-611-02');
-  assert.equal(other[0].match, 'ndc-package');
-  assert.equal(other[0].product.name, 'SERTRALINE HCL 25 MG TABLET');
-  assert.equal(other[0].entered, '16714061102');
-  assert.notEqual(other[0].matched, other[0].entered);
-  assert.equal(enterChoice(other), null);
+  if (!hasNdc(idx, '16714061102') && hasNdc(idx, '16714061101')) {
+    const other = search(idx, '16714-611-02');
+    assert.equal(other[0].match, 'ndc-package');
+    assert.equal(other[0].product.name, 'SERTRALINE HCL 25 MG TABLET');
+    assert.equal(other[0].entered, '16714061102');
+    assert.notEqual(other[0].matched, other[0].entered);
+    assert.equal(enterChoice(other), null);
+  } else t.diagnostic('J15: 16714-611-02 is in this data, or its sibling is not');
   // OB-08's first example: FDA's digits, read FDA's way first, with no opening on Enter.
-  const bare = search(idx, '8330100101');
-  assert.ok(bare.length > 1);
-  assert.match(bare[0].product.name, /^METFORMIN/);
-  assert.equal(enterChoice(bare), null);
+  if (hasNdc(idx, '83301001001')) {
+    const bare = search(idx, '8330100101');
+    assert.ok(bare.length > 1);
+    assert.match(bare[0].product.name, /^METFORMIN/);
+    assert.equal(enterChoice(bare), null);
+  } else t.diagnostic('OB-08: 83301-0010-1 is not in this data');
+  if (!hasNdc(idx, '00378718505')) {
+    t.diagnostic('OB-12: 00378-7185-05 is not in this data');
+    return;
+  }
   // OB-12: other ways to write 00378-7185-05, whichever package data the file holds for them.
   const want = search(idx, '00378-7185-05');
   assert.equal(want[0].match, 'ndc');

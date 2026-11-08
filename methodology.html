@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; script-src &#39;none&#39;; style-src &#39;sha256-H7PXZJCSDqHBY79Zd97lrv6Fnhivo3ZZFqoXUiETIVk=&#39;; font-src data:; img-src data:; base-uri &#39;none&#39;; form-action &#39;none&#39;">
+<meta http-equiv="Content-Security-Policy" content="default-src &#39;none&#39;; script-src &#39;none&#39;; style-src &#39;sha256-PufMOGUCwn7J8HrUb3j/eZ/cxVjugf/1eGqO0KmWXDU=&#39;; font-src data:; img-src data:; base-uri &#39;none&#39;; form-action &#39;none&#39;">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
@@ -415,10 +415,13 @@ button.your-ndc-more {
   color: var(--ink-2);
 }
 
-.card-loading a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
+/* A link in a sentence stays inline, so the sentence keeps even lines: as `.card a` makes it, a
+   44 px box, it pushed its own line apart. Padding gives it the same 44 px target without growing
+   the line it is on. */
+.card .card-loading a,
+.card .card-message a {
+  display: inline;
+  padding-block: calc((44px - 1em) / 2);
 }
 
 /* The data did not load: the same controls would look live and do nothing. */
@@ -1876,7 +1879,7 @@ node --test</code></pre>
 <li><a href="data/drugs.json">data/drugs.json</a></li>
 <li><a href="https://destinjones.github.io/openbill/drugs/a/">Browse every drug A–Z</a> <span class="mono">(on the website)</span></li>
 </ul>
-<p class="mono build-line">build 7e244c60eed4</p>
+<p class="mono build-line">build 094b55d1c4bc</p>
 </footer>
 </body>
 </html>

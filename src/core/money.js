@@ -245,6 +245,12 @@ function parseQuantity(qty) {
 const QTY_OWN_WORDS = /^(quantity |not a )/;
 
 /**
+ * Stands for what is in a quantity box when it cannot be read: a number box holding "1e" reports its
+ * value as "", the same as an empty one, and never says what the text is.
+ */
+export const QTY_UNREADABLE = 'unreadable';
+
+/**
  * Check a quantity the way multiplyMoney does. Returns null when it is usable, else a
  * plain sentence saying why not (for the page to show), which repeats at most
  * REFLECT_MAX_CHARS of the value.
@@ -252,6 +258,7 @@ const QTY_OWN_WORDS = /^(quantity |not a )/;
  * @returns {string|null}
  */
 export function quantityProblem(qty) {
+  if (qty === QTY_UNREADABLE) return 'The quantity in the box is not a number, so it was not used.';
   try {
     parseQuantity(qty);
     return null;

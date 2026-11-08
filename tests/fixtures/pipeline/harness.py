@@ -206,6 +206,10 @@ out["nadac_retitled_year"] = fetch_nadac.find_current_dataset()["year"]
 new_cache("nadac_two")
 nadac_routes([{"title": "NADAC 2026", "identifier": "other"}])
 out["nadac_two_for_a_year"] = refused(fetch_nadac.find_current_dataset)
+# The other NADAC datasets with a year in their titles are still not the weekly one (R10).
+new_cache("nadac_lookalikes")
+nadac_routes([{"title": "NADAC Comparison 2026", "identifier": "cmp2026"}, {"title": "First Time NADAC Rates 2026", "identifier": "first2026"}])
+out["nadac_lookalike_titles"] = refused(fetch_nadac.find_current_dataset) or fetch_nadac.find_current_dataset()["title"]
 new_cache("nadac_maintenance")
 routes[NADAC_SEARCH] = json.dumps({"error": "maintenance"}).encode()
 r = run(fetch_nadac.main, [])
@@ -322,6 +326,35 @@ d = new_cache("require_online_empty")
 routes[NADAC_SEARCH] = DOWN
 out["no_cache_no_network"] = run(fetch_nadac.main, ["--require-online"])["code"]
 
+# A cached week older than MAX_AS_OF_AGE_DAYS, kept because the network failed, is NOT REFRESHED, not
+# a dataset this script failed to find (R10).
+d = new_cache("nadac_old_fallback")
+nadac_routes()
+run(fetch_nadac.main, [])
+set_today("2026-10-30")
+routes[NADAC_SEARCH] = DOWN
+cachelib.FELL_BACK.clear()
+r = run(fetch_nadac.main, [])
+out["nadac_old_fallback"] = {"code": r["code"], "err": r["err"]}
+cachelib.FELL_BACK.clear()
+r = run(fetch_nadac.main, ["--require-online"])
+out["nadac_old_fallback_required"] = {"code": r["code"], "err": r["err"]}
+cachelib.FELL_BACK.clear()
+set_today("2026-10-16")
+
+
+def required_fallback(main, down):
+    """A fetcher run once online, then with these URLs unreachable: plain, and with --require-online (R06)."""
+    online = run(main, [])
+    for url in down:
+        routes[url] = DOWN
+    cachelib.FELL_BACK.clear()
+    plain = run(main, [])
+    cachelib.FELL_BACK.clear()
+    required = run(main, ["--require-online"])
+    cachelib.FELL_BACK.clear()
+    return {"online": online["code"], "plain": plain["code"], "code": required["code"], "err": required["err"]}
+
 real_call = fetch_all.subprocess.call
 seen_flags = []
 
@@ -384,6 +417,10 @@ out["asp_nothing_new_past_grace"] = quarter(PAGE, "2027-01-11")
 out["asp_limits_renamed"] = quarter(JAN_LIMITS_RENAMED + JAN_XWALK + PAGE, "2026-12-20")
 out["asp_crosswalk_renamed"] = quarter(JAN_LIMITS + JAN_XWALK_RENAMED + PAGE, "2026-12-20")
 out["asp_noc_only"] = quarter(JAN_NOC + PAGE, "2026-12-20")
+# A link that matches neither pattern is a rename only for a newer quarter that is not complete (R10).
+out["asp_renamed_but_complete"] = quarter(JAN_LIMITS + JAN_XWALK + JAN_LIMITS_RENAMED + PAGE, "2026-12-20")
+JAN25_RENAMED = '<a href="/files/zip/january-2025-part-b-payment-limits.zip">January 2025 Part B Payment Limits</a> 12/18/2024'
+out["asp_renamed_older"] = quarter(JAN25_RENAMED + PAGE, "2026-11-06")
 out["asp_no_quarter"] = quarter("<html></html>", "2026-12-20")
 out["asp_all_future"] = quarter(JAN_LIMITS + JAN_XWALK, "2026-12-20")
 
@@ -436,6 +473,34 @@ routes[LIMITS_URL] = (b"this is not a zip file", {"ETag": '"z"'})
 routes[XWALK_URL] = (XWALK_ZIP, {"ETag": '"x"'})
 r = run(fetch_asp.main, [])
 out["asp_bad_zip"] = {"code": r["code"], "err": r["err"]}
+
+
+def broken_stream(z):
+    """The zip with the start of its first member's compressed data overwritten: its directory reads,
+    its deflate stream does not (zlib.error, R13)."""
+    at = 30 + int.from_bytes(z[26:28], "little") + int.from_bytes(z[28:30], "little")
+    return z[:at] + b"\xff" * 8 + z[at + 8:]
+
+
+d = new_cache("asp_broken_stream")
+routes[fetch_asp.PAGE] = PAGE.encode()
+routes[LIMITS_URL] = (broken_stream(LIMITS_ZIP), {"ETag": '"s"'})
+routes[XWALK_URL] = (XWALK_ZIP, {"ETag": '"x"'})
+r = run(fetch_asp.main, [])
+out["asp_broken_stream"] = {"code": r["code"], "err": r["err"]}
+routes[LIMITS_URL] = (LIMITS_ZIP, {"ETag": '"l"'})
+run(fetch_asp.main, [])
+m = cachelib.load_manifest()["asp_limits"]
+(d / m["file"]).write_bytes(broken_stream(LIMITS_ZIP))
+cachelib.update_entry("asp_limits", sha256=hashlib.sha256(broken_stream(LIMITS_ZIP)).hexdigest(), bytes=len(LIMITS_ZIP))
+r = run(fetch_asp.main, ["--offline"])
+out["asp_broken_stream_cached"] = {"code": r["code"], "err": r["err"]}
+
+new_cache("asp_required")
+routes[fetch_asp.PAGE] = PAGE.encode()
+routes[LIMITS_URL] = (LIMITS_ZIP, {"ETag": '"l"'})
+routes[XWALK_URL] = (XWALK_ZIP, {"ETag": '"x"'})
+out["asp_required"] = required_fallback(fetch_asp.main, [fetch_asp.PAGE])
 
 # ---------------------------------------------------------------- Part D
 
@@ -542,6 +607,11 @@ routes[PARTD_CSV_2024] = (b"Brnd_Name,Gnrc_Name\nA,B\n", {"ETag": '"bad"'})
 r = run(fetch_partd.main, [])
 out["partd_bad_new_file"] = {"code": r["code"], "err": r["err"], "kept": not (d / "DSD_PTD_RY26_P04_V10_DY24_BGM.csv").exists()}
 
+new_cache("partd_required")
+catalog(PARTD)
+routes[PARTD_CSV_2024] = (text("partd.csv").encode(), {"ETag": '"p"'})
+out["partd_required"] = required_fallback(fetch_partd.main, [fetch_partd.CATALOG])
+
 # ---------------------------------------------------------------- FDA
 
 FDA_URL = fetch_fda_ndc.SOURCES["fda_ndc"]["download_url"]
@@ -560,6 +630,11 @@ out["fda_bad_new_file"] = {"code": r["code"], "err": r["err"], "old_file_kept": 
 new_cache("fda_landing")
 routes[fetch_fda_ndc.LANDING] = b"<p>The NDC Directory has moved.</p>"
 out["fda_landing_moved"] = refused(fetch_fda_ndc.resolver("fda_ndc"))
+
+new_cache("fda_required")
+routes[fetch_fda_ndc.LANDING] = f'<a href="{FDA_URL}">NDC database file</a>'.encode()
+routes[FDA_URL] = (FDA_ZIP, {"ETag": '"f"', "Last-Modified": "Fri, 16 Oct 2026 08:15:39 GMT"})
+out["fda_required"] = required_fallback(fetch_fda_ndc.main, [fetch_fda_ndc.LANDING])
 
 # ---------------------------------------------------------------- build_drugs
 
@@ -655,12 +730,20 @@ out["build_hash_mismatch"] = {"code": r["code"], "err": r["err"], "wrote": build
 # ---------------------------------------------------------------- check_refresh
 
 
-def tiny_doc(values, rejected=0):
+def tiny_doc(values, rejected=0, as_of="2026-11-04", first=0):
     return {
-        "sources": {"nadac": {"source_file": "n.csv", "as_of_date": "2026-11-04"}},
+        "sources": {"nadac": {"source_file": "n.csv", "as_of_date": as_of}},
         "counts": {"rejected": rejected},
-        "rows": [{"ndc": f"{i:011d}", "name": f"DRUG {i}", "nadac": {"value": v}} for i, v in enumerate(values)],
+        "rows": [{"ndc": f"{first + i:011d}", "name": f"DRUG {first + i}", "nadac": {"value": v}} for i, v in enumerate(values)],
     }
+
+
+def refresh_docs(old_doc, new_doc, extra=()):
+    old_path, new_path = WORK / "old.json", WORK / "new.json"
+    old_path.write_text(json.dumps(old_doc), encoding="utf-8")
+    new_path.write_text(json.dumps(new_doc), encoding="utf-8")
+    r = run(check_refresh.main, ["--new", str(new_path), "--previous", str(old_path), *extra])
+    return {"code": r["code"], "out": r["out"]}
 
 
 def refresh_check(old_values, new_values, rejected=0, extra=()):
@@ -695,6 +778,32 @@ refresh_check(BASE, times(21, 100), extra=["--summary", str(summary_path)])
 out["refresh_summary_file"] = summary_path.read_text(encoding="utf-8")
 out["refresh_movers_top"] = check_refresh.compare(tiny_doc([1.0, 1.0, 1.0]), tiny_doc([1.0, 3.0, 0.1]))["top"][0]["ndc"]
 
+# R05: what the four checks above let through.
+replaced = lambda n: {**tiny_doc(BASE[: 1000 - n]), "rows": tiny_doc(BASE[: 1000 - n])["rows"] + tiny_doc([1.0] * n, first=5000)["rows"]}
+out["refresh_shared_900"] = refresh_docs(tiny_doc(BASE), replaced(100))
+out["refresh_shared_899"] = refresh_docs(tiny_doc(BASE), replaced(101))
+out["refresh_990_replaced"] = refresh_docs(tiny_doc(BASE), {**replaced(990), "rows": replaced(990)["rows"][:10] + [{**r, "nadac": {"value": 500.0}} for r in replaced(990)["rows"][10:]]})
+out["refresh_older_week"] = refresh_docs(tiny_doc(BASE), tiny_doc(BASE, as_of="2026-10-28"))
+out["refresh_no_week"] = refresh_docs(tiny_doc(BASE), {**tiny_doc(BASE), "sources": {"nadac": {"source_file": "n.csv"}}})
+out["refresh_empty_week"] = refresh_docs(tiny_doc(BASE), tiny_doc(BASE, as_of=""))
+out["refresh_no_counts"] = refresh_docs(tiny_doc(BASE), {k: v for k, v in tiny_doc(BASE).items() if k != "counts"})
+out["refresh_shift_50"] = refresh_check(BASE, times(50, 1.5))
+out["refresh_shift_51"] = refresh_check(BASE, times(51, 1.5))
+out["refresh_shift_51_down"] = refresh_check(BASE, times(51, 1 / 1.5))
+out["refresh_shift_51_under"] = refresh_check(BASE, times(51, 1.49))
+out["refresh_shift_51_accepted"] = refresh_check(BASE, times(51, 1.5), extra=["--accept-movers"])
+out["refresh_499_at_4x"] = refresh_check(BASE, times(499, 4.9))
+
+# R13: a value that is not a positive number is a reason, in the summary, never a traceback.
+bad_value = lambda v: {**tiny_doc(BASE), "rows": [{"ndc": "00000000000", "name": "DRUG 0", "nadac": {"value": v}}] + tiny_doc(BASE)["rows"][1:]}
+for label, v in (("zero", 0), ("negative", -1.0), ("null", None), ("text", "n/a"), ("nan", float("nan")), ("infinite", float("inf")), ("true", True)):
+    out[f"refresh_value_{label}"] = refresh_docs(tiny_doc(BASE), bad_value(v))
+no_nadac = tiny_doc(BASE)
+del no_nadac["rows"][0]["nadac"]
+out["refresh_value_missing"] = refresh_docs(tiny_doc(BASE), no_nadac)
+refresh_docs(bad_value(0), tiny_doc(BASE), extra=["--summary", str(summary_path)])
+out["refresh_value_old_summary"] = summary_path.read_text(encoding="utf-8")
+
 # ---------------------------------------------------------------- reverify_spotchecks
 
 NADAC_DS = "fbb83258-11c7-47f5-8b18-5f8e79f7e704"
@@ -727,9 +836,11 @@ RDOC = {
 NADAC_ROW = {"ndc_description": "ELIQUIS 5 MG TABLET", "ndc": "00003089421", "nadac_per_unit": "5.52144", "effective_date": "2026-10-21", "pricing_unit": "EA", "explanation_code": "1", "as_of_date": "2026-11-04"}
 PARTD_ROW = {"Brnd_Name": "Eliquis", "Gnrc_Name": "Apixaban", "Mftr_Name": "Overall", "Avg_Spnd_Per_Dsg_Unt_Wghtd_2024": "9.6370356894", "Tot_Clms_2024": "23500000"}
 PARTD_API = "https://data.cms.gov/data-api/v1/dataset/da5ff50b-e5da-42de-b68b-6cfac1f64f35/data"
+# The 2024 dataset's first distribution has an API-shaped accessURL but is not the API (R10).
 CATALOG = {"dataset": [{"title": "Medicare Part D Spending by Drug : 2023-01-01", "distribution": [
     {"format": "API", "accessURL": "https://data.cms.gov/data-api/v1/dataset/aaaaaaaa-e5da-42de-b68b-6cfac1f64f35/data", "temporal": temporal(2023)}]},
     {"title": "Medicare Part D Spending by Drug : 2024-01-01", "distribution": [
+        {"format": "CSV", "accessURL": "https://data.cms.gov/data-api/v1/dataset/bbbbbbbb-e5da-42de-b68b-6cfac1f64f35/data", "temporal": temporal(2024)},
         {"format": "CSV", "downloadURL": PARTD_CSV_2024, "temporal": temporal(2024)},
         {"format": "API", "accessURL": PARTD_API, "temporal": temporal(2024)}]}]}
 asked = []
@@ -738,13 +849,14 @@ asked = []
 reverify_spotchecks.API_WAIT_SECONDS = 0
 
 
-def reverify_run(nadac_row=NADAC_ROW, partd_row=PARTD_ROW, nadac_error=None, extra=(), checks=CHECKS, partd_busy=0):
+def reverify_run(nadac_row=NADAC_ROW, partd_row=PARTD_ROW, nadac_error=None, extra=(), checks=CHECKS, partd_busy=0, nadac_rows=None, nadac_busy=0, partd_pages=None):
     data, chk = WORK / "rdoc.json", WORK / "spot.json"
     data.write_text(json.dumps(RDOC), encoding="utf-8")
     chk.write_text(json.dumps(checks, indent=2) + "\n", encoding="utf-8")
     before = chk.read_text(encoding="utf-8")
     asked.clear()
     busy = [partd_busy]
+    nbusy = [nadac_busy]
 
     def get_json(url, timeout=120, limit=None):
         asked.append(url)
@@ -754,6 +866,9 @@ def reverify_run(nadac_row=NADAC_ROW, partd_row=PARTD_ROW, nadac_error=None, ext
             if busy[0] > 0:
                 busy[0] -= 1
                 raise FetchError(f"HTTP 503 Service Unavailable from {url}")
+            if partd_pages is not None:
+                n = int(url.rsplit("offset=", 1)[1]) // reverify_spotchecks.PARTD_PAGE
+                return partd_pages[n] if n < len(partd_pages) else []
             if not partd_row:
                 return []
             # The tool reads pages and picks the row for this brand, generic and "Overall".
@@ -761,7 +876,12 @@ def reverify_run(nadac_row=NADAC_ROW, partd_row=PARTD_ROW, nadac_error=None, ext
             return [partd_row, {**partd_row, **other, "Mftr_Name": "A Manufacturer"}, {**partd_row, **other, "Gnrc_Name": "Another"}]
         if nadac_error:
             raise nadac_error
-        return {"results": [nadac_row] if "90000000099" not in url else []}
+        if nbusy[0] > 0:
+            nbusy[0] -= 1
+            raise FetchError(f"HTTP 503 Service Unavailable from {url}")
+        if "90000000099" in url:
+            return {"results": []}
+        return {"results": nadac_rows if nadac_rows is not None else [nadac_row]}
 
     real = cachelib.get_json
     cachelib.get_json = get_json
@@ -785,6 +905,20 @@ out["reverify_partd_busy_once"] = reverify_run(partd_busy=1)
 out["reverify_partd_busy_always"] = reverify_run(partd_busy=99)
 out["reverify_all"] = reverify_run(extra=["--all"], checks=[{**c, "source_file": NEW_FILE, "value": 5.52144} for c in CHECKS[:1]] + [CHECKS[5]])
 out["reverify_current_untouched"] = reverify_run(checks=[{**CHECKS[0], "source_file": NEW_FILE, "value": 5.52144}])
+
+# R10, R11, R12.
+older = {**NADAC_ROW, "nadac_per_unit": "5.00000", "effective_date": "2026-09-30"}
+out["reverify_newest_second"] = reverify_run(nadac_rows=[older, NADAC_ROW], checks=CHECKS[:1])
+out["reverify_same_decimal"] = reverify_run(nadac_row={**NADAC_ROW, "nadac_per_unit": "5.521440"}, checks=CHECKS[:1])
+out["reverify_not_in_data"] = reverify_run(checks=[{**CHECKS[0], "id": "elsewhere", "ndc": "00003089499"}])
+out["reverify_nadac_busy_once"] = reverify_run(nadac_busy=1, checks=CHECKS[:1])
+r = reverify_run(nadac_error=FetchError("HTTP 404 Not Found from x"), checks=CHECKS[:1])
+out["reverify_nadac_404"] = {**r, "nadac_asks": sum(1 for u in r["asked"] if u.startswith(reverify_spotchecks.NADAC_API))}
+reverify_spotchecks.PARTD_PAGE = 3
+others = [{**PARTD_ROW, "Gnrc_Name": f"Other {i}"} for i in range(3)]
+out["reverify_partd_two_pages"] = reverify_run(partd_pages=[others, [PARTD_ROW]], checks=[CHECKS[4]])
+reverify_spotchecks.PARTD_PAGE = 5000
+out["reverify_current_part_b"] = reverify_run(checks=[{**CHECKS[7], "id": "limit-current", "source_file": "limits.zip"}])
 
 shutil.rmtree(WORK, ignore_errors=True)
 print(json.dumps(out))

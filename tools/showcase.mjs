@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The showcase's figures for this data, from the core, for a person to re-check on a refresh
-// (docs/DECISIONS.md, decisions 45 and 53). A data refresh moves them, so no test pins them; this
+// (docs/DECISIONS.md, decisions 45 and 55). A data refresh moves them, so no test pins them; this
 // prints them for the pull request body, and says whether the README still states them.
 //
 // Usage: node tools/showcase.mjs [--data FILE]

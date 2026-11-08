@@ -4,8 +4,8 @@ A numbered log of the choices behind OpenBill: context, decision, consequences. 
 not rewritten; a later entry supersedes or amends an earlier one by number, and the earlier
 entry carries a one-line note pointing at it. Entries 1 to 23 were recorded on 2026-10-17,
 during phase 1; entries 24 to 32 were recorded later the same day, after a review and a
-rebuild of `data/drugs.json`, entries 33 to 48 on 2026-10-18, entries 49 to 52 on 2026-10-19, and
-entries 53 onward on 2026-11-06.
+rebuild of `data/drugs.json`, entries 33 to 48 on 2026-10-18, entries 49 to 52 on 2026-10-19,
+entries 53 to 55 on 2026-11-06, and entry 56 on 2026-11-08.
 Entries 39 to 49 are phase 2: the cost-plus estimate, "what you were charged" and the drug
 pages. The contract
 they produce is [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -1469,6 +1469,8 @@ that pulls the share below a floor fails the tests rather than shipping thinner 
 
 ## 53. The address, the live regions, and the time before the data arrives
 
+*Amended by [decision 56](#56-corrections-from-the-foundations-review): the boxes follow the address wherever the focus is, Back lands on the title in view, and Enter, Escape and focus during the load are handled as the reader left them.*
+
 **Context.** An audit recorded on 2026-11-06 reproduced these on the live page. The skip link's
 `#card`, like `#main`, `#top` or `#utm_source=reddit`, was read as a card link with no drug in
 it and replaced the card with an error, and a reload stayed broken. A quantity of `1e300000000`
@@ -1513,7 +1515,9 @@ script from parsing in Safari below 16.4, before it could give the message decis
   a closed panel is empty, so a browser's find-in-page no longer opens it to find an NDC.
 - **The search box is live from the start.** It says "Search starts when the data loads" as a
   placeholder, because a line of its own would itself move the page. Text typed early is kept and
-  run when the index is ready, and Enter pressed meanwhile opens the first result then.
+  run when the index is ready. Enter pressed meanwhile acts then as Enter does (decision 54): it
+  opens an exact name or NDC, and otherwise moves to the first result. Decision 56 says what takes
+  that back.
 - **Room is reserved; nothing is drawn in it.** `.card-pending` has a minimum height of 1640 px on
   a phone and 1290 px from 640 px up, near the real card (1643 and 1290). No figure is
   pre-rendered, because no figure may appear before the data's checksum is checked (decision 33).
@@ -1715,6 +1719,8 @@ page grows by about 30 KB.
 
 ## 55. The refresh harness, page dates, smaller preview images and CI hardening
 
+*Amended by [decision 56](#56-corrections-from-the-foundations-review): `check_refresh.py` also checks the shared NDCs, the week, the reject count, a partial shift and each value, and the deploy gate fails when it cannot ask GitHub about `main`.*
+
 **Context.** Recorded on 2026-11-06, after an audit of the repository. The audit refreshed the data
 to the NADAC of 2026-11-04 in a scratch copy and ran everything against it. `node --test` gave 3
 failures and 22 skips, all of them tests that had pinned one week's figures. It also found that a
@@ -1831,3 +1837,144 @@ without telling a search engine that 6,000 pages changed, until the constant mov
 ten minutes later than they did, because they wait for CI. Three settings are the owner's to turn on,
 because a repository file cannot: Dependabot alerts and security updates, the allowed-actions policy, and
 branch protection, whose contexts stay `test` and `links`.
+
+## 56. Corrections from the foundations review
+
+**Context.** Recorded on 2026-11-08. A review of decisions 53 to 55 reported 31 findings, 12 by using
+the page (BEH-01 to BEH-12) and 19 by reading the code and breaking its rules one at a time (R01 to
+R19). Each was reproduced before it was fixed. Before this change, 38 of the new or changed browser
+tests failed on the previous commit in both Chromium and WebKit. The others pin behaviour that was
+already right, or that shows only in one engine or at a phone's width. The changes stay within
+decisions 53 to 55. Nothing about how prices are labelled or what figures are shown changed, and the
+data was not refreshed.
+
+**Decision.**
+
+*Back lands on the title, in view.* The page sets `history.scrollRestoration = 'manual'`. Every way back
+to an entry already lands on its card's title. The browser's own restoring ran after that, smoothly
+where motion is allowed, and left the focused title about a screen above the view. That was in every
+engine on the way back to the default card, under either motion setting (BEH-01). Only the stamp's own
+click is not scrolled, because the browser is already taking the page to its top. The cost: a reload
+also opens at the top, not where the reader had scrolled to.
+
+*The boxes follow the address wherever the focus is.* On Back, Forward or a link to the same drug at
+another quantity or amount paid, the quantity box was written only when the focus was elsewhere. With
+the focus in it, the figures changed and the box did not, and it stayed wrong after the reader left it
+(R01, BEH-06). Now the address decides, and focus does not. A box that already says the same number
+in its own words ("1.50" says 1.5, `boxSays`) is not written, so it keeps its caret. There is one
+exception. When `replaceState` fails, the reader's own typing reaches this code. A box they have
+emptied, or filled with what is not a number, is then left as it is, because an address with no
+quantity must not fill it again. The paid box follows the address in the same way. A link's "5." or
+"+5" goes into the box as "5", because a number box empties itself on those and the figures read them as 5.
+
+*A quantity that is not a number is said, not taken as empty.* A number box holding "1e" reports its
+value as "", the same as an empty box (BEH-10). The page reads the box's `validity.badInput` and stands
+`QTY_UNREADABLE` in for its text. The reason then says "not a number", the box is marked invalid, and
+the quantity drops out of the address. A link whose quantity is literally `unreadable` reads the same
+way, which is true of it.
+
+*What happens while the data unpacks.*
+- Enter pressed in the search box before the index is ready acts when the index is ready, as decision
+  54's Enter does. It no longer acts after the reader has moved elsewhere, pressed Escape or kept
+  typing (BEH-03). It counts only for words the reader typed. A box that was empty may yet be filled by
+  a link's unknown name, which the reader never asked to open. Once the reader is elsewhere or has
+  pressed Escape, no list opens; going back to the box brings it. Decision 53's sentence about this was
+  wrong and now says what Enter does (BEH-04).
+- "Search is ready" is said once, in the card's status (BEH-08). A link's unknown name filled in before
+  the index exists no longer tells someone who typed nothing to wait. Its results come when the index
+  does.
+- Focus that is already in the card when the card arrives stays there and goes to the title, in place.
+  This covers the skip link and the loading line's link (BEH-02, R04). The card is `aria-busy` until
+  then, and a test now checks that.
+- When the data fails, focus in the search box or on a Try link goes to the message, scrolled into
+  view, because those controls go with the data (BEH-09).
+
+*Messages and the address.*
+- "No drug by that name" in the search status belongs to the link. It stops once a real card opens
+  (BEH-05, R14).
+- A plain fragment over a message, such as `#top`, puts the message's own address back, as it already
+  did for a card. A reload then opens the same thing (R16).
+- A link to the drug already open, with a different note (a wrong NDC, for example), redraws the card,
+  so the note comes and goes with the link (R15).
+- `#NAME&qty=45` reads as a bare name with a quantity. Before, it was refused (BEH-12). Control
+  characters are taken out of a name, and a name of nothing else is "That link does not name a drug",
+  not empty quotes.
+- A 12-digit number's guessed NDC is a guess. Opening its result no longer carries it as the reader's
+  own NDC (BEH-07).
+
+*Links inside a sentence stay inline.* A 44 px box around a link in a message pushed its line apart
+(BEH-11). The link is now inline with `padding-block: calc((44px - 1em) / 2)`. That gives a 44 px target
+without changing the line height. Because it does not grow its line, a link's target can overlap the
+lines above and below it by a few pixels. Nothing there is clickable.
+
+*Two search bugs found while testing.* An arrow key in the 60 to 200 ms after a keystroke went to a
+list that the waiting search then replaced, and the focus was lost. The arrow now runs that search
+first. A drag that selects the box's text and ends outside the search area counted as a click
+outside and closed the list. A press that begins in the search area no longer does that.
+
+*Lines that did nothing were removed.* The review found three rules no test could break. Each was
+covered by another rule. `QUERY_MAX_CHARS` was applied in prefill and in the search, but `parseHash`
+already bounds a link's name and the box bounds typing (A77, A78). Typing cleared the miss in the
+input handler, and the status already compares the text with the miss (A46). The panel's fill on a
+click on its summary stays (A27): `toggle` fires after the panel has opened, so without that fill one
+frame could be painted empty.
+
+*The refresh gate checks what it was missing.* `check_refresh.py` passed six kinds of file it exists to
+stop (R05). It now also fails in these cases:
+- fewer than 90% of the previous NDCs are in the new file;
+- the new NADAC as-of date is missing, or older than the previous one;
+- `counts.rejected` is missing (it was read as 0);
+- more than 5% of the shared NDCs moved 1.5× or more either way. `--accept-movers` overrides this,
+  because it is the same kind of signal as the big movers;
+- a row's NADAC value in either file is not a positive, finite number. Such a row is reported, never a
+  traceback (R13).
+
+The real diff from 2026-10-14 to 2026-11-04 passes. 99.65% of its NDCs were shared, and 55 of 29,926
+(0.18%) moved 1.5× or more. The limits are as much starting points as decision 55's. A file whose
+units all changed, EA to ML for example, still passes, because the check does not compare units.
+Whether it should is the owner's call.
+
+*The fetchers and the re-verifier.*
+- A zip whose directory reads but whose deflate stream is broken raises `zlib.error`. That is now a
+  reason (exit 4), with the cached file kept (R13).
+- The NADAC check in `reverify_spotchecks.py`, and the CMS catalog read, ask again on a 503 or 504, as
+  Part D's pages already did (R11). Any other error is not asked again.
+- `verified_via` names the result it used, `results[i]`, the newest effective date, not
+  `results[0]` (R12). A dry run says "Agreed with the API", without "and rewritten".
+
+The pipeline harness now covers every case R06 and R10 listed:
+- `--require-online` on every fetcher;
+- a cached NADAC week past its age limit, kept because the network failed, is NOT REFRESHED and not
+  FAILED;
+- the other NADAC datasets with a year in their titles;
+- a renamed link for a quarter already complete, or older;
+- a broken stream, new and cached;
+- the re-verifier's second result, second page, a 404, a non-API distribution, `5.521440`, and an NDC
+  missing from the data.
+
+`tools/mutate_pipeline.mjs` now holds 73 rules. Each one, broken, fails the suite, 12 of them by
+stopping the harness rather than at an assertion. A run takes about two minutes.
+
+*The deploy gate fails red.* When `git ls-remote` failed, or named no commit for `main`, the gate read
+that as "main has moved on". It skipped the deploy and the run stayed green (R03). It now stops with
+an error, so the run can be re-run. `tests/workflows.test.js` runs the gate's own script under bash
+with a stand-in `git`. It also checks the rules the workflows' comments state (R07), such as the
+permissions, the deploy's dependency on the build, `persist-credentials: false` and one SHA per Action.
+Broken one at a time, each of 37 workflow rules fails a test.
+
+*Tests that could not fail now can.* The J25 test's query gave Enter nothing to open, so it passed
+whatever the rule did. It now uses an exact name that has other results (R02). The browser tests now
+pin the rules R08 listed. The long-name test checks the exact `clipText` output. Search timing takes
+each query's best of three and requires the slowest of those to be under 50 ms (R18). One slow query
+fails; one slow run does not. The search rules R09 listed have unit cases, including the doc comment's
+own "sertraline 5". Five references to decision 53 that meant 55 were corrected (R17), and
+`SITE_CSP`'s comment is back on its constant (R19). Each new browser test was checked by breaking its
+rule. Of 36 such mutants, 35 fail a test. The one left, `&& inBox` on the Enter acted on at ready,
+cannot be reached since Enter on an empty box is not kept. It stays as a statement of the rule.
+
+**Consequences.** The address, the boxes and the figures agree in every engine, whatever has the
+focus. A reload opens at the top of the page. A refresh that replaces most NDCs, steps back a week,
+drops its counts or shifts part of the file stops at `check_refresh.py`, not in review. A deploy gate
+that cannot reach GitHub is red. The review's other surviving mutants were outside its fix list and
+were not checked again here: A33, A34, A44, A49 and A54 in the page, and C5 to C7 in the styles
+(print, wide screens and the busy paid result).

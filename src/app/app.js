@@ -5,7 +5,7 @@ import { esc, safeHref } from '../core/esc.js';
 import { unpackDrugs, linkRows } from '../core/pack.js';
 import { groupProducts, buildIndex, search, suggest, enterChoice, normalizeQuery } from '../core/search.js';
 import { summarizeProduct, partDNameContext, freshness, inputDates, rangesByUnit, isExtremeSpread, formatSpreadMultiple, paidComparison, parsePaid, COST_PLUS, HONESTY, RULES, PAID_PRIVACY } from '../core/rules.js';
-import { formatMoney, formatUnitPrice, formatCount, formatMultiple, quantityProblem, QTY_MAX_CHARS } from '../core/money.js';
+import { formatMoney, formatUnitPrice, formatCount, formatMultiple, decimalString, quantityProblem, QTY_MAX_CHARS, QTY_UNREADABLE } from '../core/money.js';
 import { formatValue, validateRecord, STATE_INFO } from '../core/provenance.js';
 import { formatNdc, formatNdcCode, isNdc11, normalizeNdc, readNdc } from '../core/ndc.js';
 import { SOURCE_INFO, NADAC_EXPLANATION_CODES } from '../core/sources.js';
@@ -14,7 +14,7 @@ import { REPO_URL, SITE_URL } from '../core/config.js';
 import { siteSlugs } from '../core/slug.js';
 import { isoDate, parsePeriod } from '../core/dates.js';
 import { sha256Hex } from '../core/sha256.js';
-import { parseHash, hashFor, nameKey, caselessNames, clipText, QUERY_MAX_CHARS } from '../core/hash.js';
+import { parseHash, hashFor, nameKey, caselessNames, clipText } from '../core/hash.js';
 
 const SCRIPT_START = performance.now();
 const RESULT_LIMIT = 20;
@@ -51,8 +51,11 @@ const app = {
   paidShown: '', // the paid result's current HTML, so an unchanged one is not written (and read out) again
   panelFor: null, // the summary the panel was last built from; a closed panel is not built
   shown: false, // something other than the static loading state is on the card
-  missQuery: null, // the search text a link's unknown name put in #q
+  missQuery: null, // the search text a link's unknown name put in #q, until a real card opens
+  shownHash: null, // the address the card or message now showing came from
+  stampPressed: false, // the stamp was clicked, so the browser is already going to the page's top
   enterWaiting: false, // Enter was pressed in #q before the search index was ready
+  searchEscaped: false, // Escape was pressed in #q before the search index was ready
   allResults: [], // everything the current search found, not only the rows shown
   pickedQuery: null, // the text in #q when a result was opened from it; typing clears it
   searchTimer: null, // the pause after a keystroke before searching
@@ -237,7 +240,7 @@ function findProduct(text) {
 }
 
 function defaultRoute() {
-  return { kind: 'card', drug: app.build.default.drug, qty: String(app.build.default.qty), paid: null, home: true };
+  return { kind: 'card', drug: app.build.default.drug, qty: String(app.build.default.qty), paid: null };
 }
 
 function readHash() {
@@ -289,7 +292,7 @@ function paidForHash(text) {
 
 function currentHash() {
   const c = app.current;
-  return hashFor(c.product.name, c.qty, paidForHash(c.paid), c.ndc && c.ndc.ndc);
+  return hashFor(c.product.name, c.qty === QTY_UNREADABLE ? '' : c.qty, paidForHash(c.paid), c.ndc && c.ndc.ndc);
 }
 
 function replaceHash(hash) {
@@ -834,9 +837,20 @@ function qtyChips(s) {
   return s.default_quantity.chips.map(String);
 }
 
-/** A crafted quantity longer than any usable one does not go into the box. */
+/**
+ * What the box shows for a link's quantity. One longer than any usable one does not go in, and a
+ * usable one goes in its plain form: a number box empties itself on "5." or "+5", which the figures
+ * read as 5.
+ */
 function qtyBoxValue(qty) {
-  return qty.length > QTY_MAX_CHARS ? '' : qty;
+  if (qty.length > QTY_MAX_CHARS) return '';
+  return quantityProblem(qty) ? qty : decimalString(qty);
+}
+
+/** Whether the box already says this quantity, in its own words ("1.50" says 1.5), so it is left alone. */
+function boxSays(text, qty) {
+  if (text === qtyBoxValue(qty)) return true;
+  return !quantityProblem(text) && !quantityProblem(qty) && decimalString(text) === decimalString(qty);
 }
 
 /** Ties the reason to the field: invalid while the typed quantity is unusable, cleared when it is not. */
@@ -1147,20 +1161,22 @@ function prefillSearch(text) {
   const input = $('q');
   const typed = input.value.trim() !== '' && (!app.index || document.activeElement === input);
   if (typed && input.value !== app.missQuery) return false;
-  input.value = String(text).slice(0, QUERY_MAX_CHARS);
+  input.value = String(text);
   app.missQuery = input.value;
-  runSearch(input.value);
+  // Before the index exists start() runs it, and the reader, who typed nothing, is told nothing.
+  if (app.index) runSearch(input.value);
   return true;
 }
 
-function routeHash(focus) {
+function routeHash(focus, scroll) {
   let h = readHash();
   if (h.kind === 'anchor') {
     const skipTarget = h.anchor === 'card';
     if (app.shown) {
-      // Not addressed to this page's state: the card stays, and the address goes back to naming
-      // it, so a reload or a shared link still opens the same card.
-      if (app.current) replaceHash(currentHash());
+      // Not addressed to this page's state: the card or message stays, and the address goes back to
+      // naming it, so a reload or a shared link still opens the same thing.
+      const named = app.current ? currentHash() : app.shownHash;
+      if (named) replaceHash(named);
       if (skipTarget) focusTitle();
       const entry = /^ndc-(\d{11})$/.exec(h.anchor || '');
       if (entry && app.current && app.current.product.ndcs.includes(entry[1])) revealNdc(entry[1]);
@@ -1171,10 +1187,11 @@ function routeHash(focus) {
     // already gone somewhere.
     if (skipTarget && document.activeElement === document.body) focus = true;
   }
+  app.shownHash = location.hash;
   if (h.kind === 'bad') {
     app.current = null;
     renderMessage('That link does not name a drug', `<p>${esc(h.problem)}</p><p>${defaultCardLink('Open')} or search above.</p>`);
-    if (focus) focusTitle();
+    if (focus) focusTitle({ scroll });
     return;
   }
   const product = findProduct(h.drug);
@@ -1185,9 +1202,11 @@ function routeHash(focus) {
       'No drug by that name',
       `<p>This week’s NADAC file has no product named “${esc(clipText(h.drug))}”. NADAC names change when CMS updates a description, so an old link can stop working.</p><p>${filled ? 'That name is in the search box above' : 'Search for it above'}, or ${defaultCardLink('open')}.</p>`,
     );
-    if (focus) focusTitle();
+    if (focus) focusTitle({ scroll });
     return;
   }
+  // "No drug by that name" was about the link, and a real card is showing now.
+  app.missQuery = null;
   let qty = h.qty;
   if (qty === null || qty === undefined) {
     const dq = summaryWithoutQty(product).default_quantity;
@@ -1201,35 +1220,42 @@ function routeHash(focus) {
   // an NDC spelled another way (or with no drug= before it) is written the way the page writes it.
   if (paid.note || h.drug !== product.name || h.bare || (typeof h.ndc === 'string' && h.ndc !== ndc)) replaceHash(hashFor(product.name, h.qty, paid.paid, ndc));
   const held = app.current && app.current.product === product ? app.current.ndc : null;
-  if (app.current && app.current.product === product && $('qty') && ((held && held.ndc) || null) === (ndc || null) && !(entered && entered.note)) {
-    app.current.qty = qty;
+  if (app.current && app.current.product === product && $('qty') && ((held && held.ndc) || null) === (ndc || null) && !(entered && entered.note) && !(held && held.note)) {
     const input = $('qty');
-    if (document.activeElement !== input) input.value = qtyBoxValue(qty);
     const box = $('paid');
-    if (box && document.activeElement !== box && paidForHash(app.current.paid) !== paid.paid) {
+    // The boxes follow the address wherever the focus is, so a box never disagrees with the figures
+    // beside it; one that already says the same is not written, and keeps its caret. The exception is
+    // a box the reader has just emptied, or filled with what is not a number: a browser whose
+    // replaceState failed reaches here from that typing, and an address with no quantity must not
+    // fill it again (decision 56).
+    if (h.qty !== null || document.activeElement !== input || input.value !== '') {
+      app.current.qty = qty;
+      if (!boxSays(input.value, qty)) input.value = qtyBoxValue(qty);
+    }
+    if (box && paidForHash(app.current.paid) !== paid.paid) {
       app.current.paid = paid.paid;
       box.value = paid.paid;
     }
     app.current.paidNote = paid.note;
     renderFigures();
-    // Back, Forward or a followed link to this drug at another quantity; never from under a reader
-    // typing in the card's own boxes (an old browser can reach here from their typing).
-    if (focus && document.activeElement !== input && document.activeElement !== box) focusTitle({ scroll: !h.home });
+    // Back, Forward or a followed link to this drug at another quantity. Someone in the card's own
+    // boxes stays there.
+    if (focus && document.activeElement !== input && document.activeElement !== box) focusTitle({ scroll });
     return;
   }
   app.current = { product, qty, paid: paid.paid, paidNote: paid.note, ndc: entered, summary: null };
-  renderCard({ focus, scroll: !h.home });
+  renderCard({ focus, scroll });
 }
 
-function renderFromHash({ focus = false } = {}) {
+function renderFromHash({ focus = false, scroll = true } = {}) {
   // An address is untrusted text. If the core ever threw on one, that must cost only this card:
   // the search box and the other cards still work, and the reader gets a sentence, not an error.
   try {
-    routeHash(focus);
+    routeHash(focus, scroll);
   } catch {
     app.current = null;
     renderMessage('That link could not be opened', `<p>Something in the address after # could not be read.</p><p>${defaultCardLink('Open')} or search above.</p>`);
-    if (focus) focusTitle();
+    if (focus) focusTitle({ scroll });
   }
 }
 
@@ -1283,6 +1309,7 @@ function clearResults() {
   $('search-status').textContent = '';
   app.allResults = [];
   clearTimeout(app.searchTimer);
+  app.searchTimer = null;
 }
 
 function listClosed() {
@@ -1306,7 +1333,7 @@ function resultNote(r, query) {
 
 function resultItem(r, query) {
   const p = resultPrices(r.product);
-  return `<li><button type="button" class="result" data-name="${esc(r.product.name)}"${r.entered ? ` data-ndc="${esc(r.entered)}"` : ''}>
+  return `<li><button type="button" class="result" data-name="${esc(r.product.name)}"${r.entered && !r.guess ? ` data-ndc="${esc(r.entered)}"` : ''}>
 <span class="result-name">${esc(r.product.name)}</span>
 <span class="result-meta"><span class="result-price mono">NADAC ${esc(p.text)}</span> ${chip(p.state)}</span>
 ${resultNote(r, query)}
@@ -1343,7 +1370,7 @@ function enterTarget(text) {
 }
 
 function runSearch(query) {
-  const q = String(query || '').slice(0, QUERY_MAX_CHARS);
+  const q = String(query || '');
   if (!app.index) {
     showSearchWait();
     return;
@@ -1353,6 +1380,7 @@ function runSearch(query) {
     return;
   }
   clearTimeout(app.searchTimer);
+  app.searchTimer = null;
   const said = clipText(q.trim());
   // Results for a link's unknown name are shown before the card; they say why they are there.
   const miss = q === app.missQuery ? 'No drug by that name. ' : '';
@@ -1415,6 +1443,10 @@ function enterInSearch() {
  * skip link and the card's events work whenever the card arrives.
  */
 function bind() {
+  // Every way back to an entry here lands on its card's title (focusTitle). The browser's own
+  // restoring, smooth where motion is allowed, ran after that in Chromium and left the focused title
+  // a screen above the view (decision 56).
+  if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
   const input = $('q');
   // Coming back to the box with text in it, the list comes back too.
   const reopen = () => {
@@ -1429,8 +1461,10 @@ function bind() {
   if (input.value.trim() || document.activeElement === input) showSearchWait();
   input.addEventListener('input', () => {
     clearTimeout(app.searchTimer);
-    app.missQuery = null;
     app.pickedQuery = null;
+    // More typing takes back what Enter or Escape asked for before the index was ready.
+    app.enterWaiting = false;
+    app.searchEscaped = false;
     // One or two letters match most of the list; wait a little longer before searching them.
     const wait = input.value.trim().length <= 2 ? 200 : 60;
     app.searchTimer = setTimeout(() => runSearch(input.value), wait);
@@ -1440,15 +1474,20 @@ function bind() {
       e.preventDefault();
       clearTimeout(app.searchTimer);
       if (!app.index) {
-        app.enterWaiting = true;
+        // Only for words the reader typed: an empty box may yet be filled by a link's unknown name.
+        app.enterWaiting = input.value.trim() !== '';
         showSearchWait();
         return;
       }
       enterInSearch();
     } else if (e.key === 'Escape') {
       clearResults();
+      app.enterWaiting = false;
+      app.searchEscaped = !app.index;
     } else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && app.index && input.value.trim()) {
-      reopen();
+      // A search still waiting out its pause would replace this list, and the focus with it.
+      if (app.searchTimer !== null) runSearch(input.value);
+      else reopen();
       const buttons = $('results').querySelectorAll('button.result');
       if (!buttons.length) return;
       e.preventDefault();
@@ -1478,11 +1517,21 @@ function bind() {
     }
   });
   // Outside the search section the list closes. iOS only reports a tap on plain text to a listener
-  // below <body>, so the listener sits on each of its children as well as on the document.
+  // below <body>, so the listener sits on each of its children as well as on the document. A press
+  // that began in the section is not outside, wherever it ended: a drag selecting the box's text
+  // can run past its edge, or the page can scroll under the pointer, and then the click lands on
+  // an ancestor of both.
+  let pressedInSearch = false;
+  document.addEventListener('pointerdown', (e) => {
+    pressedInSearch = Boolean(e.target.closest('.search'));
+  }, true);
   const closeOutside = (e) => {
-    if (app.index && !e.target.closest('.search')) clearResults();
+    if (app.index && !pressedInSearch && !e.target.closest('.search')) clearResults();
   };
-  document.addEventListener('click', closeOutside);
+  document.addEventListener('click', (e) => {
+    closeOutside(e);
+    pressedInSearch = false; // the click from a key on a link or button has no press of its own
+  });
   for (const el of document.body.children) el.addEventListener('click', closeOutside);
   $('search-help').addEventListener('click', (e) => {
     const b = e.target.closest('button.suggest');
@@ -1496,6 +1545,11 @@ function bind() {
   document.querySelector('.skip').addEventListener('click', (e) => {
     e.preventDefault();
     focusTitle();
+  });
+  // A click that changes the address, not one that opens another tab. The browser takes the page to
+  // its top, and that is where the stamp leads; every other way to the default card lands on it.
+  document.querySelector('.stamp').addEventListener('click', (e) => {
+    app.stampPressed = location.hash !== '' && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey;
   });
   const card = $('card');
   // Built before the panel opens on a click or a key press, so it never paints empty.
@@ -1531,15 +1585,18 @@ function bind() {
     setQty(b.dataset.qty);
   });
   card.addEventListener('input', (e) => {
-    if (e.target && e.target.id === 'qty') setQty(e.target.value);
+    // A number box holding "1e" reports its value as "", which would read as nothing entered.
+    if (e.target && e.target.id === 'qty') setQty(e.target.validity.badInput ? QTY_UNREADABLE : e.target.value);
     else if (e.target && e.target.id === 'paid') setPaid(e.target.value);
   });
   window.addEventListener('hashchange', () => {
+    const stamped = app.stampPressed;
+    app.stampPressed = false;
     // Still loading, the first render reads the address itself. After a failed load there is no
     // card to change.
     if (app.byName.size === 0) return;
     if (app.index) clearResults();
-    renderFromHash({ focus: true });
+    renderFromHash({ focus: true, scroll: !stamped });
   });
 }
 
@@ -1562,10 +1619,13 @@ function renderFatal(err) {
 <div class="card-message" role="alert"><p>${esc(said)}</p><p>No figures are shown rather than wrong ones.</p><p><a href="${esc(AZ_URL)}">Browse every drug A–Z</a> as plain pages on the website, or <a href="${esc(report)}" target="_blank" rel="noopener">report this</a>.</p></div>`;
   markCardShown();
   document.title = 'The data did not load: OpenBill';
-  // The search box and the Try links go with the data (styles.css, data-ready="error").
-  document.documentElement.dataset.ready = 'error';
+  // The search box and the Try links go with the data (styles.css, data-ready="error"), so focus in
+  // them goes to the message, wherever on the page they were. Focus in the card has just gone to body.
   const active = document.activeElement;
-  if (!active || active === document.body || active.id === 'q') focusTitle({ scroll: false });
+  const goingAway = active && active.closest('.search, .try');
+  document.documentElement.dataset.ready = 'error';
+  if (goingAway) focusTitle();
+  else if (!active || active === document.body) focusTitle({ scroll: false });
 }
 
 async function sha256Of(buf) {
@@ -1647,23 +1707,27 @@ async function start() {
     app.byName = new Map(app.products.map((p) => [p.name, p]));
     app.caseless = caselessNames(app.byName.keys());
     app.today = isoDate(new Date());
-    // The card first; the search index, which the card does not need, in a later task.
-    renderFromHash({ focus: false });
+    // The card first; the search index, which the card does not need, in a later task. Focus already
+    // in the card (the skip link's target, the loading line's link) stays in it, at the same place.
+    renderFromHash({ focus: $('card').contains(document.activeElement), scroll: false });
     const t3 = performance.now();
     await nextTask();
     const t4 = performance.now();
     app.index = buildIndex(app.products);
     const input = $('q');
     input.removeAttribute('placeholder');
-    // A miss on the first render, or typing while the page loaded: its search runs now.
-    if (input.value.trim()) {
-      if (app.enterWaiting) enterInSearch();
+    const inBox = document.activeElement === input;
+    // A miss on the first render, or typing while the page loaded: its search runs now, unless the
+    // reader has pressed Escape or gone elsewhere. Coming back to the box brings the list.
+    if (input.value.trim() && !app.searchEscaped && (inBox || input.value === app.missQuery)) {
+      if (app.enterWaiting && inBox) enterInSearch();
       else runSearch(input.value);
     } else if ($('search-status').textContent === SEARCH_WAIT) {
-      $('search-status').textContent = SEARCH_READY;
+      $('search-status').textContent = '';
     }
     app.enterWaiting = false;
-    // WCAG 4.1.3: the wait is over, and nothing else on the page says so.
+    app.searchEscaped = false;
+    // WCAG 4.1.3: the wait is over, and said once, not again in the search status.
     writeStatus(`${$('card-title').textContent}. ${SEARCH_READY}`);
     const t5 = performance.now();
     const root = document.documentElement;

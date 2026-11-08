@@ -63,8 +63,9 @@ node --test                                   # with tools/cache/ here, so its t
 node tools/showcase.mjs >> refresh.md         # for the pull request body
 ```
 
-`check_refresh.py` stops a file that lost rows or moved too many prices at once. If a person has
-looked and the market really moved, `--accept-movers` passes the big-mover limit. At a new Part B
+`check_refresh.py` stops a file that lost rows or NDCs, steps back a week, has no reject count, has
+a price that is not a positive number, or moved too many prices at once. If a person has looked and
+the market really moved, `--accept-movers` passes the big-mover and shift limits (decision 56). At a new Part B
 quarter, re-verify those spot checks by hand: they have no API, and their floor fails until enough
 are pinned to the new files. Update the README's headline figures when `showcase.mjs` says to, and
 a person does [the hand check](docs/HAND-CHECK.md).
@@ -169,7 +170,7 @@ tools/
   fetch_partd.py       Medicare Part D Spending by Drug, annual
   fetch_asp.py         Medicare Part B payment limits + NDC-HCPCS crosswalk, quarterly
   build_drugs.py       tools/cache/ -> data/drugs.json
-  check_refresh.py     new data against the previous data: rows, rejects, big movers, median
+  check_refresh.py     new data against the previous data: rows, NDCs, week, rejects, movers, median
   reverify_spotchecks.py  NADAC and Part D spot checks against the government APIs
   showcase.mjs         the showcase's figures, for the refresh pull request
   mutate_pipeline.mjs  break each Python rule; fail if the tests still pass

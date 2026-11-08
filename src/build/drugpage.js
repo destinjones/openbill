@@ -22,7 +22,6 @@ import { parsePeriod } from '../core/dates.js';
 import { issueUrl } from '../core/report.js';
 import { SECTIONS } from './methodology.js';
 
-/** The CSP of every static page (docs/ARCHITECTURE.md): no script at all, styles and fonts from the site. */
 /**
  * The date a person last rewrote what the static pages say. A page's sitemap lastmod is the later of
  * this and the last commit touching data/drugs.json (tools/site.mjs, siteDates). Bump it by hand in
@@ -31,6 +30,7 @@ import { SECTIONS } from './methodology.js';
  */
 export const PAGES_REWRITTEN = '2026-10-19';
 
+/** The CSP of every static page (docs/ARCHITECTURE.md): no script at all, styles and fonts from the site. */
 export const SITE_CSP = "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'";
 
 /** The showcase product (docs/ARCHITECTURE.md, "Showcase"): the site's own preview card. */

@@ -67,13 +67,18 @@ export function caselessNames(names) {
 
 const NO_DRUG = 'The address names no drug (it needs #drug=<name>).';
 
+// Control characters other than whitespace, which nameKey() folds: a name of only these is no name.
+const CONTROL_CHARS = /[\u0000-\u0008\u000e-\u001f\u007f-\u009f]/g;
+
+const cleanName = (text) => text.replace(CONTROL_CHARS, '').trim();
+
 /**
  * Read a location.hash (with or without its #) into one of:
  *
  * - { kind: 'default' }: nothing after the #
  * - { kind: 'card', drug, qty, paid, ndc, bare }: a card to open. Each HASH_KEYS value is as written,
- *   null when absent, the first when repeated; drug is trimmed and at most QUERY_MAX_CHARS long.
- *   bare is true for #NAME with no key.
+ *   null when absent, the first when repeated; drug has no control characters, is trimmed and is at
+ *   most QUERY_MAX_CHARS long. bare is true for a #NAME with no drug= before it, as #NAME&qty=45.
  * - { kind: 'anchor', anchor }: a plain in-page fragment (anchor is its text, as #card, #main or
  *   #ndc-00093104801), or only someone else's parameters (anchor is null). Never an error: it is
  *   not addressed to OpenBill.
@@ -82,7 +87,8 @@ const NO_DRUG = 'The address names no drug (it needs #drug=<name>).';
  *
  * A fragment with no key is a drug when it holds whitespace, which no HTML id can, or when
  * isName(text) says it is a product; otherwise it is an anchor. So #ELIQUIS%205%20MG%20TABLET opens
- * a card and #card never does. This module knows no products, so the caller passes isName.
+ * a card and #card never does. The first part before an & is read the same way when the others are
+ * OpenBill's keys. This module knows no products, so the caller passes isName.
  *
  * @param {string} hash
  * @param {{ isName?: (text: string) => boolean }} [options]
@@ -93,16 +99,24 @@ export function parseHash(hash, { isName = () => false } = {}) {
   if (raw === '') return { kind: 'default' };
   // URLSearchParams never throws on a bad escape, and it decodes + as a space.
   const params = new URLSearchParams(raw);
+  const bareName = (text) => {
+    const name = cleanName(text).slice(0, QUERY_MAX_CHARS);
+    return name && (/\s/.test(name) || isName(name)) ? name : '';
+  };
   if (!raw.includes('=') && !raw.includes('&')) {
-    const text = [...params.keys()].join('');
-    const drug = text.trim().slice(0, QUERY_MAX_CHARS);
-    if (drug && (/\s/.test(drug) || isName(drug))) return { kind: 'card', drug, qty: null, paid: null, ndc: null, bare: true };
-    return { kind: 'anchor', anchor: raw };
+    const drug = bareName([...params.keys()].join(''));
+    return drug ? { kind: 'card', drug, qty: null, paid: null, ndc: null, bare: true } : { kind: 'anchor', anchor: raw };
   }
   if (!HASH_KEYS.some((k) => params.has(k))) return { kind: 'anchor', anchor: null };
-  const drug = (params.get('drug') || '').trim();
+  let drug = cleanName(params.get('drug') || '');
+  let bare = false;
+  if (!params.has('drug')) {
+    const [first, value] = params.entries().next().value;
+    if (value === '' && !HASH_KEYS.includes(first)) drug = bareName(first);
+    bare = drug !== '';
+  }
   if (drug === '') return { kind: 'bad', problem: NO_DRUG };
-  const out = { kind: 'card', bare: false };
+  const out = { kind: 'card', bare };
   for (const k of HASH_KEYS) out[k] = params.get(k);
   out.drug = drug.slice(0, QUERY_MAX_CHARS);
   return out;

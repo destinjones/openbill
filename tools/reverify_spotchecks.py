@@ -2,7 +2,7 @@
 """Re-verify tests/spotchecks.json against the government datastore APIs after a data refresh.
 
 The spot checks tie a shown value to its government source, by a path that does not go through
-OpenBill's parsers (docs/DECISIONS.md, decisions 12 and 53). After a refresh, entries pinned to an
+OpenBill's parsers (docs/DECISIONS.md, decisions 12 and 55). After a refresh, entries pinned to an
 old file stop applying. For each of those this tool reads the value from the publisher's API, a
 different route from the CSV the pipeline parsed, and compares it with what data/drugs.json holds:
 
@@ -62,11 +62,12 @@ NADAC_FIELDS = {"nadac.value": "nadac_per_unit", "nadac.effective_date": "effect
 PARTD_FIELDS = {"avg_per_unit.value": "Avg_Spnd_Per_Dsg_Unt_Wghtd_{y}", "claims.value": "Tot_Clms_{y}"}
 
 
-def read_api(url: str):
-    """The API's JSON, asking again when the server says it is busy. Anything else raises at once."""
+def read_api(url: str, timeout: int = 120):
+    """The API's JSON, asking again when the server says it is busy. Anything else raises at once.
+    Every read goes through here: NADAC's datastore, the CMS catalog and Part D's pages."""
     for tries_left in range(API_TRIES - 1, -1, -1):
         try:
-            return cachelib.get_json(url, timeout=120)
+            return cachelib.get_json(url, timeout=timeout)
         except FetchError as e:
             if not tries_left or not re.match(r"HTTP (503|504) ", str(e)):
                 raise
@@ -121,15 +122,17 @@ class Nadac:
     def read(self, e: dict) -> dict | None:
         """{value, via, note} for an entry, or None if the NDC is not in that week."""
         url = self.url(e["ndc"])
-        results = cachelib.get_json(url, timeout=120)["results"]
+        results = read_api(url)["results"]
         if not results:
             return None
-        # The pipeline keeps the newest effective date when an NDC repeats in a week; so does this.
-        r = max(results, key=lambda x: str(x.get("effective_date") or ""))
+        # The pipeline keeps the newest effective date when an NDC repeats in a week; so does this, and
+        # the recipe names the result it took, so a reader looks at the same one.
+        i = max(range(len(results)), key=lambda k: str(results[k].get("effective_date") or ""))
+        r = results[i]
         field = NADAC_FIELDS[e["path"]]
         return {
             "value": r[field],
-            "via": f'curl -g "{url}" -> results[0]: ndc_description "{r["ndc_description"]}", nadac_per_unit "{r["nadac_per_unit"]}", '
+            "via": f'curl -g "{url}" -> results[{i}]: ndc_description "{r["ndc_description"]}", nadac_per_unit "{r["nadac_per_unit"]}", '
                    f'pricing_unit "{r["pricing_unit"]}", effective_date "{r["effective_date"]}", explanation_code "{r["explanation_code"]}", as_of_date "{r["as_of_date"]}"',
             "note": f'{r["ndc_description"]}. Read from the data.medicaid.gov datastore API for dataset {self.dataset} ({self.title}), As of Date {self.as_of}, the week {self.file} is built from.',
         }
@@ -148,7 +151,7 @@ class PartD:
     def dataset_id(self) -> str:
         """The API distribution of this data year in the CMS catalog (found once, on first use)."""
         if self.dataset is None:
-            catalog = cachelib.get_json(CMS_CATALOG, timeout=300)
+            catalog = read_api(CMS_CATALOG, timeout=300)
             hits = []
             for ds in catalog.get("dataset", []):
                 if not ds.get("title", "").startswith(PARTD_TITLE_PREFIX):
@@ -249,7 +252,8 @@ def main(argv: list[str] | None = None) -> int:
     if r["disagree"]:
         print(f"{len(r['disagree'])} spot checks disagree with the government API. Nothing was written. Do not merge this refresh.", file=sys.stderr)
         return 1
-    print(f"Agreed with the API and rewritten: {len(r['done'])}")
+    write = not args.dry_run and bool(r["done"])
+    print(f"Agreed with the API{' and rewritten' if write else ''}: {len(r['done'])}")
     for label, ids in (("No longer in the source, left pinned to the old file", r["gone"]),
                        ("No API, for a person (docs/HAND-CHECK.md)", r["by_hand"])):
         if ids:
@@ -257,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     current = {s["source_file"]: sid for sid, s in doc["sources"].items()}
     counts = Counter(current[e["source_file"]] for e in r["checks"] if e["source_file"] in current)
     print("Entries pinned to the current files, per source: " + ", ".join(f"{k} {counts.get(k, 0)}" for k in doc["sources"]))
-    if not args.dry_run and r["done"]:
+    if write:
         args.checks.write_text(json.dumps(r["checks"], indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
         print(f"Wrote {args.checks}")
     return 0

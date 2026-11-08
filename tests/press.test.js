@@ -98,7 +98,7 @@ test('the showcase still suits the press kit: one pack total, a Part D figure, a
   assert.ok(!miss(s.spread) && !s.spread.extreme && s.spread.range.min.value === s.spread.range.max.value, 'one spread, not extreme');
   // A refresh moves these figures. Their shape is held here, the figures themselves come from the
   // core, and tools/showcase.mjs prints them into the refresh pull request for a person to re-check
-  // (decisions 45 and 53).
+  // (decisions 45 and 55).
   assert.match(want.pharmacy, /^\$[\d,]+\.\d{2}$/);
   assert.match(want.medicare, /^\$[\d,]+\.\d{2}$/);
   assert.match(want.spread, /^\d+(\.\d)?×$/);

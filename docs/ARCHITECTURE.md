@@ -30,7 +30,7 @@ build.js           src/ + data/ -> openbill.html, methodology.html, docs/DATA-QU
 | `python tools/fetch_all.py` | fetch every source into `tools/cache/` (skips unchanged files); `--require-online` exits 1 if any source stayed on its cache |
 | `python tools/fetch_nadac.py` (and `fetch_fda_ndc.py`, `fetch_partd.py`, `fetch_asp.py`) | fetch one source; `--offline` never touches the network, `--force` re-downloads, `--require-online` exits 5 rather than fall back to the cache |
 | `python tools/build_drugs.py` | cache -> `data/drugs.json`; exits non-zero when more than 0.5% of the week's rows are rejected |
-| `python tools/check_refresh.py` | new `data/drugs.json` against the previous one; exit 1 on lost rows, rejects, many big movers or a shifted median |
+| `python tools/check_refresh.py` | new `data/drugs.json` against the previous one; exit 1 on lost rows or NDCs, an older week, rejects, a value that is not a positive number, many big movers, a shifted part or a shifted median |
 | `python tools/reverify_spotchecks.py` | re-verify NADAC and Part D spot checks against the government APIs and rewrite them if every value agrees |
 | `node tools/showcase.mjs` | print the showcase's figures for this data, for the refresh pull request |
 | `node tools/mutate_pipeline.mjs` | break each Python rule in turn; exit 1 if the tests still pass (about 40 s, not part of `node --test`) |

@@ -4,7 +4,7 @@
 // tools/reverify_spotchecks.py, against the government source named in its verified_via, and is
 // pinned to the source file it describes. An entry applies only while that file is the one
 // data/drugs.json was built from; then its value must match exactly. At least ten must apply, and
-// a floor per source must apply (decisions 12 and 53): a data refresh that changes a source's file
+// a floor per source must apply (decisions 12 and 55): a data refresh that changes a source's file
 // has to re-verify that source's facts against the new file. tools/reverify_spotchecks.py does
 // NADAC and Part D through their APIs; Part B has no API, so a person does those at the new quarter.
 
@@ -133,6 +133,6 @@ for (const [source, floor] of Object.entries(MIN_PER_SOURCE)) {
     const file = doc.sources[source].source_file;
     const applying = checks.filter((e) => e.source_file === file && applies(e));
     const how = source === 'nadac' || source === 'partd' ? 'Run python tools/reverify_spotchecks.py, which reads each fact from the government API and rewrites it' : 'This source has no API: a person re-verifies them against the new file (docs/HAND-CHECK.md)';
-    assert.ok(applying.length >= floor, `Only ${applying.length} spot checks are pinned to ${file}; at least ${floor} must be. ${how} (docs/DECISIONS.md, decisions 12 and 53).`);
+    assert.ok(applying.length >= floor, `Only ${applying.length} spot checks are pinned to ${file}; at least ${floor} must be. ${how} (docs/DECISIONS.md, decisions 12 and 55).`);
   });
 }

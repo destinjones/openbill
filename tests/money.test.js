@@ -11,6 +11,7 @@ import {
   formatUnitPrice,
   quantityProblem,
   QTY_MAX_CHARS,
+  QTY_UNREADABLE,
   multiplyMoney,
   multiplyDecimal,
   subtractDecimal,
@@ -168,6 +169,16 @@ test('quantityProblem explains unusable quantities', () => {
   assert.match(quantityProblem(Infinity), /finite/);
 });
 
+// BEH-10: a number box holding "1e" reports "", which read as "No quantity entered".
+test('a box that cannot be read is its own problem, in words that do not echo the stand-in', () => {
+  const said = quantityProblem(QTY_UNREADABLE);
+  assert.equal(said, 'The quantity in the box is not a number, so it was not used.');
+  assert.doesNotMatch(said, new RegExp(QTY_UNREADABLE));
+  assert.throws(() => multiplyMoney(1, QTY_UNREADABLE));
+  // The stand-in is no quantity in any other spelling either.
+  assert.match(quantityProblem(QTY_UNREADABLE.toUpperCase()), /is not usable/);
+});
+
 // Decision 53: a crafted link's quantity is refused from its text, before any BigInt maths.
 // qty=1e300000000 took about 21 seconds, 0e-999999999 about 6 (18 in WebKit), and
 // 0e-99999999999999 crashed the tab; WebKit showed its own "Out of memory: BigInt" text.
@@ -225,6 +236,12 @@ test('the same quantities throw just as fast where a quantity is used, and toDec
   assert.deepEqual(toDecimal(Number.MAX_VALUE).scale, 0);
   assert.ok(toDecimal(Number.MIN_VALUE).scale > 300);
   assert.deepEqual(toDecimal('0e-1000'), { int: 0n, scale: 0 });
+  // The bound is 1000, not merely "under a billion": past it, refused at once.
+  for (const s of ['1e1001', '1e-1001', '1e9999999']) {
+    const t = performance.now();
+    assert.throws(() => toDecimal(s), /exponent/, s);
+    assert.ok(performance.now() - t < 50, s);
+  }
 });
 
 test('the guard refuses nothing usable', () => {

@@ -47,9 +47,16 @@ jobs:
           TESTED: ${{ github.event.workflow_run.head_sha }}
           DISPATCHED: ${{ github.sha }}
           REPOSITORY: ${{ github.repository }}
+        # No answer about main stops the gate, red, so the run can be re-run. Read as "main has moved
+        # on", it skipped the deploy and stayed green (decision 56).
         run: |
           sha="${TESTED:-$DISPATCHED}"
-          main=$(git ls-remote "https://github.com/${REPOSITORY}" refs/heads/main | cut -f1)
+          main=$(git ls-remote "https://github.com/${REPOSITORY}" refs/heads/main) || { echo "could not ask GitHub which commit main is at" >&2; exit 1; }
+          main="${main%%[[:space:]]*}"
+          if [ -z "${main}" ]; then
+            echo "GitHub named no commit for main" >&2
+            exit 1
+          fi
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
           if [ -n "${TESTED}" ] && [ "${main}" != "${TESTED}" ]; then
             echo "CI passed on ${TESTED}, but main is now at ${main}; that commit's run deploys." >&2

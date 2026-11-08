@@ -366,10 +366,13 @@ button.your-ndc-more {
   color: var(--ink-2);
 }
 
-.card-loading a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
+/* A link in a sentence stays inline, so the sentence keeps even lines: as `.card a` makes it, a
+   44 px box, it pushed its own line apart. Padding gives it the same 44 px target without growing
+   the line it is on. */
+.card .card-loading a,
+.card .card-message a {
+  display: inline;
+  padding-block: calc((44px - 1em) / 2);
 }
 
 /* The data did not load: the same controls would look live and do nothing. */

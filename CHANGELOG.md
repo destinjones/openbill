@@ -79,6 +79,12 @@ Data refreshes are listed too, with the source dates they bring in.
 - A Part B quarter that has not started says so, rather than blaming the reader's clock (decision 55).
 - Part B limits come from the newest quarter that has started, not one posted early (decision 55).
 - "Wrong? Tell us" links stop at 5,000 characters, which GitHub's form accepts (decision 55).
+- A reload opens at the top of the page, so that Back always lands on the card's title (decision 56).
+- `tools/check_refresh.py` also stops a new file that drops most NDCs, has an older NADAC week, has
+  no reject count, has part of its prices shifted, or has a price that is not a positive number
+  (decision 56).
+- The website deploy fails, rather than quietly skipping, when it cannot ask GitHub which commit
+  `main` is at (decision 56).
 - Drug pages say more about their own product and repeat less (decision 52): a table of the
   product's other strengths, forms and brands with their NADAC and Medicare figures per unit;
   where its NADAC price sits in each FDA class (`classStanding()`); for more than 6 NDCs, a
@@ -114,6 +120,32 @@ Data refreshes are listed too, with the source dates they bring in.
 
 ### Fixed
 
+- An arrow key pressed straight after typing stays in the search list; before, the list could be
+  replaced under it and the focus lost.
+- Selecting the search text by dragging past the edge of the box no longer closes the list.
+- Back to a card puts its title in view; it used to be about a screen above (decision 56).
+- Back, Forward or a link to the same drug at another quantity or amount paid updates the boxes even
+  while you are typing in them, so a box never disagrees with the figures beside it.
+- A quantity box holding something that is not a number, such as "1e", says so instead of being
+  read as empty.
+- Enter pressed while the data is still loading is dropped if you then move elsewhere, press
+  Escape or keep typing, and Enter in an empty box is not kept at all.
+- "Search is ready" is said once, not twice.
+- The skip link, or the loading line's link, used while the data loads keeps the focus in the card.
+- When the data cannot load, focus on a Try link or in the search box moves to the message.
+- "No drug by that name" is no longer said in the search box's status after a real card opens.
+- A plain link such as `#top` over a message keeps the message's address, so a reload shows it
+  again.
+- A note that a link's NDC is not this drug's goes away when you follow a clean link to the same
+  drug.
+- A link of a bare drug name followed by `&qty=45` opens that drug at 45, and a link whose name is
+  only control characters says it names no drug.
+- The NDC guessed from a 12-digit number is no longer shown as your NDC once its result opens.
+- Links inside the loading and error messages no longer push their lines apart.
+- A link's quantity written "5." or "+5" shows as 5 in the box.
+- `tools/reverify_spotchecks.py` asks NADAC again when it is busy, names the result it used, and
+  says "rewritten" only when it rewrote; a Part B zip with a broken stream gives a reason, not a
+  traceback (decision 56).
 - A 10-digit NDC without hyphens that fits more than one drug lists them all, FDA's own form first,
   and says to check the hyphens, instead of opening one (`8330100101` opened gabapentin, not the
   metformin package FDA prints that way).

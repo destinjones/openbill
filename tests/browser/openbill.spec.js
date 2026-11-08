@@ -18,6 +18,7 @@ import { formatNdc } from '../../src/core/ndc.js';
 import { SOURCE_INFO } from '../../src/core/sources.js';
 import { REPO_URL, SITE_URL } from '../../src/core/config.js';
 import { slugify, siteSlugs } from '../../src/core/slug.js';
+import { parseHash, clipText } from '../../src/core/hash.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const PAGE = pathToFileURL(path.join(ROOT, 'openbill.html')).href;
@@ -1319,6 +1320,61 @@ async function pageHeldBack() {
   };
 }
 
+/** What the search status says while the data loads, to someone who has typed or pressed something. */
+const SEARCH_WAIT = 'Search starts when the data has loaded; keep typing.';
+
+/**
+ * The data's unpacking held back until release(), with the rest of the page already there: the
+ * seconds a phone spends loading, as start() sees them. held() resolves once start() is waiting.
+ */
+async function holdUnpack(page) {
+  await page.addInitScript(() => {
+    const real = Response.prototype.arrayBuffer;
+    let go;
+    const gate = new Promise((r) => {
+      go = r;
+    });
+    window.__releaseUnpack = () => go();
+    Response.prototype.arrayBuffer = async function arrayBuffer(...args) {
+      window.__unpackHeld = true;
+      await gate;
+      return real.apply(this, args);
+    };
+  });
+  return {
+    held: () => page.waitForFunction(() => window.__unpackHeld === true),
+    release: () => page.evaluate(() => window.__releaseUnpack()),
+  };
+}
+
+/** The distances between the lines of a paragraph, from the tops of its characters. */
+const lineGaps = (locator) =>
+  locator.evaluate((p) => {
+    const tops = new Set();
+    const walk = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      for (let i = 0; i < n.length; i++) {
+        const r = document.createRange();
+        r.setStart(n, i);
+        r.setEnd(n, i + 1);
+        const box = r.getBoundingClientRect();
+        if (box.height && n.data[i].trim()) tops.add(Math.round(box.top));
+      }
+    }
+    const t = [...tops].sort((x, y) => x - y);
+    return t.slice(1).map((x, i) => x - t[i]);
+  });
+
+/** A sentence's links are 44 px targets that leave its lines evenly spaced (BEH-11). */
+async function evenLinesWithTargets(locator, label) {
+  const gaps = await lineGaps(locator);
+  if (gaps.length) expect(Math.max(...gaps) - Math.min(...gaps), `${label}: line gaps ${gaps}`).toBeLessThanOrEqual(1);
+  for (const a of await locator.locator('a').all()) {
+    const heights = await a.evaluate((el) => [...el.getClientRects()].map((r) => r.height));
+    expect(Math.min(...heights), `${label}: link height`).toBeGreaterThanOrEqual(44);
+  }
+}
+
 /** A real click, once any smooth scroll has finished; see openPanel(). */
 async function settledClick(page, locator) {
   await scrollSettled(page);
@@ -1400,7 +1456,8 @@ test('a plain fragment or someone else’s parameter arriving while a card is op
 
 test('a parameter of ours with no drug in it still says so, and the tab says it too', async ({ page }) => {
   const seen = await open(page, PAGE);
-  for (const hash of ['#drug=', '#drug=%20', '#drug=+', '#qty=30', '#paid=12', '#qty=30&paid=12', '#utm_source=x&qty=30']) {
+  // BEH-12: a name of control characters only used to be "No drug by that name" with empty quotes.
+  for (const hash of ['#drug=', '#drug=%20', '#drug=+', '#drug=%00%00', '#drug=%01%20%7F', '#qty=30', '#paid=12', '#qty=30&paid=12', '#utm_source=x&qty=30']) {
     await load(page, PAGE + hash);
     await expect(page.locator('#card-title'), hash).toHaveText('That link does not name a drug');
     await expect(page, hash).toHaveTitle('That link does not name a drug: OpenBill');
@@ -1427,6 +1484,12 @@ test('a name in any case, or with no drug= before it, opens its card and writes 
   await load(page, `${PAGE}#drug=${encodeURIComponent(lower)}&qty=90`);
   await expect(page.locator('#qty')).toHaveValue('90');
   await expect.poll(() => addressHash(page)).toBe(hashFor(METFORMIN, 90));
+  // BEH-12: a name with no drug= before it takes the same keys after it.
+  await load(page, `${PAGE}#${encodeURIComponent(METFORMIN)}&qty=45`);
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+  await expect(page.locator('#qty')).toHaveValue('45');
+  await expect(page.locator('[data-figure="pharmacy"]')).toHaveText(expected(METFORMIN, 45).pharmacy);
+  await expect.poll(() => addressHash(page)).toBe(hashFor(METFORMIN, 45));
   // One word is a name only if it is a product's whole name; otherwise it is an anchor.
   const oneWord = products.find((p) => !/\s/.test(p.name) && p.name !== 'card');
   if (oneWord) {
@@ -1453,9 +1516,25 @@ test('a name that is not in the file goes into the search box, with results and 
   await settledClick(page, page.locator('#results button.result').first());
   await expect(page.locator('#card-title')).toHaveText(want);
   await expect(page).toHaveTitle(`${want}: OpenBill`);
-  // The reason was about the link: typing something else drops it.
+  // The reason was about the link. Once a real card is open, back in the box, it is not said again
+  // (BEH-05, R14): the list for the same words comes back without it.
+  await settledClick(page, page.locator('#q'));
+  await expect(page.locator('#search-status')).toContainText(/^(?!No drug).*metformin er/);
+  // The same from the miss to the default card by the address.
+  await load(page, `${PAGE}#drug=metformin%20er`);
+  await followHash(page, '');
+  await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  await settledClick(page, page.locator('#q'));
+  await expect(page.locator('#search-status')).toContainText(/^(?!No drug).*metformin er/);
+  // Typing something else drops it too.
   await page.locator('#q').fill('metformin');
   await expect(page.locator('#search-status')).toContainText(/^(?!No drug).*metformin/);
+  // A8: a link's unknown name never replaces what the reader is typing.
+  await page.locator('#q').fill('lisin');
+  await followHash(page, '#drug=metformin%20er');
+  await expect(page.locator('#card-title')).toHaveText('No drug by that name');
+  await expect(page.locator('#card')).toContainText('Search for it above');
+  await expect(page.locator('#q')).toHaveValue('lisin');
   await seen.check();
 });
 
@@ -1470,6 +1549,118 @@ test('a link to the same drug at another quantity lands on the title, but never 
   await expect.poll(() => addressHash(page)).toBe(hashFor(METFORMIN, 45));
   await expect(page.locator('#qty')).toBeFocused();
   await expect(page.locator('#qty')).toHaveValue('45');
+  await seen.check();
+});
+
+// R01, BEH-06, A19 to A21: with the focus in a box, a link, Back or Forward changed the figures and
+// left the box saying the old number, even after it lost the focus.
+test('the quantity and paid boxes follow the address wherever the focus is, and keep the focus', async ({ page }) => {
+  const seen = await open(page, PAGE + hashFor(METFORMIN, 30, '10'));
+  const qty = page.locator('#qty');
+  const paid = page.locator('#paid');
+  const agrees = async (q, label) => {
+    await expect(qty, label).toHaveValue(String(q));
+    const chip = page.locator(`.qty-chip[data-qty="${q}"]`);
+    if (await chip.count()) await expect(chip, label).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('[data-figure="pharmacy"]'), label).toHaveText(expected(METFORMIN, q).pharmacy);
+  };
+  await qty.focus();
+  await followHash(page, hashFor(METFORMIN, 90, '10'));
+  await agrees(90, 'a link');
+  await expect(qty).toBeFocused();
+  await page.goBack();
+  await agrees(30, 'Back');
+  await expect(qty).toBeFocused();
+  await page.goForward();
+  await agrees(90, 'Forward');
+  await expect(qty).toBeFocused();
+  // Leaving the box changes nothing: it already says what the figures say.
+  await page.locator('#card-title').focus();
+  await agrees(90, 'after blur');
+
+  const s = expected(METFORMIN, 90).s;
+  await paid.focus();
+  await followHash(page, hashFor(METFORMIN, 90, '99'));
+  await expect(paid).toHaveValue('99.00');
+  await expect(page.locator('.paid-sentence')).toHaveText(paidComparison('99', s.pack, s.cost_plus).sentence);
+  await expect(paid).toBeFocused();
+  await page.goBack();
+  await expect(paid).toHaveValue('10.00');
+  await expect(page.locator('.paid-sentence')).toHaveText(paidComparison('10', s.pack, s.cost_plus).sentence);
+  await expect(paid).toBeFocused();
+  await seen.check();
+});
+
+// Decision 50 keeps location.replace for a browser whose replaceState throws. There the reader's own
+// typing comes back through hashchange, and must find the box as they left it.
+test('where replaceState fails, what the reader types in the boxes is left as typed', async ({ page }) => {
+  await page.addInitScript(() => {
+    History.prototype.replaceState = function replaceState() {
+      throw new DOMException('Blocked', 'SecurityError');
+    };
+  });
+  const seen = await open(page, PAGE + hashFor(METFORMIN, 30));
+  const qty = page.locator('#qty');
+  const why = page.locator('#qty-why');
+  await qty.fill('1.50');
+  await expect.poll(async () => (await hashParams(page)).get('qty')).toBe('1.50');
+  await page.waitForTimeout(100);
+  await expect(qty).toHaveValue('1.50');
+  await expect(qty).toBeFocused();
+  // Emptied: the address has no quantity, and the box is not filled again with the default.
+  await qty.fill('');
+  await expect.poll(async () => (await hashParams(page)).has('qty')).toBe(false);
+  await page.waitForTimeout(100);
+  await expect(qty).toHaveValue('');
+  await expect(why).toContainText('No quantity entered');
+  // Not a number: said as such, though the box reports it as empty.
+  await qty.pressSequentially('1e');
+  await expect(why).toContainText('not a number');
+  await expect(qty).toHaveAttribute('aria-invalid', 'true');
+  await expect(qty).toBeFocused();
+  await page.locator('#paid').fill('12.5');
+  await expect.poll(async () => (await hashParams(page)).get('paid')).toBe('12.50');
+  await page.waitForTimeout(100);
+  await expect(page.locator('#paid')).toHaveValue('12.5');
+  await expect(page.locator('#paid')).toBeFocused();
+  await seen.check();
+});
+
+// R15, A18: a same-drug link kept the card as it was, so a dropped NDC's note came or went with the
+// wrong link.
+test('a same-drug link with a wrong NDC says so, and a clean link takes the note away', async ({ page }) => {
+  const other = byName.get(DEFAULT).rows[0];
+  const seen = await open(page, PAGE + hashFor(METFORMIN, 30));
+  const note = page.locator('#your-ndc');
+  await expect(note).toHaveCount(0);
+  await followHash(page, `${hashFor(METFORMIN, 30)}&ndc=${other.ndc}`);
+  await expect(note).toHaveText(`NDC ${formatNdc(other.ndc)} in this link is not a package of this drug, so it was left out.`);
+  await expect.poll(() => addressHash(page)).toBe(hashFor(METFORMIN, 30));
+  await followHash(page, hashFor(METFORMIN, 90));
+  await expect(page.locator('#qty')).toHaveValue('90');
+  await expect(note).toHaveCount(0);
+  await seen.check();
+});
+
+// R16, A66, A67: an anchor over a message left itself in the address, or put back the card before
+// the message, so a reload opened something else.
+test('a plain fragment over a message keeps the message’s address, so a reload opens the same thing', async ({ page }) => {
+  const seen = await open(page, PAGE + hashFor(METFORMIN, 60));
+  for (const [hash, title] of [
+    ['#drug=nothing%20here', 'No drug by that name'],
+    ['#qty=30', 'That link does not name a drug'],
+  ]) {
+    await followHash(page, hashFor(METFORMIN, 60));
+    await expect(page.locator('#card-title'), hash).toHaveText(METFORMIN);
+    await followHash(page, hash);
+    await expect(page.locator('#card-title'), hash).toHaveText(title);
+    await followHash(page, '#utm_source=x');
+    await expect.poll(() => addressHash(page), hash).toBe(hash);
+    await expect(page.locator('#card-title'), hash).toHaveText(title);
+    await page.reload();
+    await pageReady(page);
+    await expect(page.locator('#card-title'), hash).toHaveText(title);
+  }
   await seen.check();
 });
 
@@ -1600,6 +1791,21 @@ test('an unusable quantity is tied to its field and said in the status; both cle
   await expect(qty).toHaveAttribute('aria-describedby', 'qty-why');
   await expect(qty).not.toHaveAttribute('aria-invalid', /.*/);
   await expect(why).toContainText('No quantity entered');
+  // BEH-10: a number box holding what is not a number reports it as empty. It is a mistake, and
+  // said as one, in words that do not repeat the page's own stand-in for it.
+  await qty.pressSequentially('1e');
+  await expect(qty).toHaveAttribute('aria-invalid', 'true');
+  await expect(why).toContainText('not a number');
+  await expect(why).not.toContainText('unreadable');
+  await expect(status).toContainText(`${METFORMIN}. ${await why.textContent()}`);
+  await expect.poll(async () => (await hashParams(page)).has('qty')).toBe(false);
+  // A link's "5." is 5, and the box says so.
+  await followHash(page, hashFor(METFORMIN, '5.'));
+  await expect(qty).toHaveValue('5');
+  await expect(qty).not.toHaveAttribute('aria-invalid', /.*/);
+  await load(page, PAGE + hashFor(METFORMIN, '5.'));
+  await expect(qty).toHaveValue('5');
+  await expect(page.locator('[data-figure="pharmacy"]')).toHaveText(expected(METFORMIN, 5).pharmacy);
   await seen.check();
 });
 
@@ -1635,7 +1841,23 @@ test('when the data cannot load: a plain sentence, announced, no dead controls, 
     await expect(page.locator('.try'), file).toBeHidden();
     await expect(message.locator(`a[href="${AZ}"]`), file).toBeVisible();
     await expect(message.locator('a', { hasText: 'report this' }), file).toHaveAttribute('href', new RegExp(`^${REPO_URL}/issues/new\\?template=bug\\.yml`));
+    await evenLinesWithTargets(message.locator('p').last(), file);
   }
+});
+
+// BEH-09: the Try links go with the data, and the focus on one went with them, to <body>.
+test('a Try link focused while the data unpacks hands the focus to the message when the data fails', async ({ page }, info) => {
+  const hold = await holdUnpack(page);
+  await page.goto(pageWithData(info, 'bad-sum-held.html', { descriptor: (d) => ({ ...d, sha256: '0'.repeat(64) }) }));
+  await hold.held();
+  await page.locator('.try-list a').first().focus();
+  await hold.release();
+  await pageReady(page, 'error');
+  const title = page.locator('#card-title');
+  await expect(title).toHaveText('The data did not load');
+  await expect(title).toBeFocused();
+  await scrollSettled(page);
+  await expect(title).toBeInViewport();
 });
 
 // OB-11, A18: core checks are in tests/money.test.js; these are the same links in a real page.
@@ -1687,6 +1909,12 @@ test('a very long name in a link stays bounded on the screen and in the search b
     expect(r.q, label).toBeLessThanOrEqual(200);
     expect(r.search, label).toBeLessThan(400);
     expect(r.wide, label).toBeLessThanOrEqual(0);
+    // A10, A80: what is said back is clipText()'s cut of the name, not the name.
+    const { drug } = parseHash(hash);
+    expect(drug.length, label).toBeGreaterThan(clipText(drug).length);
+    await expect(page.locator('#card'), label).toContainText(`“${clipText(drug)}”`);
+    await expect(page.locator('#q'), label).toHaveValue(drug);
+    await expect(page.locator('#search-status'), label).toContainText(`“${clipText(drug.trim())}”`);
   }
   await seen.check();
 });
@@ -1711,6 +1939,8 @@ test('typing before the page has loaded keeps the text, and shows results when i
     await pageReady(page);
     await expect(q).toHaveValue('metformin');
     await expect(q).toBeFocused();
+    // A63: the wait the placeholder spoke of is over.
+    await expect(q).not.toHaveAttribute('placeholder', /.*/);
     await expect(page.locator('#results button.result').first()).toContainText(/metformin/i);
     await expect(page.locator('#search-status')).toContainText('metformin');
     await expect(page.locator('#card-title')).toHaveText(DEFAULT);
@@ -1738,12 +1968,153 @@ test('Enter pressed while the data is unpacking opens an exact name once it has'
   await expect(page.locator('#card-title')).toHaveText(METFORMIN);
 });
 
-test('a link’s unknown name found before the search index is built still gets its results', async ({ page }) => {
+// BEH-03: Enter waiting for the index used to be acted on whatever the reader did next.
+for (const [label, typed, after, focused] of [
+  ['moves to a Try link', 'metformin hcl 500 mg tablet', (page) => page.locator('.try-list a').first().focus(), '.try-list a >> nth=0'],
+  ['presses Escape', 'metformin hcl 500 mg tablet', (page) => page.keyboard.press('Escape'), '#q'],
+  ['keeps typing', 'metformin', (page) => page.keyboard.type(' hcl 500 mg tablet'), '#q'],
+]) {
+  test(`Enter pressed while the data is unpacking is taken back when the reader ${label}`, async ({ page }) => {
+    const hold = await holdUnpack(page);
+    await page.goto(PAGE);
+    await hold.held();
+    const q = page.locator('#q');
+    await q.focus();
+    await page.keyboard.type(typed);
+    await page.keyboard.press('Enter');
+    await after(page);
+    await hold.release();
+    await pageReady(page);
+    await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+    await expect(page.locator(focused)).toBeFocused();
+    expect(addressHash(page)).toBe('');
+    const results = page.locator('#results button.result');
+    if (label === 'keeps typing') {
+      await expect(results.first()).toBeVisible();
+      return;
+    }
+    // Nor does a list open where the reader is not, or after Escape; coming back to the box brings it.
+    await page.waitForTimeout(100);
+    await expect(results).toHaveCount(0);
+    if (label === 'moves to a Try link') {
+      await q.focus();
+      await expect(results.first()).toBeVisible();
+      await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+    }
+  });
+}
+
+test('Enter in the empty box while the data unpacks is not kept for a link’s unknown name filled in after', async ({ page }) => {
+  const name = 'metformin hcl 500 mg tablets';
+  // The search would open its one exact match for those words; the reader never typed them.
+  expect(enterChoice(search(index, name)).product.name).toBe(METFORMIN);
+  const hold = await holdUnpack(page);
+  await page.goto(`${PAGE}#drug=${encodeURIComponent(name)}`);
+  await hold.held();
+  await page.locator('#q').focus();
+  await page.keyboard.press('Enter');
+  await hold.release();
+  await pageReady(page);
+  await expect(page.locator('#card-title')).toHaveText('No drug by that name');
+  await expect(page.locator('#q')).toHaveValue(name);
+  await expect(page.locator('#q')).toBeFocused();
+  await expect(page.locator('#results button.result').first()).toBeVisible();
+  expect(addressHash(page)).toBe(`#drug=${encodeURIComponent(name)}`);
+});
+
+// BEH-02, R04, A40: the skip link and the loading line's link work while the data unpacks, and the
+// card that replaces the placeholder used to drop their focus on <body>.
+for (const [label, go] of [
+  [
+    'the skip link',
+    async (page, browserName) => {
+      // WebKit's Tab skips links unless the reader has asked otherwise, as Safari's does.
+      if (browserName === 'webkit') await page.locator('.skip').focus();
+      else await page.keyboard.press('Tab');
+      await expect(page.locator('.skip')).toBeFocused();
+      await page.keyboard.press('Enter');
+      await expect(page.locator('#card-title')).toBeFocused();
+    },
+  ],
+  ['the loading line’s link', (page) => page.locator('.card-loading-script a').focus()],
+]) {
+  test(`${label}, used while the data unpacks, keeps the focus in the card when it arrives`, async ({ page, browserName }) => {
+    const hold = await holdUnpack(page);
+    await page.goto(PAGE);
+    await hold.held();
+    await expect(page.locator('#card')).toHaveAttribute('aria-busy', 'true');
+    await go(page, browserName);
+    await hold.release();
+    await pageReady(page);
+    await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+    await expect(page.locator('#card-title')).toBeFocused();
+    await expect(page.locator('#card')).not.toHaveAttribute('aria-busy', 'true');
+  });
+}
+
+// BEH-08: "Search is ready" was said in both live regions at once.
+test('ready is said once, in the card’s status, with the focus in the search box', async ({ page }) => {
+  const hold = await holdUnpack(page);
+  await page.goto(PAGE);
+  await hold.held();
+  await page.locator('#q').focus();
+  await recordWrites(page, ['card-status', 'search-status']);
+  await hold.release();
+  await pageReady(page);
+  await expect(page.locator('#card-status')).toHaveText(`${DEFAULT}. Search is ready.`);
+  await page.waitForTimeout(100);
+  const ready = (await takeWrites(page)).filter((w) => w.text.includes('Search is ready'));
+  expect(ready.map((w) => w.id)).toEqual(['card-status']);
+  await expect(page.locator('#search-status')).toHaveText('');
+});
+
+test('a link’s unknown name found before the search index is built still gets its results, and no word about waiting', async ({ page }) => {
+  // BEH-08: from the first moment, as a screen reader hears it; nothing was typed, so nothing waits.
+  await page.addInitScript(() => {
+    window.__searchSaid = [];
+    new MutationObserver(() => {
+      const el = document.getElementById('search-status');
+      if (el && window.__searchSaid[window.__searchSaid.length - 1] !== el.textContent) window.__searchSaid.push(el.textContent);
+    }).observe(document, { childList: true, subtree: true, characterData: true });
+  });
   await page.goto(`${PAGE}#drug=metformin%20er`);
   await pageReady(page);
   await expect(page.locator('#q')).toHaveValue('metformin er');
   await expect(page.locator('#results button.result').first()).toBeVisible();
+  await expect(page.locator('#search-status')).toContainText(/^No drug by that name\./);
+  expect(await page.evaluate(() => window.__searchSaid)).not.toContain(SEARCH_WAIT);
 });
+
+// BEH-01: Back to a card focused its title out of view. The browser restored the old scroll after
+// the page had scrolled to the card, in WebKit and with reduced motion, and in Chromium its own
+// smooth restoring ran on after the page's.
+for (const motion of ['no-preference', 'reduce']) {
+  test(`Back to a card lands on its title, in view (motion: ${motion})`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: motion });
+    const seen = await open(page, PAGE);
+    const title = page.locator('#card-title');
+    const landed = async (name) => {
+      await expect(title).toHaveText(name);
+      await expect(title).toBeFocused();
+      await scrollSettled(page);
+      await expect(title).toBeInViewport();
+    };
+    await settledClick(page, page.locator('.try-list a', { hasText: METFORMIN }));
+    await expect(title).toHaveText(METFORMIN);
+    await page.goBack();
+    await landed(DEFAULT);
+    await page.goForward();
+    await landed(METFORMIN);
+    // From the foot of another card.
+    await followHash(page, hashFor(OTHER));
+    await expect(title).toHaveText(OTHER);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await scrollSettled(page);
+    await page.goBack();
+    await landed(METFORMIN);
+    await seen.check();
+  });
+}
 
 // A3: with scripts off, the page offered a dead search box, Try links that did nothing and a link
 // to a 38 MB JSON file.
@@ -1763,6 +2134,7 @@ test('with JavaScript off: a heading, a plain sentence and the plain pages, with
   await expect(page.locator('.search')).toBeHidden();
   await expect(page.locator('.try')).toBeHidden();
   await expect(page.locator('#card a[href*="drugs.json"]')).toHaveCount(0);
+  await evenLinesWithTargets(line, 'no JavaScript');
   const box = await page.locator('#card').boundingBox();
   expect(box.height, 'no room is kept for a card that is not coming').toBeLessThan(500);
   await ctx.close();
@@ -1779,6 +2151,7 @@ test('with the script blocked or unparseable, the loading line itself has the wa
   await expect(page.locator('#card-title')).toHaveText('Drug prices');
   await expect(page.locator('.card-loading-script')).toContainText('Loading');
   await expect(page.locator(`.card-loading-script a[href="${AZ}"]`)).toBeVisible();
+  await evenLinesWithTargets(page.locator('.card-loading-script'), 'script blocked');
   await expect(page.locator('#card')).not.toHaveAttribute('aria-busy', /.*/);
   expect(await page.locator('html').getAttribute('data-ready')).toBeNull();
 });
@@ -1988,6 +2361,28 @@ const missingPackage = (() => {
   }
   return null;
 })();
+/** As missingPackage, of a product that has more than one package of that labeler's (A85). */
+const missingOfSeveral = (() => {
+  for (const p of products) {
+    const byPrefix = new Map();
+    for (const r of p.rows) byPrefix.set(r.ndc.slice(0, 9), [...(byPrefix.get(r.ndc.slice(0, 9)) || []), r]);
+    for (const [prefix, rows] of byPrefix) {
+      if (rows.length < 2) continue;
+      for (let i = 0; i < 100; i++) {
+        const ndc = prefix + String(i).padStart(2, '0');
+        if (!byNdcRow.has(ndc)) return { ndc, name: p.name, more: rows.length - 1 };
+      }
+    }
+  }
+  return null;
+})();
+/** A product's exact name that other products' results share, so Enter alone would open it (J25). */
+const exactAmongOthers = [METFORMIN, ...products.map((p) => p.name)]
+  .map((n) => n.toLowerCase())
+  .find((q) => {
+    const all = search(index, q, { limit: 1000 });
+    return all.length > 1 && enterChoice(all) === all[0];
+  });
 const mostNdcs = [...products].sort((a, b) => b.rows.length - a.rows.length)[0];
 /** No panel at 360 px should pass this on any product; the audit found 53,961 on mostNdcs. */
 const PANEL_LIMIT = 13000;
@@ -2010,8 +2405,9 @@ test('Enter: a list stays, one result or an exact name opens, and the same text 
   await input.press('Enter');
   await expect(title).toHaveText(search(index, soloQuery)[0].product.name);
 
+  // Its own exact name: the wording depends on whether, this week, anything else matches it too.
   await input.fill(METFORMIN.toLowerCase());
-  await expect(status).toContainText(`Press Enter to open ${METFORMIN}.`);
+  await expect(status).toContainText(search(index, METFORMIN.toLowerCase()).length === 1 ? 'Press Enter to open it.' : `Press Enter to open ${METFORMIN}.`);
   await input.press('Enter');
   await expect(title).toHaveText(METFORMIN);
 
@@ -2023,10 +2419,14 @@ test('Enter: a list stays, one result or an exact name opens, and the same text 
   await expect(input).toBeFocused();
   await expect(title).toHaveText(METFORMIN);
 
-  // Back in the box after a choice: the same text and Enter never replace the card (J25).
-  await input.fill('lisinopril');
-  await expect(status).toContainText('“lisinopril”');
+  // Back in the box after a choice: the same text and Enter never replace the card (J25). The text
+  // is a product's exact name that finds others too, so without the rule Enter would open it (R02).
+  const all = search(index, exactAmongOthers, { limit: 1000 });
+  expect(enterChoice(all), exactAmongOthers).toBe(all[0]);
+  await input.fill(exactAmongOthers);
+  await expect(status).toContainText(`Press Enter to open ${all[0].product.name}.`);
   const second = await resultButtons(page).nth(1).locator('.result-name').textContent();
+  expect(second).not.toBe(all[0].product.name);
   await resultButtons(page).nth(1).click();
   await expect(title).toHaveText(second);
   await input.click();
@@ -2035,6 +2435,14 @@ test('Enter: a list stays, one result or an exact name opens, and the same text 
   await input.press('Enter');
   await expect(resultButtons(page).first()).toBeFocused();
   await expect(title).toHaveText(second);
+  // Typing in the box again makes it a new search, and Enter opens the exact name (A45).
+  await input.focus();
+  await input.press('End');
+  await input.press('Backspace');
+  await input.press(exactAmongOthers.slice(-1));
+  await expect(status).toContainText(`Press Enter to open ${all[0].product.name}.`);
+  await input.press('Enter');
+  await expect(title).toHaveText(all[0].product.name);
   await seen.check();
 });
 
@@ -2147,6 +2555,72 @@ test('arrow keys move through the list and back to the box; typing goes to the b
   // With the list closed, the arrow opens it.
   await input.press('ArrowDown');
   await expect(list.nth(0)).toBeFocused();
+  await seen.check();
+});
+
+// A keystroke's search waits 60 ms. An arrow key inside that wait used to take the focus into a list
+// the timer then replaced, which dropped the focus on <body>, where Escape reaches nothing.
+test('an arrow key in the pause after a keystroke stays in the list, and in the list for that text', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const input = page.locator('#q');
+  const list = resultButtons(page);
+  await input.fill('metformin');
+  await expect(list.first()).toBeVisible();
+  // In one task, so the key is inside the pause however busy the machine is.
+  const typeThenArrow = (text) =>
+    page.evaluate((value) => {
+      const q = document.getElementById('q');
+      q.focus();
+      q.value = value;
+      q.dispatchEvent(new Event('input', { bubbles: true }));
+      q.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+    }, text);
+  await typeThenArrow('metformin');
+  await expect(list.nth(0)).toBeFocused();
+  await page.waitForTimeout(200); // longer than the pause
+  await expect(list.nth(0)).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(input).toBeFocused();
+  await expect(list).toHaveCount(0);
+  // Other words: the arrow goes into their list, not the one still on the screen.
+  await input.fill('metformin');
+  await expect(list.first()).toBeVisible();
+  await typeThenArrow(OTHER_QUERY);
+  await expect(list.nth(0)).toHaveAttribute('data-name', search(index, OTHER_QUERY)[0].product.name);
+  await expect(list.nth(0)).toBeFocused();
+  await seen.check();
+});
+
+// The click after a press and a release on different elements lands on an ancestor of both, which
+// used to read as a click outside: the list opened on the press and closed on the release.
+test('a press that began in the box is not a click outside, wherever it ended', async ({ page }) => {
+  const seen = await open(page, PAGE);
+  const input = page.locator('#q');
+  const list = resultButtons(page);
+  await input.fill('metformin');
+  await expect(list.first()).toBeVisible();
+  const spot = await page.evaluate(() => {
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    const r = document.querySelector('.search').getBoundingClientRect();
+    const out = { x: r.x + 40, y: r.y - 6 };
+    return { ...out, outside: !document.elementFromPoint(out.x, out.y).closest('.search') };
+  });
+  expect(spot.outside).toBe(true);
+  const box = await input.boundingBox();
+  await page.mouse.move(box.x + 30, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect(input).toBeFocused();
+  await page.mouse.move(spot.x, spot.y);
+  await page.mouse.up();
+  await page.waitForTimeout(100);
+  await expect(list.first()).toBeVisible();
+  // A press outside still closes it, and so does a click with no press, as a key on a link makes.
+  await page.locator('#card-title').click();
+  await expect(list).toHaveCount(0);
+  await input.click();
+  await expect(list.first()).toBeVisible();
+  await page.evaluate(() => document.getElementById('card-title').click());
+  await expect(list).toHaveCount(0);
   await seen.check();
 });
 
@@ -2276,6 +2750,32 @@ test('a number with no match says so once, and a 12-digit number is not called a
   await expect(page.locator('.search')).not.toContainText(/bar ?code|UPC/i);
   await input.press('Enter');
   await expect(page.locator('#card-title')).toHaveText(DEFAULT);
+  // BEH-07: chosen, the guess opens the drug, and is not carried as the reader's NDC, which would
+  // name it on the card without the hedge.
+  await resultButtons(page).first().click();
+  await expect(page.locator('#card-title')).toHaveText(METFORMIN);
+  expect((await hashParams(page)).has('ndc')).toBe(false);
+  await expect(page.locator('#your-ndc')).toHaveCount(0);
+  await seen.check();
+});
+
+// A85: the count of the labeler's other packages was never checked.
+test('a link to a package NADAC does not list counts the labeler’s other packages of it', async ({ page }) => {
+  test.skip(!missingOfSeveral, 'no product this week has two packages of one labeler');
+  const seen = await open(page, `${PAGE}${hashFor(missingOfSeveral.name)}&ndc=${missingOfSeveral.ndc}`);
+  const { more } = missingOfSeveral;
+  await expect(page.locator('#your-ndc')).toContainText('This NDC is not in the NADAC file.');
+  await expect(page.locator('#your-ndc')).toContainText(`${more} more of this labeler’s package${more === 1 ? ' is' : 's are'} in Sources and method.`);
+  await seen.check();
+});
+
+// A70: the reader's own NDC was open only when its button opened the panel.
+test('opened by its own summary, the panel has the reader’s NDC open and the others closed', async ({ page }) => {
+  const row = byName.get(METFORMIN).rows.find((r) => r.identity);
+  const seen = await open(page, `${PAGE}${hashFor(METFORMIN, 30)}&ndc=${row.ndc}`);
+  await openPanel(page);
+  await expect(page.locator(`#panel-body li#ndc-${row.ndc} > details`)).toHaveJSProperty('open', true);
+  await expect(page.locator('#panel-body details.ndc-more[open]')).toHaveCount(1);
   await seen.check();
 });
 

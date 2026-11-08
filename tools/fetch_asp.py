@@ -36,6 +36,7 @@ import re
 import sys
 import urllib.parse
 import zipfile
+import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -260,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         try:
             member, header, data, eff = check_member(cachelib.cached_path(entry), kind, entry["period"])
-        except (FetchError, zipfile.BadZipFile, UnicodeDecodeError) as e:
+        except (FetchError, zipfile.BadZipFile, UnicodeDecodeError, zlib.error, EOFError) as e:
             print(f"{label}: FAILED: {e}", file=sys.stderr)
             worst = worst or 4
             continue
